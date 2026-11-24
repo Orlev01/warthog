@@ -89,6 +89,11 @@ export default function HelpPage() {
             just tells you it’s there and links you to it.
           </p>
           <p>
+            That’s the Standard setting. In Settings › Agent defaults you can choose Private, which
+            also hides tax file, Medicare, passport, licence, BSB and account numbers, or
+            Everything, which shows your emails and files as written.
+          </p>
+          <p>
             When an agent wants to send an email, the approval shows exactly what will go out and
             whether you’ve emailed that address before. If the agent has just read an email from
             someone else, the approval says so.

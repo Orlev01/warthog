@@ -8,13 +8,15 @@
 // carries things an agent should never see: sign-in codes, password links, hidden text.
 // This builds what an agent actually needs — who, when, what, the readable text with its
 // links numbered, attachment names — with those few things hidden, and turns a sign-in or
-// password email into a short stub that tells the person where to find it.
+// password email into a short stub that tells the person where to find it. At the person's
+// open level nothing is hidden and a sign-in email is read like any other.
 
 import { base64Bytes, decodeBytes, decodeHeaderWords, previewOf, readableBody } from "./mail-body";
 import { classifySecurityMail, withheldSentence, type SecurityMailKind } from "./security-mail";
-import { addCounts, cleanText, emptyCounts, type FilterCounts } from "./text-filters";
+import { addCounts, cleanText, emptyCounts, type CleanOptions, type FilterCounts } from "./text-filters";
 import { stripInvisible } from "./untrusted";
 import { parseInvitation } from "./ics";
+import type { ReadLevel } from "./read-levels";
 
 interface GmailHeader {
   readonly name?: unknown;
@@ -44,6 +46,8 @@ export interface GmailViewOptions {
   readonly tooLarge?: boolean;
   /** The agent asked for headers only (format=metadata or minimal): no body is expected. */
   readonly headersOnly?: boolean;
+  /** The person's level (read-levels.ts). Unset is the default, standard. */
+  readonly level?: ReadLevel;
 }
 
 // The most parts and nesting Warthog walks before treating the rest as unreadable.
@@ -109,13 +113,13 @@ export function gmailThreadLink(threadId: string, account: string | undefined): 
   return `https://mail.google.com/mail/u/${mailbox}#all/${threadId}`;
 }
 
-function header(headers: Map<string, string>, name: string, counts: FilterCounts, clean = false): string | undefined {
+function header(headers: Map<string, string>, name: string, counts: FilterCounts, clean?: CleanOptions): string | undefined {
   const raw = headers.get(name);
   if (raw === undefined) return undefined;
   // A long References chain keeps its END: the parent's Message-ID is last.
   const full = decodeHeaderWords(raw);
   const decoded = name === "references" ? full.slice(-MAX_HEADER) : full.slice(0, MAX_HEADER);
-  if (clean) return cleanText(decoded, counts);
+  if (clean) return cleanText(decoded, counts, clean);
   const stripped = stripInvisible(decoded);
   counts.hiddenCharacters += stripped.removed;
   return stripped.text;
@@ -127,9 +131,9 @@ function dateOf(message: Record<string, unknown>, headers: Map<string, string>):
   return headers.get("date")?.slice(0, 200);
 }
 
-function stub(base: Record<string, unknown>, kind: SecurityMailKind, subject: string | undefined, link: string | undefined, counts: FilterCounts): MailView {
+function stub(base: Record<string, unknown>, kind: SecurityMailKind, subject: string | undefined, link: string | undefined, counts: FilterCounts, level: ReadLevel | undefined): MailView {
   const from = typeof base.from === "string" ? base.from : undefined;
-  const maskedSubject = subject === undefined ? undefined : cleanText(subject, counts, { signInMail: true });
+  const maskedSubject = subject === undefined ? undefined : cleanText(subject, counts, { signInMail: true, level });
   return {
     message: {
       ...base,
@@ -166,8 +170,10 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
     ...(from ? { from } : {}),
   };
 
-  const kind = classifySecurityMail(subject);
-  if (kind) return stub(base, kind, subject, link, counts);
+  // A sign-in or password email becomes a stub, unless the person chose to see everything.
+  const level = options.level;
+  const kind = level === "open" ? null : classifySecurityMail(subject);
+  if (kind) return stub(base, kind, subject, link, counts, level);
 
   const view: Record<string, unknown> = { ...base };
   const add = (key: string, value: string | undefined) => {
@@ -176,7 +182,7 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
   add("to", header(headers, "to", counts));
   add("cc", header(headers, "cc", counts));
   add("replyTo", header(headers, "reply-to", counts));
-  add("subject", subject === undefined ? undefined : cleanText(subject, counts));
+  add("subject", subject === undefined ? undefined : cleanText(subject, counts, { level }));
   add("messageId", header(headers, "message-id", counts));
   add("inReplyTo", header(headers, "in-reply-to", counts));
   add("references", header(headers, "references", counts));
@@ -186,7 +192,7 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
   // HTML hides, so once the checked text is read it gives way to that (and isn't counted).
   const snippetCounts = emptyCounts();
   if (typeof message.snippet === "string" && message.snippet !== "") {
-    view.preview = cleanText(decodeEntitiesInSnippet(message.snippet), snippetCounts);
+    view.preview = cleanText(decodeEntitiesInSnippet(message.snippet), snippetCounts, { level });
   }
   if (link) view.openInMail = link;
 
@@ -207,7 +213,7 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
   const data = chosen?.body?.data;
   if (chosen && typeof data === "string") {
     const raw = decodeBytes(base64Bytes(data), charsetOf(chosen));
-    const body = readableBody(raw, chosen === state.html, counts);
+    const body = readableBody(raw, chosen === state.html, counts, { level });
     view.text = body.text;
     if (view.preview !== undefined) view.preview = previewOf(body.text);
     if (body.links.length) view.links = body.links;
@@ -223,7 +229,7 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
   }
   const calendarData = state.calendar?.body?.data;
   if (typeof calendarData === "string") {
-    const invitation = parseInvitation(decodeBytes(base64Bytes(calendarData), charsetOf(state.calendar!)), counts);
+    const invitation = parseInvitation(decodeBytes(base64Bytes(calendarData), charsetOf(state.calendar!)), counts, { level });
     if (invitation) view.invitation = invitation;
   }
   if (state.capped) view.bodyNote = "Part of this email is too complex for Warthog to check, so some of it isn't shown.";

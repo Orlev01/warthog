@@ -4,7 +4,9 @@
 // engine `evaluate(call, ctx)` (E03-S13). Assembling that object in one place —
 // a connection's permission grants (E07-S05), the rules applicable to it
 // (E07-S06) and its approved-release spend for the current budget period
-// (E07-S07) — keeps the engine pure and testable.
+// (E07-S07) — keeps the engine pure and testable. It also carries the person's
+// "what agents see" level, which the result guard checks at (docs/adr/read-side-protection.md,
+// amendment 24 November 2026).
 //
 // This is a SERVER module: it reads through the injected `Db` seam, resolves the
 // person's data key through the injected `KeyWrapper` seam (to decrypt rule
@@ -25,6 +27,7 @@ import {
 import { periodKeyFor } from "../db/card-spend-ledger";
 import { readAgentSpending } from "../spending/agent-spending";
 import { getRate } from "../db/exchange-rates";
+import { getReadLevel } from "../db/read-settings";
 import type { Db } from "../db/index";
 import { listRules, type StoredRule } from "../db/rules";
 import { getUserById } from "../db/users";
@@ -37,6 +40,7 @@ import {
   type CardRequestContext,
 } from "../spending/household-context";
 import type { Budget } from "../../domain/budget/budget";
+import type { ReadLevel } from "../../domain/content/read-levels";
 import type { ReferenceRate } from "../../domain/currency/convert";
 import type { CardPolicy, HouseholdPolicy } from "../../domain/policy/evaluate";
 
@@ -74,6 +78,8 @@ export interface AgentContext {
   readonly spend: number;
   readonly spendUnavailable?: boolean;
   readonly accountCurrency: string;
+  // How much Warthog hides from what this person's agents read (standard when they chose none).
+  readonly readLevel: ReadLevel;
   readonly cardRequest?: CardRequestContext;
   readonly cardChecks?: CardChecks;
 }
@@ -264,6 +270,7 @@ export async function loadAgentContext(
     budget ?? { amount: 0, currency: accountCurrency, period }, clock.now(), timeZone);
   const spend = spending.total;
   const incomplete = spending.unconverted.length > 0 ? { spendUnavailable: true } : {};
+  const readLevel = await getReadLevel(db, connection.userId);
 
   // A card request additionally resolves the household + currency context for the
   // connection's OWNING user (never a client value), delegating to the household-context
@@ -277,8 +284,8 @@ export async function loadAgentContext(
       rate: await budgetRateFor(db, cardRequest, accountCurrency, resolved, now),
       household: householdPolicyFor(resolved, cardRequest, now),
     };
-    return { permissions, rules, spend, ...incomplete, accountCurrency, cardRequest: resolved, cardChecks };
+    return { permissions, rules, spend, ...incomplete, accountCurrency, readLevel, cardRequest: resolved, cardChecks };
   }
 
-  return { permissions, rules, spend, ...incomplete, accountCurrency };
+  return { permissions, rules, spend, ...incomplete, accountCurrency, readLevel };
 }

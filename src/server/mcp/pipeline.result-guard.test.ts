@@ -23,6 +23,7 @@ import { createDbRecorder, readActivity } from "../activity/writer";
 import { createResultGuard } from "../connectors/result-guard";
 import { createAgentCallPipeline, type AgentCall } from "./pipeline";
 import { createRateLimiter } from "./rate-limit";
+import { setReadLevel } from "../db/read-settings";
 
 import { grantServices } from "../../test/grants";
 const NOW = new Date("2026-11-16T01:00:00Z");
@@ -115,4 +116,55 @@ test("core tools, failed calls and a pipeline without the guard are untouched", 
     const outcome = await bare.pipeline.handleAgentCall(bare.connection, read);
     assert.equal(outcome.status === "executed" ? outcome.result : null, HOSTILE);
   } finally { await bare.db.close(); }
+});
+
+// The person's "what agents see" level (docs/adr/read-side-protection.md, amendment 24 November
+// 2026): the pipeline checks at their stored level, never one the call came with, and an
+// approved hold is checked at the level they have when it runs, not when it was held.
+test("a live read is checked at the person's stored level, whatever the call came with", async () => {
+  const { db, dek, user, connection, pipeline } = await setup("allow");
+  try {
+    const forged = await pipeline.handleAgentCall(connection, { ...read, readLevel: "open" });
+    assert.ok(!JSON.stringify(forged.status === "executed" ? forged.result : null).includes("482913"), "an agent can't choose its own level");
+
+    await setReadLevel(db, { userId: user.id, level: "open", clock: fixedClock(NOW) });
+    const open = await pipeline.handleAgentCall(connection, read);
+    const text = JSON.stringify(open.status === "executed" ? open.result : null);
+    assert.match(text, /Your verification code is 482913\./);
+    assert.match(text, /4111 1111 1111 1111/);
+    assert.ok(!text.includes("\\u200b"), "invisible characters are still removed");
+    const entry = (await readActivity(db, user.id, dek)).at(-1)!;
+    assert.deepEqual((entry.payload as { resultEvidence: Record<string, unknown> }).resultEvidence.guard, { outcome: "shown", counts: { hiddenCharacters: 1 }, level: "open" });
+  } finally { await db.close(); }
+});
+
+test("an approved hold is checked at the person's level when it runs", async () => {
+  const DRAFT = { status: 200, truncated: false, body: JSON.stringify({ id: "r1", message: { id: "m1", snippet: "Your verification code is 482913." } }) };
+  const { db, dek, user, connection, pipeline, setResult } = await setup("ask_first");
+  try {
+    setResult(DRAFT);
+    await setReadLevel(db, { userId: user.id, level: "standard", clock: fixedClock(NOW) });
+    const held = await pipeline.handleAgentCall(connection, { ...read, tool: "google-gmail__draft", makesChange: true });
+    assert.equal(held.status, "pending_approval");
+    const approvalId = held.status === "pending_approval" ? held.approval_id : "";
+    // The person opens everything up while the request waits.
+    await setReadLevel(db, { userId: user.id, level: "open", clock: fixedClock(NOW) });
+    await decide(db, { userId: user.id, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+    const ran = await pipeline.executeApprovedHold(user.id, approvalId);
+    assert.equal(ran.status, "executed");
+    assert.match(JSON.stringify(ran.status === "executed" ? ran.result : null), /482913/);
+  } finally { await db.close(); }
+
+  const second = await setup("ask_first");
+  try {
+    second.setResult(DRAFT);
+    await setReadLevel(second.db, { userId: second.user.id, level: "open", clock: fixedClock(NOW) });
+    const held = await second.pipeline.handleAgentCall(second.connection, { ...read, tool: "google-gmail__draft", makesChange: true });
+    const approvalId = held.status === "pending_approval" ? held.approval_id : "";
+    // And the other way: held at open, run after they've gone back to standard.
+    await setReadLevel(second.db, { userId: second.user.id, level: "standard", clock: fixedClock(NOW) });
+    await decide(second.db, { userId: second.user.id, id: approvalId, decision: { status: "approved" } }, second.dek, fixedClock(NOW));
+    const ran = await second.pipeline.executeApprovedHold(second.user.id, approvalId);
+    assert.ok(!JSON.stringify(ran.status === "executed" ? ran.result : null).includes("482913"));
+  } finally { await second.db.close(); }
 });

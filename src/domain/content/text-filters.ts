@@ -4,11 +4,16 @@
 // numbers, BPAY CRNs, Zoom passcodes, help-page, parcel and unsubscribe links) is left
 // exactly as written, so agents stay useful.
 //
+// The person's level (read-levels.ts, amendment 24 November 2026) changes how much: "private"
+// also hides the numbers that identify them or their accounts when the text names them, and
+// "open" hides nothing (invisible characters are still removed).
+//
 // Pure domain module: no React, no DB, no fetch, no process.env, no Date.now. Every
 // pattern is linear (no nested or adjacent unbounded quantifiers that backtrack), and every
 // context check reads a fixed-size window, so an adversarial message cannot stall it.
 
 import { passesLuhn } from "../redaction/luhn";
+import type { ReadLevel } from "./read-levels";
 import { stripInvisible } from "./untrusted";
 
 /** What the filters removed, by kind (counts only — never the values). */
@@ -17,10 +22,12 @@ export interface FilterCounts {
   signInLinks: number;
   codes: number;
   cards: number;
+  /** Tax file, Medicare, passport, licence, BSB, account and similar numbers (the private level). */
+  identifiers: number;
 }
 
 export function emptyCounts(): FilterCounts {
-  return { hiddenCharacters: 0, signInLinks: 0, codes: 0, cards: 0 };
+  return { hiddenCharacters: 0, signInLinks: 0, codes: 0, cards: 0, identifiers: 0 };
 }
 
 export function addCounts(into: FilterCounts, from: FilterCounts): FilterCounts {
@@ -28,18 +35,22 @@ export function addCounts(into: FilterCounts, from: FilterCounts): FilterCounts 
   into.signInLinks += from.signInLinks;
   into.codes += from.codes;
   into.cards += from.cards;
+  into.identifiers += from.identifiers;
   return into;
 }
 
 export const SIGN_IN_LINK_MASK = "[sign-in link hidden by Warthog]";
 export const SIGN_IN_CODE_MASK = "[sign-in code hidden by Warthog]";
 export const PASSWORD_MASK = "[password hidden by Warthog]";
+export const IDENTIFIER_MASK = "[number hidden by Warthog]";
 
 export interface CleanOptions {
   /** The message is already known to be a sign-in or password email: "code", "PIN" and "password" count as strong words. */
   readonly signInMail?: boolean;
   /** Calendar content: meeting passcodes are joining details, not sign-in codes. */
   readonly calendar?: boolean;
+  /** The person's level (read-levels.ts). Unset is the default, standard. */
+  readonly level?: ReadLevel;
 }
 
 // --- links ---------------------------------------------------------------------------
@@ -110,8 +121,9 @@ export function hideSignInLinks(text: string, counts: FilterCounts): string {
 
 // A code-shaped token: 4–8 digits (optionally "G-" style prefixed), or a 3+3 digit pair. A
 // colon may sit right before it when a letter precedes the colon ("code:482913"), never in a
-// time ("10:42").
-const CODE_CANDIDATE = /(?<![\p{L}\p{N}$€£¥#.,/-])(?<!\d:)(?:[A-Z]{1,3}-)?(?:\d{3}[ -]\d{3}|\d{4,8})(?![\p{L}\p{N}%]|[.,]\d)/gu;
+// time ("10:42"). A code stands on its own: never part of a longer spaced digit group, so the
+// "417 273" in an account number "7126 417 273" isn't one (24 November 2026).
+const CODE_CANDIDATE = /(?<![\p{L}\p{N}$€£¥#.,/-])(?<!\d:)(?<!\d[ -])(?:[A-Z]{1,3}-)?(?:\d{3}[ -]\d{3}|\d{4,8})(?![\p{L}\p{N}%]|[.,]\d|[ -]\d{3})/gu;
 
 // Words that, near a number, mean "this unlocks an account".
 const STRONG_WORDS = /\b(?:verification|verify|security code|one[- ]?time|otp|2fa|two[- ]?factor|two[- ]?step|2[- ]step|sign[- ]?in|signing in|log[- ]?in|logging in|login|authentication|auth code|access code|passcode)\b/;
@@ -177,19 +189,50 @@ export function maskLikelyCards(text: string, counts: FilterCounts): string {
   });
 }
 
+// --- identifying numbers (the private level) -----------------------------------------
+
+// Words that name a number identifying the person or one of their accounts, written right
+// before it. The number must follow on the same line, with at most a few joining words
+// ("number", "no.", "#", ":", "is"), so "account balance $1,234", "account ending in 1234" and
+// "Medicare rebate $39.10" are left alone. Member, policy, customer and card need "number"
+// (or "no.", "#", "ID") too: "member since 2019" is not a membership number.
+const JOINING = String.raw`(?:[ \t]{0,3}(?:number|no\.|no\b|num\.|num\b|#|:|-|is\b|id\b))`;
+const NAMES_ALONE = String.raw`tax file|tfn|medicare(?: card)?|passport|licen[cs]e|bsb|account|acct|a\/c`;
+const NAMES_WITH_NUMBER = String.raw`(?:member(?:ship)?|policy|customer|card)[ \t]{0,3}(?:number|no\.|no\b|num\.|num\b|#|id\b)`;
+// The number: at least three digits, in groups split by single spaces or dashes, with up to
+// four letters in front ("PA1234567", "POL-00123456"). Every quantifier is bounded.
+const IDENTIFIER = new RegExp(
+  String.raw`\b((?:${NAMES_ALONE}|${NAMES_WITH_NUMBER})${JOINING}{0,3}[ \t]{0,3})((?:[a-z]{1,4}-?)?\d(?:[ -]?\d){2,24})(?![\p{L}\p{N}])`,
+  "giu",
+);
+
+/** Mask a number that identifies the person or one of their accounts, when the text names it just before. Only the number is masked. */
+export function maskIdentifiers(text: string, counts: FilterCounts): string {
+  return text.replace(IDENTIFIER, (_whole, named: string) => {
+    counts.identifiers += 1;
+    return named + IDENTIFIER_MASK;
+  });
+}
+
 // --- all together --------------------------------------------------------------------
 
-/** Clean one piece of text an agent will read: invisible characters, sign-in links, sign-in codes, card numbers. */
+/**
+ * Clean one piece of text an agent will read, at the person's level: invisible characters
+ * always; sign-in links, sign-in codes and card numbers unless the level is open; and, at
+ * the private level, the numbers that identify the person or their accounts.
+ */
 export function cleanText(text: string, counts: FilterCounts, options: CleanOptions = {}): string {
   const stripped = stripInvisible(text);
   counts.hiddenCharacters += stripped.removed;
+  if (options.level === "open") return stripped.text;
   let out = hideSignInLinks(stripped.text, counts);
   out = maskSignInCodes(out, counts, options);
   out = maskLikelyCards(out, counts);
+  if (options.level === "private") out = maskIdentifiers(out, counts);
   return out;
 }
 
 /** Whether anything was hidden or masked (invisible characters don't count: they were never seen). */
 export function anythingHidden(counts: FilterCounts): boolean {
-  return counts.signInLinks + counts.codes + counts.cards > 0;
+  return counts.signInLinks + counts.codes + counts.cards + counts.identifiers > 0;
 }

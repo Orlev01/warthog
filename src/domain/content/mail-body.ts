@@ -21,7 +21,9 @@ export interface ReadableBody {
 }
 
 // A link is hidden when its address is a sign-in link, or its visible text says it signs in or
-// resets a password (click-tracking wrappers hide the real address).
+// resets a password (click-tracking wrappers hide the real address). At the open level no link
+// is hidden; elements the sender's styles hid and image addresses are still dropped, since the
+// person never sees them either.
 function hideLink(url: string, text: string): boolean {
   return isSignInUrl(url) || isSignInLinkText(text);
 }
@@ -39,7 +41,7 @@ export function readableBody(content: string, isHtml: boolean, counts: FilterCou
   let hiddenElements = 0;
   let unlistedLinks = 0;
   if (isHtml) {
-    const converted = htmlToText(content, { hideLink, hiddenLinkMark: SIGN_IN_LINK_MASK });
+    const converted = htmlToText(content, options.level === "open" ? {} : { hideLink, hiddenLinkMark: SIGN_IN_LINK_MASK });
     counts.signInLinks += converted.hiddenLinks;
     hiddenElements = converted.hiddenElements;
     unlistedLinks = converted.unlistedLinks;

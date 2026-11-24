@@ -16,17 +16,21 @@ import { systemClock } from "@/server/seams/clock";
 import { loadConfig } from "@/server/config";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
+import { getReadLevel } from "@/server/db/read-settings";
+import { createReadLevelActions, readLevelInputFromForm, readLevelNotice, readLevelNoticeCode } from "./actions";
+import { ReadLevelChoices } from "@/components/settings/read-level-choices";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { Field, SelectField } from "@/components/ui/field";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { PageNotice } from "@/components/ui/notice";
 
-// Settings › Agent defaults: the starting permissions for agents connected from now on, and
-// the way to the controls that apply to every agent. The same composition as the other
-// Settings tabs (containment-34): the heading band, the outcome notice, then one panel per
-// task with its action in the panel footer. Every text block sits in a bounded surface
-// (founder rule 1); the request limit is an advanced setting, out of the way.
+// Settings › Agent defaults: the starting permissions for agents connected from now on, what
+// every agent sees in the person's email and files (docs/adr/read-side-protection.md, amendment
+// 24 November 2026), and the way to the controls that apply to every agent. The same
+// composition as the other Settings tabs (containment-34): the heading band, the outcome
+// notice, then one panel per task with its action in the panel footer. Every text block sits
+// in a bounded surface (founder rule 1); the request limit is an advanced setting, out of the way.
 export const metadata = { title: "Agent defaults" };
 async function signedIn() {
   const token = (await cookies()).get("__Host-wh_session")?.value;
@@ -70,6 +74,16 @@ async function save(form: FormData) {
   revalidatePath("/settings/agents");
   redirect("/settings/agents?notice=saved");
 }
+// Save what agents see: the session person's own level only, recorded as their change.
+async function saveReadLevel(form: FormData) {
+  "use server";
+  const { db, session } = await signedIn();
+  const config = loadConfig();
+  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const result = await createReadLevelActions({ db, clock: systemClock, keyWrapper }).setReadLevel(session, readLevelInputFromForm(form));
+  revalidatePath("/settings/agents");
+  redirect(`/settings/agents?notice=${readLevelNoticeCode(result)}`);
+}
 // The controls that apply to every agent, each a full-width row with a 44px target.
 const ALL_AGENT_LINKS = [
   { href: "/rules", label: "Manage rules", detail: "Rules for all agents apply on every request." },
@@ -85,7 +99,9 @@ export default async function AgentDefaultsPage({
   const params = await searchParams;
   const { db, session } = await signedIn();
   const defaults = await getAgentDefaults(db, session.userId);
+  const readLevel = await getReadLevel(db, session.userId);
   const invalid = params.notice === "invalid";
+  const readNotice = readLevelNotice(params.notice);
   return (
     <div className="wh-page">
       <WorkspaceHeading
@@ -96,6 +112,8 @@ export default async function AgentDefaultsPage({
         <PageNotice tone="success">Defaults saved. Agents you've already connected are unchanged.</PageNotice>
       ) : invalid ? (
         <PageNotice tone="error">Nothing was saved. Choose a starting set and a request limit from 1 to 10,000.</PageNotice>
+      ) : readNotice ? (
+        <PageNotice tone={readNotice.tone}>{readNotice.text}</PageNotice>
       ) : null}
       <ActionForm action={save} className="contents">
         <WorkspacePanel
@@ -135,6 +153,18 @@ export default async function AgentDefaultsPage({
                 </div>
               </details>
             </div>
+          </PendingFormFields>
+        </WorkspacePanel>
+      </ActionForm>
+      <ActionForm action={saveReadLevel} className="contents">
+        <WorkspacePanel
+          title="What agents see in your email and files"
+          description="Warthog checks what every agent reads through your connected services, including agents already connected. Choose how much it hides."
+          footer={<FormSubmit pendingLabel="Saving…">Save</FormSubmit>}
+        >
+          <PendingFormFields>
+            {/* Keyed on the saved level, so a save that changes it starts the choices afresh. */}
+            <ReadLevelChoices key={readLevel} level={readLevel} />
           </PendingFormFields>
         </WorkspacePanel>
       </ActionForm>

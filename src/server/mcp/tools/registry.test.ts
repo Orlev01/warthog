@@ -311,18 +311,24 @@ test("resolveTools namespaces a hyphenated connector id with the <connector>__<t
 // tools count toward it stay the implementation's call.)
 // ===========================================================================
 
-test("a small permitted connector set stays expanded (no find_tools / call_tool)", () => {
-  const { pipeline } = spyPipeline();
+test("a small permitted connector set stays expanded, with find_tools and call_tool beside it for older tool lists", async () => {
+  const { pipeline, calls } = spyPipeline();
   const registry = createToolRegistry({ pipeline });
 
   const fiveTools = ["messages_list", "messages_send", "messages_get", "threads_list", "labels_list"];
-  const resolved = names(registry.resolveTools(permsWith(["gmail"]), { gmail: fiveTools }));
+  const tools = registry.resolveTools(permsWith(["gmail"]), { gmail: fiveTools });
+  const resolved = names(tools);
 
   for (const tool of fiveTools) {
     assert.ok(resolved.includes(`gmail__${tool}`), `a small set lists "gmail__${tool}" individually`);
   }
-  assert.ok(!resolved.includes("find_tools"), "a small set is not collapsed, so there is no find_tools");
-  assert.ok(!resolved.includes("call_tool"), "a small set is not collapsed, so there is no call_tool");
+  // An app holding the tool list from before a service was granted reaches it through these.
+  assert.ok(resolved.includes("find_tools") && resolved.includes("call_tool"));
+  const callTool = tools.find((tool) => tool.name === "call_tool")!;
+  await callTool.handle({ name: "gmail__messages_list", arguments: { query: { q: "x" } } }, connectionFor("user-1"));
+  assert.equal(calls.at(-1)?.call.tool, "gmail__messages_list", "call_tool runs the named tool through the same gate");
+  // find_tools lists the connector tools alone.
+  assert.ok(!names(registry.resolveTools(permsWith(["gmail"]), { gmail: fiveTools }, { expanded: true })).includes("call_tool"));
 });
 
 test("a very large permitted connector set collapses into find_tools + call_tool", () => {

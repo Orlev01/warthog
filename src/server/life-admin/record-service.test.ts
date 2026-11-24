@@ -314,3 +314,13 @@ test("confirming a record in a suggested category keeps the category", async () 
     assert.equal((await listCategoryRows(t.db, t.userId, t.dek)).custom[0]!.state, "active");
   });
 });
+
+test("the hint for a record that can't be matched later names only what's missing", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const withProvider = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.card"), fields: { name: "Rewards card", provider: "NAB" } }));
+    assert.deepEqual(withProvider.hints, ["Add last4 so a later save updates this record instead of adding another."]);
+    const bare = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.card"), fields: { name: "Another card" } }));
+    assert.deepEqual(bare.hints, ["Add provider and last4 so a later save updates this record instead of adding another."]);
+  });
+});

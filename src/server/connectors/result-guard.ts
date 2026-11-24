@@ -8,6 +8,12 @@
 // card numbers hidden, pre-authenticated download links dropped) with its shape kept. The
 // numeric `status` envelope is always kept, so Undo and the evidence readers still work.
 //
+// Every path checks at the person's level (amendment 24 November 2026), which the pipeline puts
+// on the call (`call.readLevel`, server-owned): "private" also hides identifying numbers,
+// "open" hides nothing and stubs no sign-in email (hidden characters are still removed, the
+// notice is still first, and the "recently read" window still opens). The evidence names a
+// level other than the default.
+//
 // Never throws: a result Warthog cannot check is not shown (a read) or is reported done
 // without the service's reply (a change — so the agent never retries a change that happened).
 // Deterministic code only (brief no-ai-model-calls); counts only in the evidence, never
@@ -17,7 +23,8 @@ import { cleanJson, type JsonCleanCounts } from "../../domain/content/json-clean
 import { gmailMessageView, type MailView } from "../../domain/content/gmail-message";
 import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
 import { outlookMessageView } from "../../domain/content/outlook-message";
-import { anythingHidden, cleanText, type FilterCounts } from "../../domain/content/text-filters";
+import { anythingHidden, cleanText, type CleanOptions, type FilterCounts } from "../../domain/content/text-filters";
+import { DEFAULT_READ_LEVEL, type ReadLevel } from "../../domain/content/read-levels";
 import { untrustedNotice, type ContentKind } from "../../domain/content/untrusted";
 import type { AgentCall } from "../mcp/pipeline";
 import type { ReadSource } from "../db/read-exposures";
@@ -29,6 +36,8 @@ export type GuardOutcome = "shown" | "masked" | "stubbed" | "withheld" | "fallba
 export interface GuardEvidence {
   readonly outcome: GuardOutcome;
   readonly counts?: Partial<JsonCleanCounts> & { stubs?: number };
+  /** The person's level, when it isn't the default (standard). */
+  readonly level?: Exclude<ReadLevel, "standard">;
 }
 
 export interface GuardedResult {
@@ -64,7 +73,18 @@ const MAIL_CONNECTORS = MAIL_CONNECTOR_IDS;
 const CALENDAR_CONNECTORS = new Set(["google-calendar", "microsoft-outlook-calendar"]);
 
 function emptyJsonCounts(): JsonCleanCounts {
-  return { hiddenCharacters: 0, signInLinks: 0, codes: 0, cards: 0, downloadLinks: 0 };
+  return { hiddenCharacters: 0, signInLinks: 0, codes: 0, cards: 0, identifiers: 0, downloadLinks: 0 };
+}
+
+// The level a call is checked at: the person's, as the pipeline set it, else the default.
+function levelOf(call: AgentCall): ReadLevel {
+  return call.readLevel ?? DEFAULT_READ_LEVEL;
+}
+
+// The evidence for a checked result, naming the level when it isn't the default.
+function evidenceOf(call: AgentCall, outcome: GuardOutcome, counts?: Partial<JsonCleanCounts> & { stubs?: number }): GuardEvidence {
+  const level = levelOf(call);
+  return { outcome, ...(counts ? { counts } : {}), ...(level !== "standard" ? { level } : {}) };
 }
 
 // Only the non-zero counts go into the evidence.
@@ -85,6 +105,7 @@ function add(into: JsonCleanCounts & { stubs?: number }, from: FilterCounts): vo
   into.signInLinks += from.signInLinks;
   into.codes += from.codes;
   into.cards += from.cards;
+  into.identifiers += from.identifiers;
 }
 
 // The curated / general-request envelope every REST connector returns.
@@ -134,6 +155,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
 
   function mailViews(call: AgentCall, parsed: unknown, envelope: Envelope): { result: unknown; counts: JsonCleanCounts & { stubs?: number }; fallback: boolean } | null {
     const counts: JsonCleanCounts & { stubs?: number } = { ...emptyJsonCounts(), stubs: 0 };
+    const level = levelOf(call);
     const tally = (view: MailView) => {
       add(counts, view.counts);
       if (view.stubbed) counts.stubs! += 1;
@@ -146,7 +168,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
         if (missing?.unavailable === true) {
           return { id: missing.id, threadId: missing.threadId, note: "Couldn't load this preview. Read the message by its id." };
         }
-        const view = gmailMessageView(item, { account: call.connectorAccountLabel, headersOnly: true });
+        const view = gmailMessageView(item, { account: call.connectorAccountLabel, headersOnly: true, level });
         if (!view) return { withheld: true, note: "Warthog couldn't check this message, so it isn't shown." };
         const message = tally(view);
         const labels = Array.isArray(message.labelIds) ? message.labelIds : [];
@@ -173,6 +195,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
         account: call.connectorAccountLabel,
         tooLarge: envelope.tooLargeToCheck === true,
         headersOnly: format === "metadata" || format === "minimal",
+        level,
       });
       if (!view) return null;
       const message = tally(view);
@@ -181,7 +204,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     const tooLarge = envelope.tooLargeToCheck === true;
     const tooLargeNote = "This email is too large for Warthog to check, so its text isn't shown. The person can open it in Outlook.";
     if (call.tool === OUTLOOK_READ) {
-      const view = outlookMessageView(parsed);
+      const view = outlookMessageView(parsed, { level });
       if (!view) return null;
       const message = tally(view);
       if (tooLarge && !view.stubbed) message.bodyNote = tooLargeNote;
@@ -191,7 +214,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       const list = (parsed as { value?: unknown } | null)?.value;
       if (!Array.isArray(list)) return null;
       const messages = list.map((item) => {
-        const view = outlookMessageView(item);
+        const view = outlookMessageView(item, { level });
         return view ? tally(view) : { withheld: true, note: "Warthog couldn't check this message, so it isn't shown." };
       });
       const next = (parsed as Record<string, unknown>)["@odata.nextLink"];
@@ -212,7 +235,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     // A failed request's reply never reaches the agent (the pipeline returns a plain reason).
     if (!isSuccess(envelope.status)) return { result: envelope, evidence: { outcome: "shown" } };
     const kind: ContentKind = call.connector && MAIL_CONNECTORS.has(call.connector) ? "email" : "content";
-    const options = { calendar: call.connector !== null && CALENDAR_CONNECTORS.has(call.connector) };
+    const options: CleanOptions = { calendar: call.connector !== null && CALENDAR_CONNECTORS.has(call.connector), level: levelOf(call) };
     let parsed: unknown;
     let isJson = false;
     try {
@@ -225,7 +248,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       || (call.tool === GMAIL_SEARCH && /"summaries":true/.test(envelope.body));
     if (isJson) {
       const mail = mailViews(call, parsed, envelope);
-      if (mail) return { result: mail.result, evidence: { outcome: outcomeOf(mail.counts, mail.fallback), counts: nonZero(mail.counts) } };
+      if (mail) return { result: mail.result, evidence: evidenceOf(call, outcomeOf(mail.counts, mail.fallback), nonZero(mail.counts)) };
     }
     // A mail reply that isn't whole JSON (cut short), or isn't a message, is never passed on raw.
     if (mailTool) return withheld(call, envelope.status);
@@ -235,42 +258,43 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     const note = call.tool === DRIVE_READ_TEXT && typeof envelope.note === "string" ? { note: envelope.note } : {};
     return {
       result: { ...source(call, kind), status: envelope.status, body, truncated: envelope.truncated === true, ...note },
-      evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) },
+      evidence: evidenceOf(call, outcomeOf(counts, false), nonZero(counts)),
     };
   }
 
   // A provider-hosted tool's MCP result: its text blocks and structured content are checked.
   function reviewProvider(call: AgentCall, result: Record<string, unknown>): GuardedResult {
     const counts = emptyJsonCounts();
+    const options: CleanOptions = { level: levelOf(call) };
     const out: Record<string, unknown> = { ...source(call, "content") };
     for (const [key, value] of Object.entries(result)) {
       if (key === "content" && Array.isArray(value)) {
         out.content = value.map((block) => {
           const b = (block ?? {}) as { type?: unknown; text?: unknown; uri?: unknown; name?: unknown; resource?: { uri?: unknown; mimeType?: unknown; text?: unknown } };
-          if (b.type === "text" && typeof b.text === "string") return { type: "text", text: cleanText(b.text, counts) };
+          if (b.type === "text" && typeof b.text === "string") return { type: "text", text: cleanText(b.text, counts, options) };
           // An embedded text resource is read like text; a link to one keeps its address and name.
           if (b.type === "resource" && typeof b.resource?.text === "string") {
             return { type: "resource", resource: {
-              ...(typeof b.resource.uri === "string" ? { uri: cleanText(b.resource.uri, counts) } : {}),
+              ...(typeof b.resource.uri === "string" ? { uri: cleanText(b.resource.uri, counts, options) } : {}),
               ...(typeof b.resource.mimeType === "string" ? { mimeType: b.resource.mimeType } : {}),
-              text: cleanText(b.resource.text, counts),
+              text: cleanText(b.resource.text, counts, options),
             } };
           }
           if (b.type === "resource_link" && typeof b.uri === "string") {
-            return { type: "resource_link", uri: cleanText(b.uri, counts), ...(typeof b.name === "string" ? { name: cleanText(b.name, counts) } : {}) };
+            return { type: "resource_link", uri: cleanText(b.uri, counts, options), ...(typeof b.name === "string" ? { name: cleanText(b.name, counts, options) } : {}) };
           }
           // Images, audio and binary resources are not passed on: they can't be checked.
           return { type: "text", text: "[non-text content withheld by Warthog]" };
         });
       } else if (key === "structuredContent") {
-        out.structuredContent = cleanJson(value, counts);
+        out.structuredContent = cleanJson(value, counts, options);
       } else if (key === "isError" || key === "_meta") {
         if (key === "isError") out.isError = value;
       } else {
-        out[key] = cleanJson(value, counts);
+        out[key] = cleanJson(value, counts, options);
       }
     }
-    return { result: out, evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) } };
+    return { result: out, evidence: evidenceOf(call, outcomeOf(counts, false), nonZero(counts)) };
   }
 
   function withheld(call: AgentCall, status: number | undefined): GuardedResult {
@@ -279,7 +303,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       result: call.makesChange
         ? { ...source(call, kind), ...(status === undefined ? {} : { status }), done: true, note: COULD_NOT_CHECK_CHANGE }
         : { ...source(call, kind), ...(status === undefined ? {} : { status }), withheld: true, note: COULD_NOT_CHECK_READ },
-      evidence: { outcome: "withheld" },
+      evidence: evidenceOf(call, "withheld"),
     };
   }
 
@@ -361,7 +385,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       if (isEnvelope(result)) return reviewEnvelope(call, result);
       if (result && typeof result === "object" && !Array.isArray(result)) return reviewProvider(call, result as Record<string, unknown>);
       const counts = emptyJsonCounts();
-      return { result: cleanJson(result, counts), evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) } };
+      return { result: cleanJson(result, counts, { level: levelOf(call) }), evidence: evidenceOf(call, outcomeOf(counts, false), nonZero(counts)) };
     } catch {
       return withheld(call, status);
     }
