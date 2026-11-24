@@ -250,7 +250,7 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
 const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Outlook: Search messages",
-    description: "Search the Outlook mailboxes this agent can use: with no account, one search covers all of them and each result names its mailbox; account picks one. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby and $top (up to 25, default 10) sort and size the page, and $skip (with account) gets the next. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
+    description: "Search the Outlook mailboxes this agent can use: with no account, one search covers all of them and each result names its mailbox; account picks one. query.$search takes words, e.g. invoice OR receipt, with a date in the words to narrow it (received>=2026-11-01); without $search, query.$filter and $orderby filter and sort. query.$top (up to 25, default 10) sizes the page, and the $skiptoken or $skip the results give (with account) gets the next. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
   },
   draft: {
     title: "Outlook: Create unsent draft",

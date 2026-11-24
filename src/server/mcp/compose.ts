@@ -138,11 +138,12 @@ const SEARCHABLE_ADDRESS = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 const MAIL_SEARCH_TOOLS = new Set(["google-gmail__search", "microsoft-outlook-mail__search"]);
 
 // The field a mail search pages with, when it asks for a further page: a page belongs to one
-// inbox (Gmail's pageToken; Outlook's $skip, with or without the "$", in any case).
+// inbox (Gmail's pageToken; Outlook's $skiptoken or $skip, with or without the "$", in any case).
 function pagingField(call: AgentCall): string | undefined {
   const query = (call.params as { query?: Record<string, unknown> } | undefined)?.query ?? {};
   if (call.tool === "google-gmail__search") return query.pageToken !== undefined ? "pageToken" : undefined;
-  return Object.keys(query).some((key) => key.replace(/^\$/, "").toLowerCase() === "skip") ? "$skip" : undefined;
+  const key = Object.keys(query).find((name) => /^\$?skip(?:token)?$/i.test(name));
+  return key === undefined ? undefined : /token$/i.test(key) ? "$skiptoken" : "$skip";
 }
 
 // A thrown tool call maps to a plain-English reason the agent sees; an internal failure is

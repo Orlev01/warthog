@@ -95,15 +95,30 @@ export function coverageOf(inboxes: readonly InboxSearch[], note?: string): stri
   return parts.join(" ");
 }
 
-// An Outlook inbox's next page, as the $skip its next link carries.
-function skipOf(nextLink: unknown): string | undefined {
-  if (typeof nextLink !== "string") return undefined;
+// Graph's page token for a search (a search id and a position, base64).
+const SKIP_TOKEN = /^[A-Za-z0-9+/=_-]{1,2048}$/;
+
+/**
+ * Where an Outlook inbox's next page starts, from its next link: a search pages with Graph's
+ * `$skiptoken`, a plain listing with `$skip`. Empty when the link has neither.
+ */
+export function outlookNextPage(nextLink: unknown): { skip?: string; skipToken?: string } {
+  if (typeof nextLink !== "string") return {};
   try {
-    const skip = new URL(nextLink).searchParams.get("$skip");
-    return skip !== null && /^\d{1,9}$/.test(skip) ? skip : undefined;
+    const params = new URL(nextLink).searchParams;
+    const skipToken = params.get("$skiptoken");
+    if (skipToken !== null && SKIP_TOKEN.test(skipToken)) return { skipToken };
+    const skip = params.get("$skip");
+    return skip !== null && /^\d{1,9}$/.test(skip) ? { skip } : {};
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** An Outlook next link as the fields an agent pages with: `nextSkipToken` or `nextSkip`. */
+export function outlookPaging(nextLink: unknown): { nextSkip?: string; nextSkipToken?: string } {
+  const next = outlookNextPage(nextLink);
+  return next.skipToken ? { nextSkipToken: next.skipToken } : next.skip ? { nextSkip: next.skip } : {};
 }
 
 // A further fetch from one inbox, to fill the room the others left on a page.
@@ -112,9 +127,10 @@ export interface PageFill {
   readonly index: number;
   // How many more results to ask it for.
   readonly size: number;
-  // Where its next page starts: Gmail's page token, or Outlook's $skip.
+  // Where its next page starts: Gmail's page token, or Outlook's $skiptoken (a search) or $skip.
   readonly pageToken?: string;
   readonly skip?: string;
+  readonly skipToken?: string;
 }
 
 /**
@@ -128,8 +144,8 @@ export function pageFills(inboxes: readonly InboxSearch[], share: number, page: 
   const more = inboxes.flatMap((inbox, index) => {
     if (inbox.status !== "searched" || countOf(inbox) < share) return [];
     const pageToken = typeof inbox.view?.nextPageToken === "string" ? inbox.view.nextPageToken : undefined;
-    const skip = skipOf(inbox.view?.nextLink);
-    return pageToken || skip ? [{ index, ...(pageToken ? { pageToken } : {}), ...(skip ? { skip } : {}) }] : [];
+    const next = outlookNextPage(inbox.view?.nextLink);
+    return pageToken || next.skip || next.skipToken ? [{ index, ...(pageToken ? { pageToken } : {}), ...next }] : [];
   });
   if (more.length === 0) return [];
   const size = Math.ceil(room / more.length);
@@ -139,7 +155,7 @@ export function pageFills(inboxes: readonly InboxSearch[], share: number, page: 
 /** One inbox's first page and its fill as one page: the messages in order, and the fill's next page. */
 export function withFill(first: InboxSearch, fill: InboxSearch): InboxSearch {
   if (first.status !== "searched" || fill.status !== "searched" || !first.view || !fill.view) return first;
-  const { nextPageToken: _token, nextLink: _link, ...rest } = first.view;
+  const { nextPageToken: _token, nextLink: _link, nextSkip: _skip, nextSkipToken: _skipToken, ...rest } = first.view;
   const earlier = Array.isArray(first.view.messages) ? first.view.messages : [];
   const later = Array.isArray(fill.view.messages) ? fill.view.messages : [];
   return {
@@ -149,6 +165,7 @@ export function withFill(first: InboxSearch, fill: InboxSearch): InboxSearch {
       messages: [...earlier, ...later],
       ...(typeof fill.view.nextPageToken === "string" ? { nextPageToken: fill.view.nextPageToken } : {}),
       ...(typeof fill.view.nextLink === "string" ? { nextLink: fill.view.nextLink } : {}),
+      ...outlookPaging(fill.view.nextLink),
     },
   };
 }
@@ -173,13 +190,12 @@ export function mergeMailSearch(inboxes: readonly InboxSearch[], options: { read
     const list = inbox.status === "searched" && Array.isArray(inbox.view?.messages) ? inbox.view.messages : [];
     for (const message of list) found.push({ order, message: { account: inbox.account, ...(isRecord(message) ? message : {}) } });
     const nextPageToken = inbox.status === "searched" && typeof inbox.view?.nextPageToken === "string" ? inbox.view.nextPageToken : undefined;
-    const nextSkip = inbox.status === "searched" ? skipOf(inbox.view?.nextLink) : undefined;
     return {
       account: inbox.account,
       status: inbox.status,
       count: list.length,
       ...(nextPageToken ? { nextPageToken } : {}),
-      ...(nextSkip ? { nextSkip } : {}),
+      ...(inbox.status === "searched" ? outlookPaging(inbox.view?.nextLink) : {}),
     };
   });
   const idOf = (entry: { message: View }) => String(entry.message.id ?? "");

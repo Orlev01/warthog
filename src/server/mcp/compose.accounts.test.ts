@@ -474,17 +474,59 @@ test("an Outlook search covers both mailboxes and tags their ids", async () => {
       const token = new Headers(init?.headers).get("authorization");
       sent.push({ url, method: String(init?.method ?? "GET"), token });
       const value = token === "Bearer tok-a" ? [message("AAMk1=", "x@agl.com.au", "2026-11-20T00:00:00Z")] : [message("AAMk2=", "y@hostplus.com.au", "2026-11-21T00:00:00Z")];
-      return Response.json({ value, "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/messages?$top=5&$skip=5` });
+      // Graph pages a search with its own token; a listing with $skip.
+      const next = url.searchParams.has("$search") ? "%24skiptoken=MSZZ%3d%3d" : "%24skip=5";
+      return Response.json({ value, "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/messages?%24top=5&${next}` });
     }) as typeof globalThis.fetch;
     const rpc = await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $search: "\"bill\"" } })));
     const view = viewOf(rpc);
     assert.deepEqual(view.messages.map((m) => [m.id, m.account]), [[`${accountHandle(b)}.AAMk2=`, "b@outlook.com"], [`${accountHandle(a)}.AAMk1=`, "a@outlook.com"]]);
     assert.deepEqual(sent.map((s) => s.url.searchParams.get("$top")), ["5", "5"]);
-    assert.deepEqual(view.accounts.map((x) => (x as { nextSkip?: string }).nextSkip), ["5", "5"]);
-    assert.match(text(rpc), /More from a@outlook\.com: search again with account a@outlook\.com, the same query and query\.\$skip=5/);
+    assert.deepEqual(view.accounts.map((x) => (x as { nextSkipToken?: string }).nextSkipToken), ["MSZZ==", "MSZZ=="]);
+    assert.match(text(rpc), /More from a@outlook\.com: search again with account a@outlook\.com, the same query and query\.\$skiptoken=MSZZ==/);
     // A further page names its mailbox.
-    const page = await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $search: "\"bill\"", $skip: "5" } })));
-    assert.equal(reason(page), "A page of results belongs to one inbox: pass account with $skip.");
+    for (const [key, value] of [["$skiptoken", "MSZZ=="], ["$skip", "5"]] as const) {
+      const page = await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $filter: "isRead eq false", [key]: value } })));
+      assert.equal(reason(page), `A page of results belongs to one inbox: pass account with ${key}.`);
+    }
+    // A listing across both still pages each by $skip.
+    const listing = viewOf(await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $filter: "isRead eq false" } }))));
+    assert.deepEqual(listing.accounts.map((x) => (x as { nextSkip?: string }).nextSkip), ["5", "5"]);
+  } finally { await db.close(); }
+});
+
+test("the room an empty mailbox leaves on a search page is filled by Graph's page token", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const keyWrapper = localAesKeyWrapper(config.devKek!);
+    const dek = randomBytes(32);
+    const user = await createUser(db, { email: `person-${randomUUID()}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
+    const connectionId = randomUUID();
+    await createAgent(db, { userId: user.id, connectionId, displayName: "Claude", platform: "claude" }, fixedClock(NOW));
+    const connect = async (label: string) =>
+      (await createConnection(db, { userId: user.id, connectorId: "microsoft-outlook-mail", accountLabel: label, credentials: { access_token: `tok-${label.split("@")[0]}` } }, dek, fixedClock(NOW))).id;
+    const a = await connect("a@outlook.com");
+    const b = await connect("b@outlook.com");
+    await upsertPermissions(db, { userId: user.id, connectionId, ...BASE, accounts: [{ accountId: a }, { accountId: b }] });
+    // a@ has eight bills, paged by a token that carries the position (as Graph's does); b@ has none.
+    const bills = Array.from({ length: 8 }, (_, i) => ({ id: `AAMk${i}=`, conversationId: `c${i}`, receivedDateTime: `2026-11-${String(20 - i).padStart(2, "0")}T00:00:00Z`, subject: `Bill ${i}`, from: { emailAddress: { address: "x@agl.com.au" } }, bodyPreview: "Hi" }));
+    const sent: Seen[] = [];
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const token = new Headers(init?.headers).get("authorization");
+      sent.push({ url, method: String(init?.method ?? "GET"), token });
+      if (token !== "Bearer tok-a") return Response.json({ value: [] });
+      const start = Number(url.searchParams.get("$skiptoken")?.replace("at-", "") ?? "0");
+      const size = Number(url.searchParams.get("$top") ?? "10");
+      const more = start + size < bills.length ? { "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/messages?%24search=%22bill%22&%24skiptoken=at-${start + size}` } : {};
+      return Response.json({ value: bills.slice(start, start + size), ...more });
+    }) as typeof globalThis.fetch;
+    const view = viewOf(await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $search: "bill" } }))));
+    assert.equal(view.messages.length, 8, "all eight, not just a@'s share of five");
+    const fromA = sent.filter((s) => s.token === "Bearer tok-a");
+    assert.deepEqual(fromA.map((s) => [s.url.searchParams.get("$skiptoken"), s.url.searchParams.get("$top"), s.url.searchParams.get("$skip")]), [[null, "5", null], ["at-5", "5", null]]);
+    assert.ok(fromA.every((s) => s.url.searchParams.get("$search") === "\"bill\""), "the words go quoted on every page");
   } finally { await db.close(); }
 });
 

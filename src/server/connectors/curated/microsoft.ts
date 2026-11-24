@@ -79,7 +79,41 @@ export const DEFAULT_OUTLOOK_TOP = 10;
 const MESSAGE_READ_BYTES = 2 * 1024 * 1024;
 // The message fields a search returns: who, what, when and a preview. Read one by id for its text.
 const OUTLOOK_HEADERS_ONLY = "id,conversationId,internetMessageId,subject,from,sender,toRecipients,ccRecipients,replyTo,receivedDateTime,isRead,hasAttachments,importance,bodyPreview,webLink";
-const OUTLOOK_SEARCH_OPTIONS = new Set(["search", "filter", "orderby", "skip", "top", "count"]);
+const OUTLOOK_SEARCH_OPTIONS = new Set(["search", "filter", "orderby", "skip", "skiptoken", "top", "count"]);
+// Graph's own page token for a search, as its next link carries it (search id and position).
+const OUTLOOK_SKIP_TOKEN = /^[A-Za-z0-9+/=_-]{1,2048}$/;
+
+// Whether search words are one quoted string already: the first unescaped quote after the
+// opening one is the last character.
+function wrappedInQuotes(text: string): boolean {
+  if (text.length < 2 || !text.startsWith("\"")) return false;
+  for (let i = 1; i < text.length; i += 1) {
+    if (text[i] === "\\") i += 1;
+    else if (text[i] === "\"") return i === text.length - 1;
+  }
+  return false;
+}
+
+/**
+ * Outlook search words as Graph needs them: one quoted string, with any quote inside escaped
+ * (`"tax invoice" OR receipt` → `"\"tax invoice\" OR receipt"`). Unquoted words with a space,
+ * or words only partly quoted, make Graph list the newest mail instead of searching, with no
+ * error, so the agent would take every message for a match.
+ */
+export function quotedOutlookSearch(words: string): string {
+  const text = words.trim();
+  return wrappedInQuotes(text) ? text : `"${text.replace(/\\?"/g, "\\\"")}"`;
+}
+
+// A page token copied from a next link may still be URL-encoded (`%3d%3d`).
+function skipToken(value: string): string {
+  let token = value;
+  if (/%[0-9a-f]{2}/i.test(token)) {
+    try { token = decodeURIComponent(token); } catch { /* checked below */ }
+  }
+  if (!OUTLOOK_SKIP_TOKEN.test(token)) throw new HttpError(400, "query.$skiptoken must be the $skiptoken an Outlook search returned.");
+  return token;
+}
 
 function outlookSearchQuery(query: Record<string, string> | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -91,7 +125,18 @@ function outlookSearchQuery(query: Record<string, string> | undefined): Record<s
       out.$top = String(Number.isFinite(top) && top > 0 ? Math.min(top, MAX_OUTLOOK_TOP) : DEFAULT_OUTLOOK_TOP);
       continue;
     }
-    out[`$${option}`] = value;
+    if (option === "search") {
+      if (value.trim()) out.$search = quotedOutlookSearch(value);
+      continue;
+    }
+    out[`$${option}`] = option === "skiptoken" ? skipToken(value) : value;
+  }
+  // Graph refuses these with a search, so the agent is told what works instead.
+  if (out.$search !== undefined && (out.$filter !== undefined || out.$orderby !== undefined)) {
+    throw new HttpError(400, "Outlook can't combine $search with $filter or $orderby. Put a date in the search words instead, e.g. \"invoice AND received>=2026-11-01\"; search results come newest first.");
+  }
+  if (out.$search !== undefined && out.$skip !== undefined) {
+    throw new HttpError(400, "Outlook pages a search with $skiptoken, not $skip: pass the $skiptoken the results gave.");
   }
   return { $top: String(DEFAULT_OUTLOOK_TOP), ...out, $select: OUTLOOK_HEADERS_ONLY };
 }

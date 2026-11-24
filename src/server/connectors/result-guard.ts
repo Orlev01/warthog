@@ -22,6 +22,7 @@
 import { cleanJson, type JsonCleanCounts } from "../../domain/content/json-clean";
 import { gmailMessageView, type MailView } from "../../domain/content/gmail-message";
 import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
+import { outlookPaging } from "../../domain/content/merge-mail";
 import { outlookMessageView } from "../../domain/content/outlook-message";
 import { anythingHidden, cleanText, type CleanOptions, type FilterCounts } from "../../domain/content/text-filters";
 import { DEFAULT_READ_LEVEL, type ReadLevel } from "../../domain/content/read-levels";
@@ -222,6 +223,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
         result: {
           ...source(call, "email"), status: envelope.status, messages,
           ...(typeof next === "string" ? { nextLink: next } : {}),
+          // How to ask for that page: Graph's own link can't be fetched by the agent.
+          ...outlookPaging(next),
           note: "Previews only: read a message by its id for its full text.",
         },
         counts,
