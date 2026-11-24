@@ -1,4 +1,16 @@
-# Delivery status — 24 November 2026 (Outlook search paging)
+# Delivery status — 24 November 2026 (Build your profile link fix)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`d5b5b2ac540f9699a9f25d865590834f581c82f3` runs as `warthog--r45368148441a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- PR #64: Home's "Build your profile" row always lands somewhere — Home's block while the step is to
+  do, and a permanent "Build your whole profile" panel first on Life admin's Add tab once it's done.
+
+No migrations (96). See the [release record](docs/audit/profile-build-link-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (Outlook search paging)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

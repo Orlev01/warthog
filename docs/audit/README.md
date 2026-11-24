@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Build your profile link fix, 24 November:** main `d5b5b2a` runs as `warthog--r45368148441a1`. PR
+#64 makes Home's "Build your profile" row always land somewhere: Home's block while the step is to
+do (in every state), and a permanent "Build your whole profile" panel first on Life admin's Add tab
+once it's done; the block outlines itself where a link lands. No migrations (96). See the
+[release record](profile-build-link-release-2026-11-24.md).
+
 **Outlook search paging, 24 November:** main `4351664` runs as `warthog--r45344965311a1`. PR #63
 makes Outlook search search: words that weren't wholly quoted used to return the newest emails as if
 they all matched. A search now pages with Graph's `$skiptoken`, across several inboxes too, and the
