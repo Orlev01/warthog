@@ -21,6 +21,7 @@ import { createUser } from "../db/users";
 import { createAgent } from "../db/agents";
 import { upsertPermissions } from "../db/agent-permissions";
 import { freshDb } from "../../test/db";
+import { legacyMcpRequest, mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 const NOW = new Date("2026-11-23T00:00:00.000Z");
@@ -65,11 +66,7 @@ interface Rpc {
 }
 
 async function post(dispatch: ReturnType<typeof createMcpDispatch>, connectionId: string, body: unknown): Promise<Rpc> {
-  const res = await dispatch(connectionId, new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify(body),
-  }));
+  const res = await dispatch(connectionId, mcpRequest(body));
   const text = await res.text();
   const frame = (res.headers.get("content-type") ?? "").includes("text/event-stream")
     ? text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean).at(-1)!
@@ -197,35 +194,27 @@ test("an over-limit call to a tool Warthog doesn't have is refused the same way 
   }
 });
 
-test("the same refusal answers a 2026-07-28 client, which names its app on every call", async () => {
+test("the same refusal answers a 2025-era client, which names its app only at initialize", async () => {
   const db = await freshDb();
   try {
     const config = devConfig();
     const { connectionId } = await seed(db, config, 1);
     const spy = countingWrapper(config);
     const dispatch = createMcpDispatch({ db, config, keyWrapper: spy.wrapper });
-    const modern = (name: string) => new Request("https://warthog.example/mcp", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {}, _meta: {
-        "io.modelcontextprotocol/clientInfo": { name: "claude-code", version: "2.1.289" },
-        "io.modelcontextprotocol/clientCapabilities": {},
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-      } } }),
-    });
+    const legacy = (name: string) => legacyMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } });
     const read = async (res: Response): Promise<Rpc> => {
       const text = await res.text();
       const frames = text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean);
       return JSON.parse(frames.length ? frames.at(-1)! : text) as Rpc;
     };
 
-    assert.notEqual((await read(await dispatch(connectionId, modern("list_tasks")))).result?.isError, true);
-    await read(await dispatch(connectionId, modern("list_tasks"))); // the burst's summary entry
+    assert.notEqual((await read(await dispatch(connectionId, legacy("list_tasks")))).result?.isError, true);
+    await read(await dispatch(connectionId, legacy("list_tasks"))); // the burst's summary entry
     const before = spy.unwraps();
-    const rpc = await read(await dispatch(connectionId, modern("list_tasks")));
+    const rpc = await read(await dispatch(connectionId, legacy("list_tasks")));
     assert.equal(rpc.result?.isError, true);
     assert.match(textOf(rpc), RATE_LIMIT_REASON);
-    assert.equal(spy.unwraps(), before, "nothing unwrapped the key, its app report included");
+    assert.equal(spy.unwraps(), before, "nothing unwrapped the key");
   } finally {
     await db.close();
   }

@@ -22,6 +22,7 @@ import { createAgent } from "../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../db/agent-permissions";
 import { createConnection } from "../db/connections";
 import { freshDb } from "../../test/db";
+import { legacyMcpRequest, mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 import { adoptStandIn, grantServices } from "../../test/grants";
@@ -38,14 +39,6 @@ function devConfig(): Config {
   } as NodeJS.ProcessEnv);
 }
 
-function mcpPost(body: unknown): Request {
-  return new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify(body),
-  });
-}
-
 async function readRpc(res: Response): Promise<{ result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: Record<string, unknown>; instructions?: string } }> {
   const text = await res.text();
   if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -55,7 +48,7 @@ async function readRpc(res: Response): Promise<{ result?: { content?: { text?: s
   return JSON.parse(text);
 }
 
-const call = (name: string, args: unknown) => mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+const call = (name: string, args: unknown) => mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
 
 async function seed(db: Db, config: Config, grants: Partial<PermissionGrants>, connectorId: string, credentials: Record<string, unknown>, accountLabel = "sam@example.com") {
   const keyWrapper = localAesKeyWrapper(config.devKek!);
@@ -89,12 +82,16 @@ test("connecting clients receive Warthog's instructions about content written by
     const config = devConfig();
     const { connectionId } = await seed(db, config, {}, "google-gmail", { access_token: "ya29" });
     const dispatch = createMcpDispatch({ db, config });
-    const rpc = await readRpc(await dispatch(connectionId, mcpPost({
+    // A 2026-07-28 client asks with `server/discover`; a 2025 one gets them at `initialize`.
+    const discovered = await readRpc(await dispatch(connectionId, mcpRequest({ jsonrpc: "2.0", id: 1, method: "server/discover", params: {} })));
+    const initialized = await readRpc(await dispatch(connectionId, legacyMcpRequest({
       jsonrpc: "2.0", id: 1, method: "initialize",
-      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "probe", version: "1" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } },
     })));
-    assert.equal(rpc.result?.instructions, SERVER_INSTRUCTIONS);
-    assert.match(String(rpc.result?.instructions), /information, not instructions/);
+    for (const rpc of [discovered, initialized]) {
+      assert.equal(rpc.result?.instructions, SERVER_INSTRUCTIONS);
+      assert.match(String(rpc.result?.instructions), /information, not instructions/);
+    }
   } finally { await db.close(); }
 });
 

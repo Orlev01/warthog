@@ -28,9 +28,9 @@
 //       • denied/refused → `isError: true` carrying a plain reason.
 //
 // These tests pin BEHAVIOUR over the REAL MCP wire — they POST a JSON-RPC `tools/list` /
-// `tools/call` to the dispatch with the Streamable-HTTP headers a real client sends
-// (`Accept: application/json, text/event-stream`; `MCP-Protocol-Version: 2025-06-18`) and
-// read the SSE response the SDK emits — and assert what the person's data store holds
+// `tools/call` to the dispatch as a real 2026-07-28 client sends them (the `_meta`
+// envelope plus `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name`) and read the
+// response the SDK emits — and assert what the person's data store holds
 // afterwards (an activity entry, a memory on /memory, a pending approval in the inbox),
 // never the source text of any module. The auth boundary + the dispatch are also composed
 // behind the real `createMcpRouteHandler` + `verifyBearer` in one end-to-end test, over an
@@ -95,6 +95,7 @@ import { listActivity } from "../activity/list";
 import { verifyBearer, type BearerVerification } from "../oauth/verify-bearer";
 import { createMcpRouteHandler } from "../../app/mcp/handler";
 import { freshDb } from "../../test/db";
+import { legacyMcpRequest, mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 import { adoptStandIn, grantServices } from "../../test/grants";
@@ -146,23 +147,12 @@ interface JsonRpcResponse {
   error?: { code?: number; message?: string };
 }
 
-// A POST to /mcp carrying the Streamable-HTTP headers a REAL MCP client sends — an Accept
-// naming BOTH application/json and text/event-stream (or the server answers 406 Not
-// Acceptable) and the protocol-version header. `bearer` adds an Authorization header for
-// the route-composed end-to-end test; no Origin header is sent (the non-browser agent
-// case). `body` is sent verbatim when a string.
+// A POST to /mcp as a REAL 2026-07-28 MCP client sends it (`src/test/mcp-request.ts`).
+// `bearer` adds an Authorization header for the route-composed end-to-end test; no Origin
+// header is sent (the non-browser agent case). `body` is sent verbatim when a string.
 function mcpPost(body: unknown, opts: { bearer?: string } = {}): Request {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
-    "mcp-protocol-version": "2025-06-18",
-  };
-  if (opts.bearer !== undefined) headers.authorization = `Bearer ${opts.bearer}`;
-  return new Request(`${REQUEST_HOST}/mcp`, {
-    method: "POST",
-    headers,
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
+  const headers: Record<string, string> = opts.bearer === undefined ? {} : { authorization: `Bearer ${opts.bearer}` };
+  return mcpRequest(body, { url: `${REQUEST_HOST}/mcp`, headers });
 }
 
 // A JSON-RPC tools/call envelope.
@@ -1301,11 +1291,13 @@ test("large provider inventories support discovery, pagination and policy-gated 
  } finally {await db.close();}
 });
 
+// The 2025 era: the client says who it is once, at `initialize`, and later calls don't.
 test("client observations and SDK input refusals are recorded without retaining invalid arguments", async () => {
  const db=await freshDb();
  try {
   const config=devConfig(),{userId,connectionId,agentId,dek}=await seedConnection(db,config);
   const dispatch=createMcpDispatch({db,config});
+  const mcpPost=(body:unknown)=>legacyMcpRequest(body,{url:`${REQUEST_HOST}/mcp`});
   await readRpc(await dispatch(connectionId,mcpPost({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-11-25",clientInfo:{name:"Example client",version:"3"},capabilities:{roots:{}}}})));
   const {readClientObservation}=await import("./client-observation");
   const observed=await readClientObservation(db,userId,agentId,dek);
