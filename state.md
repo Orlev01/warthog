@@ -1,4 +1,17 @@
-# Delivery status — 24 November 2026 (card-number false alarms)
+# Delivery status — 24 November 2026 (Build your profile)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`01d045bf42902badfd4ac6ce337cf8ecd79b9c72` runs as `warthog--r45334002203a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- PRs #61 and #62: Home's "Build your profile" (replacing "Add your details") gives the person one
+  prompt for their own agent to fill in Life admin and suggest About you details from their email,
+  calendar and files, all for them to check ([ADR](docs/adr/profile-build.md)).
+
+Migration 0125 (96). See the [release record](docs/audit/profile-build-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (card-number false alarms)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Build your profile, 24 November:** main `01d045b` runs as `warthog--r45334002203a1`. PRs #61
+and #62 replace "Add your details" with "Build your profile": the person copies one prompt into their
+own agent, which goes through their email, calendar and files through Warthog, fills in Life admin
+and suggests About you details, all for them to check (About you suggestions stay invisible to agents
+until added). Memories and tasks refuse what Warthog never keeps. Migration 0125 (96). See the
+[release record](profile-build-release-2026-11-24.md).
+
 **Card-number false alarms, 24 November:** main `0a912ec` runs as `warthog--r45321866247a1`. PR #60
 stops treating policy and account numbers as card numbers. A QBE policy number had been shown as a
 card at Standard and cut to its last four in Life admin. Real card numbers are still hidden. No
