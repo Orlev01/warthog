@@ -41,7 +41,8 @@ test("rejects unsafe, duplicate, oversized and malformed package files", () => {
   assert.throws(() => validateFiles([{ path: "x", content: "a".repeat(200_001) }]), /large/);
   assert.throws(() => parsePackage([{ path: "SKILL.md", content: "no frontmatter" }]), /frontmatter/);
   assert.throws(() => parsePackage([{ path: ".claude-plugin/plugin.json", content: "not json" }]), /manifest/);
-  assert.throws(() => parsePackage([{ path: "SKILL.md", content: makeSkillFile("Using Warthog", "Reserved", "Text") }]), /reserved/);
+  assert.throws(() => parsePackage([{ path: "SKILL.md", content: makeSkillFile("Using Warthog", "Reserved", "Text") }]), /one of Warthog's skills/);
+  assert.throws(() => parsePackage([{ path: "SKILL.md", content: makeSkillFile("building a profile", "Mine", "Text") }]), /one of Warthog's skills/, "every Warthog skill's title, whatever the case");
 });
 
 test("skill authoring escapes quoted fields and requires instructions", () => {

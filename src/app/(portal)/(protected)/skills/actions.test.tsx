@@ -965,3 +965,22 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.DATABASE_URL = prevDbUrl;
   }
 });
+
+// docs/adr/editable-builtin-skills.md: a Warthog skill's title belongs to it, so an agent asking
+// for "Building a profile" never gets the person's own skill instead (or the other way round).
+test("createSkill refuses one of Warthog's skill titles, whatever the case, and stores nothing", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "reserved-title");
+    const actions = makeActions(db, keyWrapper);
+    for (const title of ["Building a profile", "using warthog", " Life admin  records "]) {
+      const result = await actions.createSkill(sessionFor(userId), createInput({ title, useThisWhen: "when x", fullText: "y", scope: "all" }));
+      assert.equal(okOf(result), false, `${title} is Warthog's`);
+      assert.equal((result as { reason?: string }).reason, "reserved_title");
+    }
+    assert.equal((await listSkillsForUser(db, userId, dek)).length, 0);
+  } finally {
+    await db.close();
+  }
+});

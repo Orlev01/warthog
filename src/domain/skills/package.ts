@@ -1,4 +1,4 @@
-import { HOUSE_SKILL } from "./index";
+import { isReservedSkillTitle } from "./builtins";
 
 export const PACKAGE_LIMITS = { files: 100, fileBytes: 200_000, totalBytes: 1_000_000, archiveBytes: 5_000_000 } as const;
 export interface PackageFile { path: string; content: string }
@@ -69,7 +69,7 @@ export function parseSkillFile(file: PackageFile): PackageSkill {
   const description = fields.description?.trim();
   const body = match[2]!.trim();
   if (!name || name.length > 150 || !description || description.length > 500) throw new PackageError(`${file.path} needs a name (up to 150 characters) and description (up to 500).`);
-  if (name.toLowerCase() === HOUSE_SKILL.title.toLowerCase()) throw new PackageError("Using Warthog is a reserved skill name.");
+  if (isReservedSkillTitle(name)) throw new PackageError(`${name} is the name of one of Warthog's skills. Choose another name.`);
   if (!body || body.length > 100_000) throw new PackageError(`${file.path} needs instructions of up to 100,000 characters.`);
   return { path: file.path, name, description, body };
 }

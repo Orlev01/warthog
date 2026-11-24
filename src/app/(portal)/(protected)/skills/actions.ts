@@ -56,6 +56,7 @@ import {
   type PreferencesProfile,
 } from "@/server/db/preferences";
 import { HOUSE_SKILL } from "@/domain/skills/index";
+import { isReservedSkillTitle } from "@/domain/skills/builtins";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Session } from "@/server/auth/session";
 
@@ -264,6 +265,8 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     input: CreateSkillInput,
   ): Promise<ActionResult> {
     const valid = parseParams(createSkillSchema, input);
+    // A Warthog skill's title is its own: an agent asking by title gets Warthog's.
+    if (isReservedSkillTitle(valid.title)) return { ok: false, reason: "reserved_title" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];
     if (
       valid.scope === "chosen" &&
@@ -296,6 +299,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     input: EditSkillInput,
   ): Promise<ActionResult> {
     const valid = parseParams(editSkillSchema, input);
+    if (isReservedSkillTitle(valid.title)) return { ok: false, reason: "reserved_title" };
     if (await isPackagedSkill(db, session.userId, valid.id))
       return { ok: false, reason: "edit_package" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];

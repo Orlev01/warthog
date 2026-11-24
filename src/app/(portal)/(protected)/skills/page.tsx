@@ -109,7 +109,7 @@ async function run(
   try {
     const result = await mutate(buildActions(db), session);
     if (!result.ok) {
-      notice = "problem";
+      notice = (result as { reason?: string }).reason === "reserved_title" ? "reserved_title" : "problem";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {
@@ -184,6 +184,7 @@ type Notice =
   | "switched"
   | "deleted"
   | "problem"
+  | "reserved_title"
   | "storage_full";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
@@ -194,6 +195,7 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   switched: { done: true, text: "Skill updated." },
   deleted: { done: true, text: "Skill deleted." },
   problem: { done: false, text: "We couldn't save that change. Check every field is filled in, then try again." },
+  reserved_title: { done: false, text: "That's the name of one of Warthog's skills. Choose another name, or change Warthog's skill instead." },
   storage_full: {
     done: false,
     text: "Storage limit reached. Remove unused items or reduce their size before saving.",
