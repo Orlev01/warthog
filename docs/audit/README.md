@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Dogfood fixes, 25 November:** main `8771b03` runs as `warthog--r45509554516a1`. Two PRs:
+- **#65:** `create_task` takes "me" or an agent's name; the tax search goes by sender; Outlook search
+  guidance; category counts; a slimmer `log_activity` reply.
+- **#66:** the Outlook calendar list reads a date window and returns a compact view.
+
+No migrations (96). See the [release record](profile-dogfood-release-2026-11-25.md).
+
 **Build your profile link fix, 24 November:** main `d5b5b2a` runs as `warthog--r45368148441a1`. PR
 #64 makes Home's "Build your profile" row always land somewhere: Home's block while the step is to
 do (in every state), and a permanent "Build your whole profile" panel first on Life admin's Add tab
