@@ -7,7 +7,6 @@ import {
   Plus,
   Power,
   PowerOff,
-  Lock,
   Save,
   Check,
   Layers,
@@ -29,6 +28,8 @@ import { loadPackageAction } from "@/app/(portal)/(protected)/skills/library-act
 import { EmptyState } from "@/components/ui/empty";
 import { AgentScope, type SkillAgent } from "./agent-scope";
 import { DeleteSkillControl } from "./delete-skill";
+import { useWhenLine } from "./use-when";
+import { WarthogSkills, type WarthogSkillItem } from "./warthog-skills";
 import { PackageImport, CreatePackage } from "./package-import";
 import { PackageModal, downloadBlob } from "./package-editor";
 import { makeSkillFile, type ParsedPackage } from "@/domain/skills/package";
@@ -55,11 +56,10 @@ import type { StoredPackage, PackageSummary } from "@/server/db/skill-packages";
 // carries the owned skill's id (and, for a toggle, the new on/off state) to the action,
 // which persists member-scoped and reloads the screen.
 //
-// Warthog's own HOUSE SKILL is shown ALWAYS INCLUDED and READ-ONLY — it is not one of
-// the person's skills, so it can never be switched off, scoped out, edited or deleted
-// and offers none of those controls. Its wording comes through the prop from the
-// one-source-of-truth domain constant `HOUSE_SKILL`. Colour comes from the design
-// tokens (globals.css) — never a raw hex.
+// Warthog's own skills (the house skill, the Life admin skills and the defaults) follow the
+// person's library in their own section (./warthog-skills): each one's guidance can be
+// edited, switched off, scoped, removed and restored, and its fixed rules are shown
+// read-only. Colour comes from the design tokens (globals.css) — never a raw hex.
 
 // A control bound to a server action: submits its form to the action the page passes.
 type SkillAction = (formData: FormData) => void | Promise<void>;
@@ -90,20 +90,16 @@ export type SkillsViewPreferences = {
   briefing: string;
 };
 
-// Warthog's own house skill marker — always included for every agent, read-only.
-export type SkillsViewHouseSkill = {
-  title: string;
-  useThisWhen: string;
-  alwaysIncluded: true;
-};
-
 export type SkillsViewProps = {
   initialView?: string;
   skills: ReadonlyArray<SkillsViewSkill>;
   packages?: ReadonlyArray<PackageSummary>;
   agents?: ReadonlyArray<SkillAgent>;
   preferences: SkillsViewPreferences | null;
-  houseSkill: SkillsViewHouseSkill;
+  // Warthog's own skills as they stand for this person.
+  warthogSkills?: ReadonlyArray<WarthogSkillItem>;
+  // The Warthog skill just changed, whose card opens again after the reload.
+  openWarthogSkill?: string;
   // Controls bound to the server actions the page passes. OPTIONAL: the view renders
   // its controls live regardless (they submit to these when supplied); the page always
   // supplies them, so in the running app every control acts — never a dead button.
@@ -115,6 +111,7 @@ export type SkillsViewProps = {
   duplicateSkillAction?: SkillAction;
   toggleSkillAction?: SkillAction;
   deleteSkillAction?: SkillAction;
+  changeWarthogSkillAction?: SkillAction;
 };
 
 // The six communication-style attributes the profile form reads back, each labelled in
@@ -152,14 +149,6 @@ const noAction = async (_formData: FormData): Promise<void> => {};
 
 // A value of only spaces counts as empty (the server trims before it checks too).
 const NOT_BLANK = ".*\\S.*";
-
-// The "use this when" line as a sentence a person reads: the stored line usually starts
-// "when …" (kept lower case so it can follow "Use"), so it reads "Use when …".
-export function useWhenLine(text: string): string {
-  const line = text.trim();
-  if (/^when\b/i.test(line)) return `Use ${line.charAt(0).toLowerCase()}${line.slice(1)}`;
-  return line.charAt(0).toUpperCase() + line.slice(1);
-}
 
 // The content fields a skill carries — title, use-this-when line, full instructions and
 // scope — shared by the create and edit forms (one source of truth for the fields).
@@ -347,37 +336,21 @@ function SkillCard({
   );
 }
 
-// Warthog's own house skill — always included for every agent and read-only: its title
-// and use-this-when are shown, it is marked always-included in words, and it offers
-// NONE of the edit / duplicate / switch / delete controls.
-function HouseSkillCard({ houseSkill }: { houseSkill: SkillsViewHouseSkill }) {
-  return (
-    <Card className="flex flex-col gap-3 bg-surface-muted">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <h3 className="inline-flex items-center gap-2 font-medium text-fg">
-          <Lock aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
-          {houseSkill.title}
-        </h3>
-        <Badge>Always included · Read-only</Badge>
-      </div>
-      <p className="text-sm text-fg-muted">{useWhenLine(houseSkill.useThisWhen)}</p>
-    </Card>
-  );
-}
-
 export function SkillsView({
   initialView,
   skills,
   packages = [],
   agents = [],
   preferences,
-  houseSkill,
+  warthogSkills = [],
+  openWarthogSkill,
   notice,
   saveProfileAction,
   editSkillAction,
   duplicateSkillAction,
   toggleSkillAction,
   deleteSkillAction,
+  changeWarthogSkillAction,
 }: SkillsViewProps) {
   const [query, setQuery] = React.useState("");
   const [kind, setKind] = React.useState("all");
@@ -455,7 +428,8 @@ export function SkillsView({
     setPage(0);
   };
   // The outcome of the last action leads whichever tab is open, straight under the band.
-  const outcome = notice ? <PageNotice tone={notice.tone}>{notice.text}</PageNotice> : null;
+  // `skill` (the Warthog skill just changed) is one-shot too.
+  const outcome = notice ? <PageNotice tone={notice.tone} clearParams={["notice", "skill"]}>{notice.text}</PageNotice> : null;
   return (
     <>
       <ViewPanels
@@ -674,7 +648,12 @@ export function SkillsView({
                       </p>
                     </nav>
                   )}
-                  <HouseSkillCard houseSkill={houseSkill} />
+                  <WarthogSkills
+                    skills={warthogSkills}
+                    agents={agents}
+                    changeAction={changeWarthogSkillAction}
+                    openKey={openWarthogSkill}
+                  />
                 </div>
               </>
             ),

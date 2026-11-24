@@ -12,7 +12,7 @@ import { effectiveSkillAudiences } from "@/server/agents/skill-access";
 // person's skills + preferences server-side — the skill content DECRYPTED under
 // their own DEK, the preferences profile decrypted or null — and shapes them into
 // the props the already-render-tested <SkillsView/> (E13-S07) is mounted over, plus
-// Warthog's always-included house skill (the one-source-of-truth domain constant).
+// Warthog's own skills as they stand for this person.
 // The actions upsert the ONE communication-style profile and create / edit /
 // duplicate / switch / delete the person's skills.
 //
@@ -55,7 +55,6 @@ import {
   getPreferences,
   type PreferencesProfile,
 } from "@/server/db/preferences";
-import { HOUSE_SKILL } from "@/domain/skills/index";
 import { builtinByKey, isReservedSkillTitle, type BuiltinGroup, type EffectiveBuiltin } from "@/domain/skills/builtins";
 import type { SkillGate } from "@/domain/skills/gates";
 import { changeBuiltinSkill, restoreBuiltinSkill, type BuiltinSkillChange } from "@/server/db/builtin-skills";
@@ -71,20 +70,14 @@ export interface SkillsActionsDeps {
   readonly keyWrapper: KeyWrapper;
 }
 
-// What `load` returns — the owner's skills + preferences shaped into the three props
+// What `load` returns — the owner's skills + preferences shaped into the props
 // <SkillsView/> is mounted over: the person's skills (content decrypted), the
-// preferences profile (decrypted or null) and the always-included read-only house
-// skill (its wording from the one-source-of-truth domain constant, not a stored row).
+// preferences profile (decrypted or null) and Warthog's own skills.
 export interface SkillsPageData {
   readonly skills: Skill[];
   readonly preferences: PreferencesProfile | null;
   // Warthog's own skills as they stand for this person (docs/adr/editable-builtin-skills.md).
   readonly warthogSkills: readonly WarthogSkillView[];
-  readonly houseSkill: {
-    readonly title: string;
-    readonly useThisWhen: string;
-    readonly alwaysIncluded: true;
-  };
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
@@ -305,8 +298,8 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   }
 
   // Read ONLY the session person's skills + preferences (member-scoped by
-  // `session.userId`), decrypted under their own DEK, plus the always-included house
-  // skill. Another person's content never appears.
+  // `session.userId`), decrypted under their own DEK, plus Warthog's own skills as they
+  // stand for them. Another person's content never appears.
   async function load(session: Session): Promise<SkillsPageData> {
     const dek = await dataKeyFor(session.userId);
     const skills = await effectiveSkillAudiences(
@@ -318,16 +311,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     );
     const preferences = await getPreferences(db, session.userId, dek);
     const warthogSkills = (await builtinSkillsFor(db, session.userId, dek)).map(warthogSkillView);
-    return {
-      skills,
-      preferences,
-      warthogSkills,
-      houseSkill: {
-        title: HOUSE_SKILL.title,
-        useThisWhen: HOUSE_SKILL.useThisWhen,
-        alwaysIncluded: true,
-      },
-    };
+    return { skills, preferences, warthogSkills };
   }
 
   // Upsert the session person's ONE communication-style profile (one row per person).
