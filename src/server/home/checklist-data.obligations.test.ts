@@ -34,7 +34,8 @@ import { z } from "zod";
 import { loadSetupChecklist } from "./checklist-data";
 import { computeSetupChecklist } from "../../domain/home/checklist";
 import { createUser } from "../db/users";
-import { saveIdentityField } from "../db/identity-fields";
+import { createRecord } from "../db/life-admin-records";
+import { upsertPermissions } from "../db/agent-permissions";
 import { addCard } from "../db/cards";
 import { createConnection } from "../db/connections";
 import { createAgent } from "../db/agents";
@@ -77,27 +78,36 @@ async function seedCard(db: Db, userId: string): Promise<void> {
   });
 }
 
-async function seedConnection(db: Db, userId: string, dek: Uint8Array): Promise<void> {
-  await createConnection(
+async function seedConnection(db: Db, userId: string, dek: Uint8Array): Promise<string> {
+  const account = await createConnection(
     db,
     { userId, connectorId: "google-gmail", accountLabel: "person@gmail.com", credentials: { accessToken: "atok" } },
     dek,
     clock,
   );
+  return account.id;
 }
 
 // Seed every one of the five signals, so a probe or a decoy must leave a FULL account
 // untouched / unleaked.
 async function seedEverything(db: Db, userId: string, dek: Uint8Array): Promise<void> {
-  // A detail beyond the sign-up name (the name alone never marks "Add your details" done).
-  await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
+  // Something an agent found that the person checked ("Build your profile").
+  const record = await createRecord(db, { userId, kind: "item", type: "other.item", fields: { name: "Car" }, status: "active", source: { kind: "agent", agentId: randomUUID() } }, dek);
+  await db.query("UPDATE life_admin_records SET review_state = 'confirmed' WHERE id = $1 AND user_id = $2", [record.id, userId]);
   await seedCard(db, userId);
-  await seedConnection(db, userId, dek);
+  // A service an agent can read ("Connect a service").
+  const accountId = await seedConnection(db, userId, dek);
+  const connectionId = randomUUID();
   await createAgent(
     db,
-    { userId, connectionId: randomUUID(), displayName: "Claude", platform: "claude" },
+    { userId, connectionId, displayName: "Claude", platform: "claude" },
     clock,
   );
+  await upsertPermissions(db, {
+    userId, connectionId, grantedConnectors: [], readTools: true, changeTools: "off", identityAccess: false, highTierAccess: false,
+    cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: false, sharing: false, rulesScope: [], rateLimit: 120,
+    accounts: [{ accountId }],
+  } as Parameters<typeof upsertPermissions>[1]);
   await registerSubscription(
     db,
     { userId, endpoint: "https://push.example/endpoint-1", keys: { p256dh: "p256dh-key", auth: "auth-key" } },
@@ -110,7 +120,7 @@ async function seedEverything(db: Db, userId: string, dek: Uint8Array): Promise<
 function allDone(): ChecklistLike {
   return computeSetupChecklist({
     notificationsEnabled: true,
-    identityAdded: true,
+    profileBuilt: true,
     cardAdded: true,
     serviceConnected: true,
     agentConnected: true,

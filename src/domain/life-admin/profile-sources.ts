@@ -46,3 +46,19 @@ export function sourcesPhrase(sources: readonly SourceKind[]): string {
   if (words.length <= 1) return words[0] ?? "";
   return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
+
+// The services' names as the person knows them, for Home ("Claude can read: Gmail, Google Drive").
+const NAMES: ReadonlyMap<string, string> = new Map([
+  ["google-gmail", "Gmail"],
+  ["microsoft-outlook-mail", "Outlook"],
+  ["google-calendar", "Google Calendar"],
+  ["microsoft-outlook-calendar", "Outlook Calendar"],
+  ["google-drive", "Google Drive"],
+  ["microsoft-onedrive", "OneDrive"],
+]);
+
+/** The names of the readable source services among these accounts, each once, in catalogue order. */
+export function readableSourceNames(accounts: readonly SourceAccount[]): string[] {
+  const readable = new Set(accounts.filter((account) => account.connected && account.reads && PROFILE_SOURCE_CONNECTORS.has(account.connectorId)).map((account) => account.connectorId));
+  return [...NAMES.entries()].filter(([id]) => readable.has(id)).map(([, name]) => name);
+}

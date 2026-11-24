@@ -194,7 +194,8 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
           connected: connected.has(grant.accountId),
           reads: accountPolicy(grant, permissions).readTools,
         })));
-        return { status: "found", title: PROFILE_SKILL.title, text: profileSkillText(person.catalogue, { sources, aboutYou: false, notForMe }) };
+        // About you suggestions need About you read access, so the agent sees what's already there.
+        return { status: "found", title: PROFILE_SKILL.title, text: profileSkillText(person.catalogue, { sources, aboutYou: permissions.identityAccess, notForMe }) };
       }
 
       // A personal skill: taking the OWNING person and the agent from the connection

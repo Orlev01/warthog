@@ -69,7 +69,7 @@ const MIXED: SetupChecklistItem[] = computeSetupChecklist({
 // Everything done.
 const ALL_DONE: SetupChecklistItem[] = computeSetupChecklist({
   notificationsEnabled: true,
-  identityAdded: true,
+  profileBuilt: true,
   cardAdded: true,
   serviceConnected: true,
   agentConnected: true,
@@ -304,4 +304,11 @@ test("renders arbitrary given items (label, link and state), not a hard-coded fi
   const t = tally(custom);
   assert.equal(t.done, 1, `the one done custom item must read complete, got ${t.done}`);
   assert.equal(t.notDone, 1, `the one not-done custom item must read not done, got ${t.notDone}`);
+});
+
+// docs/adr/profile-build.md: "Build your profile" says what waits for the person, in words.
+test("an item's note shows beside it, in muted words", async () => {
+  const { computeSetupChecklist } = await import("@/domain/home/checklist");
+  const markup = renderToStaticMarkup(<SetupChecklist items={computeSetupChecklist({ profileWaiting: 3 })} />);
+  assert.match(markup, />Build your profile<\/span><span class="text-sm text-fg-muted">3 waiting for you to check<\/span>/);
 });

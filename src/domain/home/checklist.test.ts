@@ -22,7 +22,7 @@
 //
 //   type SetupSignals = {        // account state; each flag may be absent
 //     notificationsEnabled?: boolean;   // "Get notified" done
-//     identityAdded?: boolean;          // "Add your details" done
+//     profileBuilt?: boolean;           // "Build your profile" done
 //     cardAdded?: boolean;              // "Add a card" done   (named by the task)
 //     serviceConnected?: boolean;       // "Connect a service" done
 //     agentConnected?: boolean;         // "Connect an agent" done (named by the task)
@@ -35,7 +35,7 @@
 //       newcomer-01: the step that makes Warthog work first, the optional card last):
 //         Connect an agent  -> /agents/connect            (agentConnected)
 //         Connect a service -> /connectors                (serviceConnected)
-//         Add your details  -> /vault                    (identityAdded)
+//         Build your profile -> /home#build-profile    (profileBuilt)
 //         Get notified      -> /settings/notifications   (notificationsEnabled)
 //         Add a card        -> /vault/cards               (cardAdded)
 //       Each item keeps its label and href regardless of signals; only `done`
@@ -44,7 +44,7 @@
 //       marks "Connect an agent" done and cardAdded marks "Add a card" done.
 //
 // The signal names `agentConnected` and `cardAdded` are fixed by the task; the
-// other three (notificationsEnabled, identityAdded, serviceConnected) are fixed
+// other three (notificationsEnabled, profileBuilt, serviceConnected) are fixed
 // here as the cross-task contract for E18-S04 to populate and E18-S06 to render.
 
 import { test } from "node:test";
@@ -64,7 +64,8 @@ type SetupChecklistItem = {
 // they compile against whatever compatible shape the builder picks.
 type SetupSignals = {
   notificationsEnabled?: boolean;
-  identityAdded?: boolean;
+  profileBuilt?: boolean;
+  profileWaiting?: number;
   cardAdded?: boolean;
   serviceConnected?: boolean;
   agentConnected?: boolean;
@@ -75,11 +76,11 @@ type SetupSignals = {
 const EXPECTED: ReadonlyArray<{
   label: string;
   href: string;
-  signal: keyof SetupSignals;
+  signal: Exclude<keyof SetupSignals, "profileWaiting">;
 }> = [
   { label: "Connect an agent", href: "/agents/connect", signal: "agentConnected" },
   { label: "Connect a service", href: "/connectors", signal: "serviceConnected" },
-  { label: "Add your details", href: "/vault", signal: "identityAdded" },
+  { label: "Build your profile", href: "/home#build-profile", signal: "profileBuilt" },
   { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
   { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
 ];
@@ -146,7 +147,7 @@ test("each documented item exists with the right label at its link", () => {
 test("labels and links do not change when signals change (only done varies)", () => {
   const allOn: SetupSignals = {
     notificationsEnabled: true,
-    identityAdded: true,
+    profileBuilt: true,
     cardAdded: true,
     serviceConnected: true,
     agentConnected: true,
@@ -216,7 +217,7 @@ test("cardAdded marks Add a card done (and nothing else)", () => {
 test("a signal present but false leaves its item not done (done tracks the truthy signal)", () => {
   const items = run({
     notificationsEnabled: false,
-    identityAdded: false,
+    profileBuilt: false,
     cardAdded: false,
     serviceConnected: false,
     agentConnected: false,
@@ -229,7 +230,7 @@ test("a signal present but false leaves its item not done (done tracks the truth
 test("with every signal present, all five items are done", () => {
   const items = run({
     notificationsEnabled: true,
-    identityAdded: true,
+    profileBuilt: true,
     cardAdded: true,
     serviceConnected: true,
     agentConnected: true,
@@ -237,4 +238,16 @@ test("with every signal present, all five items are done", () => {
   for (const item of items) {
     assert.equal(item.done, true, `${item.label} (${item.href}) must be done when its signal is present`);
   }
+});
+
+
+// docs/adr/profile-build.md: "Build your profile" replaced "Add your details"; while it isn't done,
+// what an agent found and the person hasn't checked shows beside it.
+test("Build your profile says how many things wait for the person to check, until it's done", () => {
+  const waiting = byHref(run({ profileWaiting: 12 }), "/home#build-profile");
+  assert.equal(waiting.done, false);
+  assert.equal((waiting as SetupChecklistItem & { note?: string }).note, "12 waiting for you to check");
+  assert.equal((byHref(run({ profileWaiting: 12, profileBuilt: true }), "/home#build-profile") as { note?: string }).note, undefined);
+  assert.equal((byHref(run({}), "/home#build-profile") as { note?: string }).note, undefined);
+  assert.ok(!run({}).some((item) => item.label === "Add your details"), "the old step is gone");
 });

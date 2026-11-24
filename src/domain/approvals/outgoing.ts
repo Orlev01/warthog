@@ -91,17 +91,27 @@ function coreDetail(tool: string, params: Record<string, unknown>): OutgoingDeta
       push("Memory", params.content, 300);
       return lines.length ? { kind: "core", lines } : undefined;
     case "save_record": {
+      // About you details it would suggest (docs/adr/profile-build.md), each shown so the person
+      // sees exactly what an approval lets it suggest.
+      const aboutYou = (Array.isArray(params.aboutYou) ? params.aboutYou : [])
+        .map((item) => {
+          const detail = fieldsOf(item);
+          const kind = shortText(detail.kind, 40);
+          const value = shortText(detail.value, 120);
+          return kind && value ? { key: `About you: ${fieldLabel(kind)}`, preview: value } : null;
+        })
+        .filter((line): line is { key: string; preview: string } => line !== null);
       if (Array.isArray(params.records) && params.records.length) {
         const names = params.records.map((r) => shortText(fieldsOf(fieldsOf(r).fields).name, 80)).filter(Boolean);
         if (params.records.length === 1 && names[0]) {
-          return { kind: "core", title: names[0], lines: recordFieldLines(fieldsOf(fieldsOf(params.records[0]).fields)) };
+          return { kind: "core", title: names[0], lines: [...recordFieldLines(fieldsOf(fieldsOf(params.records[0]).fields)), ...aboutYou] };
         }
-        return { kind: "core", count: params.records.length, lines: names.length ? [{ key: "Records", preview: namesText(names) }] : [] };
+        return { kind: "core", count: params.records.length, lines: [...(names.length ? [{ key: "Records", preview: namesText(names) }] : []), ...aboutYou] };
       }
       const fields = fieldsOf(params.fields);
       const title = shortText(fields.name);
-      if (!title && !Object.keys(fields).length) return undefined;
-      return { kind: "core", ...(title ? { title } : {}), lines: recordFieldLines(fields) };
+      if (!title && !Object.keys(fields).length) return aboutYou.length ? { kind: "core", lines: aboutYou } : undefined;
+      return { kind: "core", ...(title ? { title } : {}), lines: [...recordFieldLines(fields), ...aboutYou] };
     }
     case "update_record": {
       // `fields` (the older form) replaces every field; `set` changes some, and null removes one.

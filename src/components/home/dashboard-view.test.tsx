@@ -404,7 +404,7 @@ test("before the first agent, a panel with something in it still shows", () => {
 });
 
 test("once every step is done the set-up panel goes", () => {
-  const all = computeSetupChecklist({ notificationsEnabled: true, identityAdded: true, cardAdded: true, serviceConnected: true, agentConnected: true });
+  const all = computeSetupChecklist({ notificationsEnabled: true, profileBuilt: true, cardAdded: true, serviceConnected: true, agentConnected: true });
   const text = textOf(base({ checklist: all }));
   assert.ok(!/Finish setting up|Get started/.test(text), "no set-up panel once it's all done");
 });

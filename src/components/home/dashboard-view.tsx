@@ -23,6 +23,8 @@ import type { OutcomeGroup } from "@/domain/activity/category";
 import { formatMoney } from "@/domain/approvals/request-sentence";
 import { NOTHING_WAITING } from "@/domain/approvals/inbox-copy";
 import { SetupChecklist } from "./setup-checklist";
+import { ProfileBuildBlock } from "./profile-build-block";
+import type { ProfileBuildView } from "@/domain/home/profile-build";
 import { Status, type DisplayStatus } from "@/components/ui/status";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button-link";
@@ -129,6 +131,8 @@ export type DashboardRecoveryReview = {
 };
 
 export type DashboardViewProps = {
+  // Home's "Build your profile" block while that step isn't done (docs/adr/profile-build.md).
+  profileBuild?: ProfileBuildView | null;
   personName: string;
   checklist: ReadonlyArray<SetupChecklistItem>;
   pendingApprovals: number;
@@ -221,12 +225,14 @@ function SetupPanel({
   checklist,
   completed,
   hasAgents,
+  profileBuild,
   registerPushDevice,
   vapidPublicKey,
 }: {
   checklist: ReadonlyArray<SetupChecklistItem>;
   completed: number;
   hasAgents: boolean;
+  profileBuild?: ProfileBuildView | null;
   registerPushDevice?: RegisterPushDeviceAction;
   vapidPublicKey?: string;
 }) {
@@ -251,6 +257,7 @@ function SetupPanel({
             </ButtonLink>
           </div>
         )}
+        {hasAgents && profileBuild ? <ProfileBuildBlock view={profileBuild} /> : null}
         <SetupChecklist items={checklist} />
         <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
       </div>
@@ -548,6 +555,7 @@ export function DashboardView({
   attention,
   recoveryReview,
   dismissRecoveryReview,
+  profileBuild,
 }: DashboardViewProps) {
   const completed = checklist.filter((item) => item.done).length;
   const setupOpen = checklist.length > 0 && completed < checklist.length;
@@ -571,6 +579,7 @@ export function DashboardView({
           checklist={checklist}
           completed={completed}
           hasAgents={hasAgents}
+          profileBuild={profileBuild}
           registerPushDevice={registerPushDevice}
           vapidPublicKey={vapidPublicKey}
         />

@@ -30,6 +30,15 @@
 //   • This module reads no `process.env` and holds no secret (INV-103): the db and the
 //     KeyWrapper are INJECTED seams, so no ambient env value can surface in the loaded
 //     screen or a stored row.
+//
+// About you suggestions (docs/adr/profile-build.md): `load` also hands the view the
+// details an agent has SUGGESTED and the person hasn't answered yet — decrypted, each
+// named by its suggesting agent (or "An agent"), one About you already holds left out,
+// one that differs from the saved detail of its kind marked. `acceptSuggestion` saves one
+// as an everyday detail (and removes it) in one transaction; `declineSuggestion` keeps
+// only its match key so it is never suggested again. Both are scoped to the session
+// person, and a malformed id is a 4xx before any query. Like the other About you writes,
+// neither records an activity entry.
 
 import { z } from "zod";
 
@@ -37,6 +46,8 @@ import { parseParams } from "@/server/http/validate";
 import { withTransaction, type Db } from "@/server/db/index";
 import { lockCardBilling } from "@/server/vault/card-billing";
 import { getUserById } from "@/server/db/users";
+import { listAgentsForUser } from "@/server/db/agents";
+import { cleanShortText } from "@/domain/content/untrusted";
 import {
   saveIdentityField,
   updateIdentityField,
@@ -48,6 +59,14 @@ import {
   listHighTierFields,
   type HighTierFieldMetadata,
 } from "@/server/db/high-tier-fields";
+import {
+  acceptIdentitySuggestion,
+  declineIdentitySuggestion,
+  listIdentitySuggestions,
+  normaliseDetail,
+  type IdentitySuggestionKind,
+  pruneSavedSuggestions,
+} from "@/server/db/identity-suggestions";
 import { createVaultUnlockActions } from "@/server/vault/unlock";
 import { systemRandom } from "@/server/seams/random";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -61,12 +80,27 @@ export interface IdentityActionsDeps {
   readonly keyWrapper: KeyWrapper;
 }
 
-// What `load` returns — the owner's identity shaped into the two props
-// <IdentityView/> is mounted over: low-tier fields DECRYPTED, high-tier fields as
-// METADATA ONLY (never a value or its ciphertext).
+// A detail an agent suggested, as About you shows it: the value DECRYPTED, where the
+// agent says it found it (the service, the date on it and its sender; never the
+// message id, which the page doesn't need), the suggesting agent's name, and whether
+// the person already has a different detail of this kind.
+export interface IdentitySuggestionItem {
+  readonly id: string;
+  readonly kind: IdentitySuggestionKind;
+  readonly value: string;
+  readonly movingOn: string | null;
+  readonly source: { readonly service: string; readonly date?: string; readonly sender?: string };
+  readonly agentName: string;
+  readonly differsFrom?: boolean;
+}
+
+// What `load` returns — the owner's identity shaped into the props <IdentityView/> is
+// mounted over: low-tier fields DECRYPTED, high-tier fields as METADATA ONLY (never a
+// value or its ciphertext), and the details agents have suggested.
 export interface IdentityViewData {
   readonly lowTierFields: IdentityField[];
   readonly highTierFields: HighTierFieldMetadata[];
+  readonly suggestions: IdentitySuggestionItem[];
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
@@ -116,8 +150,15 @@ export interface SetMovingDateInput {
   readonly movingOn: string | null;
 }
 
+// One of the session person's waiting suggestions, by id (the owner is the session's).
+export interface SuggestionInput {
+  readonly id: string;
+}
+
 export interface IdentityActions {
   load(session: Session): Promise<IdentityViewData>;
+  acceptSuggestion(session: Session, input: SuggestionInput): Promise<ActionResult>;
+  declineSuggestion(session: Session, input: SuggestionInput): Promise<ActionResult>;
   saveLowTierField(session: Session, input: SaveLowTierFieldInput): Promise<ActionResult>;
   updateLowTierField(session: Session, input: UpdateLowTierFieldInput): Promise<ActionResult>;
   saveHighTierField(session: Session, input: SaveHighTierFieldInput): Promise<ActionResult>;
@@ -183,6 +224,34 @@ const setMovingDateSchema = z.object({
   fieldId: fieldIdSchema,
   movingOn: dateSchema.nullable(),
 });
+// A suggestion id is a uuid (identity_suggestions.id), shape-guarded like a field id.
+const suggestionSchema = z.object({ id: z.uuid() });
+
+// How a suggesting agent is named on About you. The name is the agent's own text, so it is
+// cleaned and bounded, and one that would read as the person or as Warthog is quoted (as
+// Life admin's provenance lines do). An agent that isn't the person's (or has gone) is "An
+// agent".
+const UNKNOWN_AGENT = "An agent";
+const AGENT_NAME_MAX = 80;
+function suggestingAgentName(names: ReadonlyMap<string, string>, agentId: string | null): string {
+  const name = agentId ? names.get(agentId) : undefined;
+  if (!name) return UNKNOWN_AGENT;
+  return /^(you|yourself|me|the person|warthog)$/i.test(name.replace(/[^\p{L}\p{N} ]/gu, "").trim())
+    ? `an agent called \u201c${name}\u201d`
+    : name;
+}
+
+// Where the agent says it found a detail, as the page shows it: the agent's text cleaned
+// and bounded (the store's own bounds), and the message id left out.
+const SERVICE_MAX = 60;
+const SENDER_MAX = 200;
+function sourceView(source: { service: string; date?: string; sender?: string }): IdentitySuggestionItem["source"] {
+  return {
+    service: cleanShortText(source.service, SERVICE_MAX),
+    ...(source.date !== undefined ? { date: source.date } : {}),
+    ...(source.sender !== undefined ? { sender: cleanShortText(source.sender, SENDER_MAX) } : {}),
+  };
+}
 
 export function createIdentityActions(deps: IdentityActionsDeps): IdentityActions {
   const { db, keyWrapper } = deps;
@@ -210,7 +279,61 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
     const dek = await dataKeyFor(session.userId);
     const lowTierFields = await listIdentityFields(db, session.userId, dek);
     const highTierFields = await listHighTierFields(db, session.userId);
-    return { lowTierFields, highTierFields };
+    const suggestions = await loadSuggestions(session.userId, dek, lowTierFields);
+    return { lowTierFields, highTierFields, suggestions };
+  }
+
+  // The session person's waiting suggestions, shaped for the page. One whose detail About
+  // you already holds (the same once normalised) is stale and left out; one whose kind
+  // About you holds with a different detail is marked `differsFrom`. The agents' names
+  // come from one member-scoped read of the person's own agents.
+  async function loadSuggestions(
+    userId: string,
+    dek: Uint8Array,
+    fields: readonly IdentityField[],
+  ): Promise<IdentitySuggestionItem[]> {
+    const waiting = await listIdentitySuggestions(db, userId, dek);
+    if (waiting.length === 0) return [];
+    const names = new Map<string, string>();
+    for (const agent of await listAgentsForUser(db, userId)) {
+      names.set(agent.id, cleanShortText(agent.displayName, AGENT_NAME_MAX));
+    }
+    const items: IdentitySuggestionItem[] = [];
+    for (const suggestion of waiting) {
+      const normalised = normaliseDetail(suggestion.kind, suggestion.value);
+      const saved = fields.filter((field) => field.kind === suggestion.kind);
+      if (saved.some((field) => normaliseDetail(suggestion.kind, field.value) === normalised)) continue;
+      items.push({
+        id: suggestion.id,
+        kind: suggestion.kind,
+        value: suggestion.value,
+        movingOn: suggestion.movingOn,
+        source: sourceView(suggestion.source),
+        agentName: suggestingAgentName(names, suggestion.agentId),
+        ...(saved.length > 0 ? { differsFrom: true } : {}),
+      });
+    }
+    return items;
+  }
+
+  // Add one of the session person's waiting suggestions to About you: validate the id at
+  // the boundary (a 4xx before any query), then — in one transaction — save it as an
+  // everyday detail and remove the suggestion. A suggestion that isn't theirs (or is no
+  // longer waiting) matches nothing and saves nothing ({ ok: false, reason: "not_found" }).
+  async function acceptSuggestion(session: Session, input: SuggestionInput): Promise<ActionResult> {
+    const valid = parseParams(suggestionSchema, input);
+    const dek = await dataKeyFor(session.userId);
+    const saved = await withTransaction(db, (tx) => acceptIdentitySuggestion(tx, session.userId, valid.id, dek));
+    return saved ? { ok: true } : { ok: false, reason: "not_found" };
+  }
+
+  // Decline one of the session person's waiting suggestions ("Not mine"): validate the id
+  // at the boundary, then keep only its match key so it is never suggested again. One that
+  // isn't theirs (or is no longer waiting) changes nothing.
+  async function declineSuggestion(session: Session, input: SuggestionInput): Promise<ActionResult> {
+    const valid = parseParams(suggestionSchema, input);
+    const declined = await declineIdentitySuggestion(db, session.userId, valid.id);
+    return declined ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
   // Store a NEW low-tier field for the session person (value DEK-encrypted by the
@@ -227,6 +350,8 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
       { userId: session.userId, kind: valid.kind, value: valid.value, movingOn: valid.movingOn ?? null },
       dek,
     );
+    // An agent's waiting suggestion of the same detail is answered (docs/adr/profile-build.md).
+    await pruneSavedSuggestions(db, session.userId, dek);
     return { ok: true };
   }
 
@@ -245,6 +370,7 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
       { id: valid.fieldId, userId: session.userId, value: valid.value, movingOn: valid.movingOn },
       dek,
     );
+    if (updated) await pruneSavedSuggestions(db, session.userId, dek);
     return updated ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
@@ -334,6 +460,8 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
 
   return {
     load,
+    acceptSuggestion,
+    declineSuggestion,
     saveLowTierField,
     updateLowTierField,
     saveHighTierField,

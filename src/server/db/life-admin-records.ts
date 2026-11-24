@@ -642,3 +642,27 @@ export async function markReminderSent(
     [input.recordId, input.offset, input.userId, input.dueDate],
   );
 }
+
+
+// How the person's records stand with them, for Home's "Build your profile" step
+// (docs/adr/profile-build.md): confirmed ones, confirmed ones an agent found, and ones waiting for
+// the person (an agent's suggestion, or an agent's change to a checked record). Counts only:
+// nothing is decrypted. Member-scoped by `userId`.
+export interface RecordReviewCounts {
+  readonly confirmed: number;
+  readonly agentConfirmed: number;
+  readonly waiting: number;
+}
+
+export async function countRecordReview(db: Db, userId: string): Promise<RecordReviewCounts> {
+  const result = await db.query(
+    `SELECT count(*) FILTER (WHERE review_state = 'confirmed') AS confirmed,
+            count(*) FILTER (WHERE review_state = 'confirmed' AND source_kind = 'agent') AS agent_confirmed,
+            count(*) FILTER (WHERE review_state = 'suggested' OR (review_state = 'confirmed' AND pending IS NOT NULL)) AS waiting
+       FROM life_admin_records
+      WHERE user_id = $1 AND review_state <> 'dismissed'`,
+    [userId],
+  );
+  const row = result.rows[0] ?? {};
+  return { confirmed: Number(row.confirmed ?? 0), agentConfirmed: Number(row.agent_confirmed ?? 0), waiting: Number(row.waiting ?? 0) };
+}

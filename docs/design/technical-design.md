@@ -141,6 +141,12 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
   own categories (`life_admin_categories`, random ids, encrypted definitions) and each item's
   journal (`life_admin_journal`, append-only, encrypted text; plain kind/actor/time) follow the same
   rule ([life-admin profile](../adr/life-admin-profile.md), [journal](../adr/life-admin-journal.md)).
+  About you suggestions (`identity_suggestions`): a low-tier detail an agent suggests waits in its
+  own table, its value and provenance encrypted, its kind, state, suggesting agent id and an opaque
+  match key (an HMAC of kind + normalised value under the same derived key) in plaintext. It is not
+  an identity field, so no agent sees it until the person accepts it (it is saved as an identity
+  field and the suggestion deleted); a declined one keeps only its match key, so it is not
+  suggested again. Not part of the data export ([profile build](../adr/profile-build.md)).
 - **Account deletion:** clear the live wrapped DEK and revoke access before confirmation;
   a job purges live rows within 24 hours. The purge also deletes, by the person's address, the
   rows keyed by an email address outside the account's cascade: sign-in codes, code attempts

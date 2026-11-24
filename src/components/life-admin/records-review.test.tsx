@@ -257,7 +257,7 @@ test("without the review actions, Confirm and Accept change are disabled and say
 
 // ─── Fill in the rest ────────────────────────────────────────────────────────────────
 
-test("Fill in the rest offers at most six empty categories by priority, each with Not for me only, a prompt to copy, and says Warthog doesn't read email itself", () => {
+test("Fill in the rest offers at most six empty categories by priority, each with Not for me only, a prompt to copy that works across services, and says Warthog doesn't read anything itself", () => {
   const panel = panelOf(render(), "Fill in the rest");
   const words = text(panel);
   const offered = [...panel.matchAll(/<p class="text-sm font-medium text-fg">([^<]+)<\/p>/g)].map((m) => m[1]!.replace(/&amp;/g, "&")).filter((label) => label !== "Ask your agent");
@@ -268,14 +268,18 @@ test("Fill in the rest offers at most six empty categories by priority, each wit
     [[["category", "home"], ["setting", "not_for_me"]], ["Not for me : Home"]],
   ], "no Show: an empty category never has a panel, so showing one would do nothing");
   assert.doesNotMatch(words, /\bShow\b/);
-  assert.match(words, /Use Warthog to look through my email for my super fund and investments, lease or mortgage, home insurance and rates, electricity, gas, internet and phone accounts, passport, licence and visa expiry dates, flights, hotels and trips and tax, fines and government payments, and save what you find to my Life admin for me to check\./);
+  assert.match(words, /Please look through what you can read in Warthog for my super fund and investments, lease or mortgage, home insurance and rates, electricity, gas, internet and phone accounts, passport, licence and visa expiry dates, flights, hotels and trips and tax, fines and government payments, and save what you find to my Life admin for me to check\. Read Warthog's "Life admin records" skill first\./);
   assert.match(words, /Copy prompt for your agent/);
-  assert.match(words, /Warthog doesn't read your email itself\. Your agent does, through Warthog, and only what you allow it to\./);
+  assert.match(words, /Your agent can find these in your email, calendar and files\./);
+  assert.match(words, /Warthog doesn't read your things itself\. Your agent does, through Warthog, and only what you allow it to\./);
+  assert.doesNotMatch(words, /Build your profile/, "with records on file, no link to the whole build");
   assert.equal(
     fillInPrompt(CATEGORIES.filter((category) => ["vehicles", "health"].includes(category.id))),
-    "Use Warthog to look through my email for my rego and car insurance and health insurance and appointments, and save what you find to my Life admin for me to check.",
+    "Please look through what you can read in Warthog for my rego and car insurance and health insurance and appointments, and save what you find to my Life admin for me to check. Read Warthog's \"Life admin records\" skill first.",
   );
-  assert.match(text(panelOf(render({ records: [] }), "Fill in your life admin")), /Vehicles/, "with nothing yet, the first six are offered");
+  const empty = panelOf(render({ records: [] }), "Fill in your life admin");
+  assert.match(text(empty), /Vehicles/, "with nothing yet, the first six are offered");
+  assert.match(empty, /href="\/home#build-profile"[^>]*>Build your profile/, "and a way to have the agent build the whole profile");
 });
 
 test("an empty category the person once chose to show is offered too, as production's every-category-shown accounts have", () => {
@@ -488,4 +492,20 @@ test("Belongs to offers only the anchors this kind may belong to, by the catalog
 test("Cancel on a kind's form stays on the Add tab", () => {
   const markup = render({ addType: "vehicles.registration" });
   assert.match(markup, /href="\/life-admin\?tab=add#new-record"[^>]*>Cancel/);
+});
+
+// docs/adr/profile-build.md: a profile build can leave many suggestions; across categories they're
+// grouped, each with its count and its own "Confirm all".
+test("suggestions across categories are grouped, each with its count and its own Confirm all", () => {
+  const VAN_REGO: LifeAdminRecordView = { ...REGO, id: "00000000-0000-4000-8000-0000000000aa", fields: { plate: "VAN123" } };
+  const markup = render({ records: [REGO, VAN_REGO, CARD, HEALTH, BIKE] });
+  const found = markup.slice(markup.indexOf('id="to-check-suggestions-heading"'));
+  assert.match(text(found), /Vehicles · 2/);
+  assert.match(text(found), /Banking and credit · 1/);
+  assert.match(text(found), /Confirm all 2 in Vehicles/);
+  assert.doesNotMatch(text(found), /Confirm all 1 in/, "no Confirm all for a single suggestion");
+  assert.match(found, /<details open=""/, "the first group is open");
+  assert.match(text(markup), /Confirm all 3/, "the panel's Confirm all stays");
+  const single = render({ records: [REGO, BIKE] });
+  assert.doesNotMatch(text(single), /Vehicles · 1/, "one category: no grouping");
 });

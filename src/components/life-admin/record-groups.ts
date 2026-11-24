@@ -359,10 +359,14 @@ export function fillInChoices(catalogue: Catalogue, states: readonly CategorySta
   return { available, notForMe };
 }
 
-/** The prompt the person can paste into their agent, naming what to look for. */
+/**
+ * The top-up prompt the person can paste into their agent, naming what to look for: through
+ * whatever they've let it read in Warthog, not only email (docs/adr/profile-build.md). Home's
+ * "Build your profile" is the whole job; this fills the gaps.
+ */
 export function fillInPrompt(categories: readonly CategoryDef[]): string {
   const words = categories.map((category) => category.promptWords).filter(Boolean);
-  return `Use Warthog to look through my email for my ${joinWords(words)}, and save what you find to my Life admin for me to check.`;
+  return `Please look through what you can read in Warthog for my ${joinWords(words)}, and save what you find to my Life admin for me to check. Read Warthog's "Life admin records" skill first.`;
 }
 
 // ─── Upcoming ────────────────────────────────────────────────────────────────────────

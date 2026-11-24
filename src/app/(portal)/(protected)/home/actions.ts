@@ -26,7 +26,7 @@ import { BUILT_IN, type Catalogue } from "@/domain/life-admin/catalogue";
 // callers inject neither) the reads cannot run, so the loader falls back to the
 // first-run empty states exactly as the minimal loader did.
 
-import { computeSetupChecklist } from "@/domain/home/checklist";
+import { BUILD_PROFILE_ANCHOR, computeSetupChecklist } from "@/domain/home/checklist";
 import { agentLabel, entryTitle } from "@/domain/activity/describe";
 import { outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import { dayOf, timeOfDay } from "@/domain/display-time";
@@ -41,6 +41,7 @@ import type {
 import { getUserById } from "@/server/db/users";
 import { listIdentityFields } from "@/server/db/identity-fields";
 import { loadSetupChecklist } from "@/server/home/checklist-data";
+import { loadProfileBuild } from "@/server/home/profile-build";
 import { loadHomeMetrics, type HomeAgentSpend } from "@/server/home/page-data";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type { LifeAdminRecord } from "@/server/db/life-admin-records";
@@ -226,6 +227,9 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     // seams and the SESSION's user id — never a client value.
     const reads = { db, keyWrapper, clock };
     const checklist = await loadSetupChecklist(reads, session.userId);
+    // "Build your profile" (docs/adr/profile-build.md): the block its row leads to, while not done.
+    const profileStep = checklist.find((item) => item.href.endsWith(`#${BUILD_PROFILE_ANCHOR}`));
+    const profileBuild = await loadProfileBuild(db, session.userId, profileStep?.done ?? true);
     const metrics = await loadHomeMetrics(reads, session.userId);
 
     // The person's OWN agents' names, keyed by agent id and connection id, with the
@@ -245,6 +249,7 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     return {
       personName,
       checklist,
+      ...(profileBuild ? { profileBuild } : {}),
       pendingApprovals: metrics.pendingApprovals,
       // The intent record written just before a change runs is always followed by its own
       // result entry, so Home shows the result once rather than "Started: …" beside it.

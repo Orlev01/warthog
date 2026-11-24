@@ -106,7 +106,7 @@ const keyWrapper: KeyWrapper = localAesKeyWrapper(randomBytes(32));
 const SET_UP_TITLES = [
   "Connect an agent",
   "Connect a service",
-  "Add your details",
+  "Build your profile",
   "Get notified",
   "Add a card",
 ] as const;
@@ -399,15 +399,17 @@ test("the set-up checklist reflects the person's real progress: completed steps 
   try {
     const { session, userId, dek } = await seedSignedIn(db, "keenkoala@people.example");
 
-    // Complete two set-up steps: save an everyday detail ("Add your details"; the name
-    // sign-up saves doesn't count on its own) and connect an agent ("Connect an agent").
-    // The other three remain not done.
+    // Complete two set-up steps: confirm something an agent found ("Build your profile";
+    // docs/adr/profile-build.md) and connect an agent ("Connect an agent"). The other three
+    // remain not done; a detail the person typed doesn't complete the profile on its own.
     await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
+    const found = await createRecord(db, { userId, kind: "item", type: "vehicles.registration", fields: { plate: "BX12AB" }, status: "active", source: { kind: "agent", agentId: randomUUID() } }, dek);
+    await db.query("UPDATE life_admin_records SET review_state = 'confirmed' WHERE id = $1 AND user_id = $2", [found.id, userId]);
     await connectAgent(db, userId, "Claude");
 
     const view = await makeActions(db).load(session);
 
-    assert.equal(checklistDone(view, "Add your details"), true, "a saved everyday detail marks 'Add your details' done");
+    assert.equal(checklistDone(view, "Build your profile"), true, "something an agent found, checked by the person, marks 'Build your profile' done");
     assert.equal(checklistDone(view, "Connect an agent"), true, "a connected agent marks 'Connect an agent' done");
     assert.equal(checklistDone(view, "Get notified"), false, "an untouched step stays not done");
     assert.equal(checklistDone(view, "Add a card"), false, "an untouched step stays not done");

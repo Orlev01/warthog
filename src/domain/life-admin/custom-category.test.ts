@@ -88,24 +88,28 @@ test("ids are random, never words; similar labels are recognised", () => {
 });
 
 // Building a profile (docs/adr/profile-build.md): an agent reading everything can't turn sensitive
-// parts of someone's life into a category.
-test("a category about health, religion, politics, a union, sexuality or criminal matters is refused", () => {
-  for (const [label, why] of [
-    ["IVF clinic", "Emails from the clinic about cycles"],
-    ["Church", "Weekly emails from the parish about giving"],
-    ["Mosque donations", "Receipts from the mosque"],
-    ["Political party", "Membership renewals from the party"],
-    ["Trade union", "Union dues and meeting notices"],
-    ["LGBTQ group", "Newsletters and events"],
-    ["Parole", "Letters about reporting dates"],
+// parts of someone's life into a category. Checked on an agent's new suggestion only (save_record):
+// a category the person already kept is restored from their export as it was.
+test("a suggested category about health, religion, politics, a union, sexuality or criminal matters is refused", async () => {
+  const { checkSensitiveCategory } = await import("./custom-category");
+  const { z } = await import("zod");
+  const sensitive = z.any().superRefine((draft, ctx) => checkSensitiveCategory(draft, ctx));
+  const refused = (draft: unknown) => !sensitive.safeParse(draft).success;
+  for (const label of ["IVF clinic", "Church", "Mosque donations", "Political party", "Trade union", "LGBTQ group", "Parole"]) {
+    assert.ok(refused({ ...rowing, label }), label);
+    const result = sensitive.safeParse({ ...rowing, label });
+    assert.ok(!JSON.stringify(result.error?.issues).includes(label), "a refusal never echoes the label");
+  }
+  assert.ok(refused({ ...rowing, label: "Community", kinds: [{ ...rowing.kinds[0], label: "Church tithes" }] }), "a kind's label counts too");
+  for (const draft of [
+    { ...rowing, label: "Kids' school", why: "Fees from St Mary's Parish School" },
+    { ...rowing, label: "Rugby Union club" },
+    { ...rowing, label: "Credit union" },
+    { ...rowing, label: "Tennis court bookings" },
+    rowing,
   ]) {
-    const result = parse({ ...rowing, label, why });
-    assert.equal(result.success, false, label);
-    assert.ok(messages(result).some((message) => message.includes("Warthog doesn't keep a category about")), label);
-    assert.ok(messages(result).every((message) => !message.includes(label)), "a refusal never echoes the label");
+    assert.ok(!refused(draft), draft.label);
   }
-  assert.equal(parse({ ...rowing, why: "Sensitive: emails from my church choir about rowing" }).success, false, "the reason counts too");
-  for (const label of ["Credit union", "Tennis court bookings", "Birthday parties", "Rowing club"]) {
-    assert.equal(parse({ ...rowing, label, why: "12 emails about it" }).success, true, label);
-  }
+  // The person's own kept categories still restore from an export.
+  assert.equal(parse({ ...rowing, label: "Church" }).success, true, "newCategorySchema itself doesn't refuse it");
 });

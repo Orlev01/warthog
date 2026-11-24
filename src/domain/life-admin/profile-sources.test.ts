@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { PROFILE_SOURCE_CONNECTORS, readableSources, sourcesPhrase } from "./profile-sources";
+import { PROFILE_SOURCE_CONNECTORS, readableSourceNames, readableSources, sourcesPhrase } from "./profile-sources";
 
 test("mail, calendar and files come from Warthog's own connectors", () => {
   assert.deepEqual(Object.fromEntries(PROFILE_SOURCE_CONNECTORS), {
@@ -55,4 +55,14 @@ test("the sources in plain words", () => {
   assert.equal(sourcesPhrase(["mail", "calendar", "files"]), "email, calendar and files");
   assert.equal(sourcesPhrase(["files"]), "files");
   assert.equal(sourcesPhrase([]), "");
+});
+
+test("the readable services by the names the person knows them", () => {
+  assert.deepEqual(readableSourceNames([
+    { connectorId: "google-drive", connected: true, reads: true },
+    { connectorId: "google-gmail", connected: true, reads: true },
+    { connectorId: "google-gmail", connected: true, reads: true },
+    { connectorId: "google-calendar", connected: false, reads: true },
+    { connectorId: "notion", connected: true, reads: true },
+  ]), ["Gmail", "Google Drive"]);
 });

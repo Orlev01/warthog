@@ -298,6 +298,48 @@ function AllForm({ action, ids, pendingLabel, children }: { action: LifeAdminAct
   );
 }
 
+// A profile build (docs/adr/profile-build.md) can leave dozens of suggestions: across categories
+// they're grouped, each with its count and "Confirm all in <category>", the first one open (all of
+// them while there are only a few).
+const GROUPS_OPEN_UP_TO = 8;
+
+function byCategory(items: readonly Typed[], ctx: Context): { id: string; label: string; items: Typed[] }[] {
+  const groups = new Map<string, { id: string; label: string; items: Typed[] }>();
+  for (const item of items) {
+    const id = item.type.category;
+    const group = groups.get(id) ?? { id, label: ctx.catalogue.category(id)?.label ?? "Other", items: [] };
+    group.items.push(item);
+    groups.set(id, group);
+  }
+  return [...groups.values()];
+}
+
+function CategorySuggestions({ group, open, ctx }: { group: { id: string; label: string; items: Typed[] }; open: boolean; ctx: Context }) {
+  const { actions } = ctx;
+  return (
+    <li className="min-w-0 list-none">
+      <details open={open} className="group/category min-w-0">
+        <summary className={summaryClass("ghost", "sm")}>
+          {group.label} · {group.items.length}
+          <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/category:rotate-180" />
+        </summary>
+        {group.items.length >= 2 && actions.confirmAllAction ? (
+          <div className="mt-2 flex">
+            <AllForm action={actions.confirmAllAction} ids={group.items.map((item) => item.record.id)} pendingLabel="Confirming…">
+              Confirm all {group.items.length} in {group.label}
+            </AllForm>
+          </div>
+        ) : null}
+        <ul role="list" className="flex min-w-0 flex-col">
+          {group.items.map((item) => (
+            <SuggestionItem key={item.record.id} item={item} ctx={ctx} />
+          ))}
+        </ul>
+      </details>
+    </li>
+  );
+}
+
 function ToCheckPanel({
   suggestions,
   changes,
@@ -338,9 +380,11 @@ function ToCheckPanel({
       ) : null}
       {suggestions.length ? (
         <ListGroup id="to-check-suggestions" level={3} title="Found by your agents" count={suggestions.length}>
-          {suggestions.map((item) => (
-            <SuggestionItem key={item.record.id} item={item} ctx={ctx} />
-          ))}
+          {byCategory(suggestions, ctx).length > 1
+            ? byCategory(suggestions, ctx).map((group, index) => (
+                <CategorySuggestions key={group.id} group={group} open={index === 0 || suggestions.length <= GROUPS_OPEN_UP_TO} ctx={ctx} />
+              ))
+            : suggestions.map((item) => <SuggestionItem key={item.record.id} item={item} ctx={ctx} />)}
         </ListGroup>
       ) : null}
       {changes.length ? (
@@ -596,9 +640,9 @@ function FillInPanel({
   return (
     <WorkspacePanel
       title={hasRecords ? "Fill in the rest" : "Fill in your life admin"}
-      description="Your agent can find these in your email. What it saves waits under To check until you confirm it. Say a category is not for you, and it won't be suggested again."
+      description="Your agent can find these in your email, calendar and files. What it saves waits under To check until you confirm it. Say a category is not for you, and it won't be suggested again."
       icon={MailSearch}
-      footer="Warthog doesn't read your email itself. Your agent does, through Warthog, and only what you allow it to."
+      footer="Warthog doesn't read your things itself. Your agent does, through Warthog, and only what you allow it to."
     >
       <div className="flex min-w-0 flex-col gap-4">
         {available.length ? (
@@ -635,6 +679,14 @@ function FillInPanel({
             </div>
             <CopyButton value={prompt} label="prompt for your agent" />
           </div>
+        ) : null}
+        {!hasRecords ? (
+          <p className="text-sm text-fg">
+            Or let your agent build your whole profile at once, from Home.{" "}
+            <a href="/home#build-profile" className="font-medium text-fg underline underline-offset-2">
+              Build your profile
+            </a>
+          </p>
         ) : null}
         {notForMe.length ? (
           <details className="group/hidden min-w-0">
