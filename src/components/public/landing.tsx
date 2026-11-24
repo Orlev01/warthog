@@ -15,18 +15,17 @@ import {
   Download,
   Fingerprint,
   HeartPulse,
+  Landmark,
   Link2,
   ListChecks,
   ListTodo,
   LockKeyhole,
   MailCheck,
   MailSearch,
-  Plane,
   Receipt,
   Repeat,
   ShieldCheck,
   SlidersHorizontal,
-  Truck,
   Tv,
   Users,
   Wallet,
@@ -129,22 +128,17 @@ const LIFE_ADMIN = [
   {
     icon: MailSearch,
     title: "Filled in from your email",
-    body: "Your own agent searches your email through Warthog and saves what it finds. It waits for you to confirm it, and Warthog won’t keep tax file numbers, passwords, card or account numbers, or medical details.",
+    body: "Your own agent searches your email through Warthog and saves what it finds. It waits for you to confirm it, and Warthog won’t keep tax file numbers, passwords, card or bank account numbers, or medical details.",
   },
   {
     icon: CalendarClock,
     title: "What’s active, first",
-    body: "Vehicles, home, health, travel, money and more, with what needs you soonest at the top. Reminders come before renewals and expiry dates, and bookings move to their history once they’re over.",
+    body: "Records holds what you have now: vehicles, home, health, money and more, with each account’s name, number and email. Upcoming holds what needs you or is booked. History holds what’s finished. Reminders come before renewals and expiry dates.",
   },
   {
     icon: Repeat,
     title: "Any agent can carry it on",
     body: "Each item keeps a short log of decisions and next steps, so another agent, from any provider, can pick up where the last one stopped.",
-  },
-  {
-    icon: Truck,
-    title: "Moving house, handled",
-    body: "Add your new address with a moving date, and Warthog lists the places that still have the old one. Tick them off, or hand one to an agent.",
   },
 ] as const;
 
@@ -356,7 +350,7 @@ function WorkspacePreview() {
 // no controls and no links.
 const EXAMPLE_RECORDS = [
   { icon: Car, name: "Car registration", detail: "Vehicles · Expires in 9 days", status: "Due soon" },
-  { icon: Plane, name: "Flight to Melbourne", detail: "Trips and travel · Fri 12 Dec, 7:30 am", status: "Upcoming" },
+  { icon: Landmark, name: "Super fund", detail: "Super and investing · Member number and email on file", status: "Current" },
   { icon: HeartPulse, name: "Health insurance", detail: "Health · Renews 1 Mar", status: "Current" },
   { icon: Tv, name: "Streaming subscription", detail: "Found in your email by your agent", status: "To check" },
 ] as const;

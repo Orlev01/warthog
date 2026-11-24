@@ -433,14 +433,20 @@ features:
     claim, application or dispute, open until resolved). Any kind can be a thing other records
     belong to (a vehicle with its number plate, registration and insurance; a home; a trip with its
     flights and stays; a pet; or a thing of the person's own category), and a record can be for
-    someone else (a first name or relationship only). Reminders by notification before due dates
+    someone else (a first name or relationship only). An account, policy or membership keeps what
+    identifies it to the person: the name it's in, its account, member or policy number (a bank
+    account or card only by its last 4 digits) and the email address it's registered to (amended
+    23 November 2026). Life admin has four tabs (amended 23 November 2026): Records (what is
+    ongoing: accounts, policies, memberships, documents, things and matters in progress, active
+    first), Upcoming (what needs the person or is booked), History (everything finished, kept
+    apart) and Tasks. Reminders by notification before due dates
     (default 14 days and 1 day before, or the kind's own schedule, adjustable per record; none for
     anything finished, paused or long past due). Agents add and update records through Warthog: a
     record an agent saves is a suggestion, labelled with the agent and where it says it found it,
     until the person confirms it; an agent's change to a record the person confirmed waits for the
     person to accept it; saving the same thing again updates it rather than adding a copy, and one
     the person marks "not mine" is not added again. Warthog refuses to keep tax file numbers,
-    passwords, PINs, security answers, card numbers, BSB and account numbers, payment details taken
+    passwords, PINs, security answers, card numbers, BSB and bank account numbers, payment details taken
     from email, medical details and government identity numbers in records. A number plate in a
     vehicle record is an everyday detail (it is shown on the vehicle); the vault's high-tier car
     registration field stays available for anyone who prefers to keep it there.
@@ -453,8 +459,9 @@ features:
     it over, and Warthog records the hand-over. Any agent the person allows, from any provider, gets
     the live items with work still open as one-line hand-over summaries and reads an item's journal
     before carrying it on. Finished items keep their whole journal and stay one step away for the
-    person and agents, including a Bookings view of every booking, live and past; only deleting an
-    item, or marking it "not mine", removes its journal.
+    person and agents, in Life admin's History (amended 23 November 2026; it replaced a Bookings
+    view, whose live bookings are under Upcoming); only deleting an item, or marking it "not mine",
+    removes its journal.
   - >-
     Filling in life admin from email — Warthog never reads the person's email itself and never runs
     a model to do it. When the person asks, or agrees when their agent offers, their own agent reads
@@ -474,9 +481,9 @@ features:
     Moving-house helper — when the person adds a new address with a moving date, agent context
     returns both the current address and the upcoming one with its date until the moving date, when
     the upcoming address automatically becomes the current one; household members sharing the
-    address see the same; and Warthog creates a moving checklist of places that hold the old address
-    (connected services, the subscriptions and renewal records on file, and the person's own
-    additions), each of which can be ticked off or handed to an agent as a task.
+    address see the same. (Amended 23 November 2026, founder: the moving checklist of places that
+    hold the old address is removed — "an arbitrary thing to anticipate and represent"; the person
+    updates what they need themselves, and can hand any of it to an agent as a task.)
 
   # --- Household sharing ---
   - >-
@@ -558,8 +565,8 @@ design_ux:
     an "ask me first" rule, requests a card and a high-tier detail; the person approves each on their
     phone from a push notification. (6) Review everything in the activity feed, dispute an entry and
     undo a reversible action. (7) Write a skill and see two agents use it; see a memory one agent
-    saved used by another. (8) Change address with a moving date and work the moving checklist with
-    an agent. (9) Invite a household member and set limits. (10) Disconnect an agent in one click and
+    saved used by another. (8) Change address with a moving date and hand the move's jobs to an
+    agent as tasks. (9) Invite a household member and set limits. (10) Disconnect an agent in one click and
     watch its next request fail. (11) Export data; delete account.
   copy: >-
     Plain Australian English, warm and direct, in the person's voice ("Your agents", "Ask me first").
@@ -594,8 +601,8 @@ design_ux:
     email to my manager" and a $150 per-purchase limit. SKILLS — write a "How I like updates" style
     profile and a "Travel booking" skill scoped to Claude and ChatGPT. Then, in Claude, the person
     says they are moving. VAULT — the person changes the postal address with a moving date of
-    1 December; Warthog shows the MOVING CHECKLIST in LIFE ADMIN, and they hand "Update address with
-    my energy provider" and "Book removalists" to Claude as tasks. Claude fetches its context (new
+    1 December; in LIFE ADMIN TASKS they hand "Update address with my energy provider" and "Book
+    removalists" to Claude as tasks. Claude fetches its context (new
     address, skills, rules, tasks), saves a memory ("Moving on 1 Dec to the new address"), and asks to
     add a calendar event for moving day — the person's phone buzzes: the APPROVAL screen reads
     "Claude wants to add 'Moving day' to your calendar on 1 Dec", with its reason; Approve; Warthog
@@ -826,7 +833,7 @@ out_of_scope:
   - Connectors that need a paid integration platform, a paid provider plan, or a lengthy provider security review before launch — these are parked and added as reviews complete.
   - Warthog running or paying for any AI model of its own.
   - Warthog reading or scanning a person's email or files itself to fill in life admin; the person's own agent does it when they ask (amended 2026-11-23).
-  - Updating an address directly inside third-party services that offer no way to do it through a connector; the moving checklist hands those to the person or an agent.
+  - Updating an address directly inside third-party services that offer no way to do it through a connector; the person does those, or hands them to an agent as a task.
 
 requires:
   target: web

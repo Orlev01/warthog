@@ -23,7 +23,7 @@ import { EmptyState } from "@/components/ui/empty";
 import { Field, SelectField, TextareaField } from "@/components/ui/field";
 import { JOURNAL_TEXT_MAX } from "@/domain/life-admin/journal-text";
 import { shortDate } from "@/domain/life-admin/journal";
-import { listStatusOf, phaseOfView, recordsHref } from "./record-groups";
+import { lifeAdminHrefFor, phaseOfView } from "./record-groups";
 import { PhaseBadge } from "./phase-badge";
 import { DisabledControl, HINT_CLASS, summaryClass } from "./record-forms";
 import { RecordFacts, kindLine, recordProvenance } from "./record-row";
@@ -135,7 +135,7 @@ export function LifeAdminItemView({
           icon={SearchX}
           heading="This item isn't in your Life admin."
           description="It may have been deleted or marked as not yours. Everything you keep is under Records."
-          action={<ButtonLink href="/life-admin?view=life&tab=records" variant="primary">Back to Life admin</ButtonLink>}
+          action={<ButtonLink href="/life-admin" variant="primary">Back to Life admin</ButtonLink>}
         />
       </>
     );
@@ -143,9 +143,8 @@ export function LifeAdminItemView({
   const { record, type, zone } = data;
   const phase = phaseOfView(record);
   const currentYear = data.today.slice(0, 4);
-  // Back to its row in Records: one that isn't active needs its status shown too.
-  const status = listStatusOf(record);
-  const backHref = `${recordsHref({ categories: [], statuses: status === "active" ? ["active"] : ["active", status] })}#record-${encodeURIComponent(record.id)}`;
+  // Back to it on the tab it lives on: its row on Records or in History, or Upcoming for a booking.
+  const backHref = lifeAdminHrefFor(record, data.type);
   const historyCount = data.history.reduce((sum, day) => sum + day.groups.reduce((n, group) => n + group.lines.length, 0), 0);
   return (
     <>

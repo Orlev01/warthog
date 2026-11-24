@@ -1,12 +1,11 @@
 // The Life Admin page's owner-scoped list-all read (task E14-S10; brief "Life
-// admin" + "Tasks and hand-offs" + "Moving-house helper"; design §4.1). The Life
-// Admin page needs ONE read that sees EVERY life-admin record, moving-checklist
-// item and task the person holds, regardless of state — distinct from the
-// agent-facing reads and never returning another person's data.
+// admin" + "Tasks and hand-offs"; design §4.1). The Life Admin page needs ONE read
+// that sees EVERY life-admin record and task the person holds, regardless of
+// state — distinct from the agent-facing reads and never returning another
+// person's data.
 //
 // This read COMPOSES the already-built, tested stores — `listRecordsForUser`
-// (life-admin records, fields DEK-decrypted), the moving-checklist `listForUser`,
-// and `listTasksForUser` — plus a member-scoped look-up of which of the person's
+// (life-admin records, fields DEK-decrypted) and `listTasksForUser` — plus a member-scoped look-up of which of the person's
 // receipt records carry an attached file (`listRecordIdsWithFileForUser`: the
 // `receipt_files` PLAINTEXT METADATA only — NEVER the encrypted file bytes). It
 // groups the records by kind (subscriptions, receipts/warranties, renewals/
@@ -25,7 +24,6 @@ import {
   listRecordsForUser,
   type LifeAdminRecord,
 } from "../db/life-admin-records";
-import { listForUser, type ChecklistItem } from "../db/moving-checklist";
 import { listTasksForUser, type Task } from "../db/tasks";
 import { listRecordIdsWithFileForUser } from "../storage/receipt-files";
 
@@ -36,7 +34,7 @@ export interface LifeAdminPageRecord extends LifeAdminRecord {
 }
 
 // The owner-scoped list-all the Life Admin page renders: the records grouped by
-// kind, the moving-checklist items, and the shared tasks. `records` is every live record
+// kind, and the shared tasks. `records` is every live record
 // in the owner order, typed ones (kind `item`) included — the Records tab reads it
 // (docs/adr/life-admin-profile.md); the three kind groups stay for older readers.
 export interface LifeAdminPageData {
@@ -44,14 +42,13 @@ export interface LifeAdminPageData {
   readonly subscriptions: LifeAdminPageRecord[];
   readonly receipts: LifeAdminPageRecord[];
   readonly renewals: LifeAdminPageRecord[];
-  readonly checklist: ChecklistItem[];
   readonly tasks: Task[];
 }
 
 // Assemble the Life Admin page data for the session person: ALL of `userId`'s
 // records (fields decrypted under the owner's `dek`), grouped by kind with each
 // receipt flagged for a saved file (metadata only), alongside the owner's
-// moving-checklist items and shared tasks. Member-scoped by `userId`; an empty
+// shared tasks. Member-scoped by `userId`; an empty
 // person yields empty collections, never an error.
 export async function lifeAdminPageData(
   db: Db,
@@ -60,7 +57,6 @@ export async function lifeAdminPageData(
 ): Promise<LifeAdminPageData> {
   const records = await listRecordsForUser(db, userId, dek);
   const recordIdsWithFile = await listRecordIdsWithFileForUser(db, userId);
-  const checklist = await listForUser(db, userId, dek);
   const tasks = await listTasksForUser(db, userId, dek);
 
   const all: LifeAdminPageRecord[] = [];
@@ -87,7 +83,7 @@ export async function lifeAdminPageData(
     }
   }
 
-  return { records: all, subscriptions, receipts, renewals, checklist, tasks };
+  return { records: all, subscriptions, receipts, renewals, tasks };
 }
 
 // Where each record stands now: ../../domain/life-admin/phases.ts (shared with the agent tools).

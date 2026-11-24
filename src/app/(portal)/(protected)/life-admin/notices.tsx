@@ -26,8 +26,6 @@ export type Notice =
   | "accepted"
   | "accepted_all"
   | "declined"
-  | "ticked"
-  | "handed"
   | "created"
   | "assigned"
   | "noted"
@@ -85,8 +83,6 @@ export const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   accepted: { done: true, text: "Change accepted." },
   accepted_all: { done: true, text: "All the changes were accepted." },
   declined: { done: true, text: "Kept your version. The suggested change was dropped." },
-  ticked: { done: true, text: "Checklist updated." },
-  handed: { done: true, text: "Handed to an agent." },
   created: { done: true, text: "Task created." },
   assigned: { done: true, text: "Task reassigned." },
   noted: { done: true, text: "Note added." },

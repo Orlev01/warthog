@@ -177,7 +177,7 @@ function toDashboardReminder(record: LifeAdminRecord, today: string | undefined,
     due: record.dueDate != null ? formatDue(record.dueDate) : "",
     ...(type.due ? { dueLabel: type.due.label } : {}),
     ...(today && dueDay && dueDay < today && type.lifecycle !== "booking" ? { overdue: true } : {}),
-    href: `/life-admin?view=life&tab=records#record-${encodeURIComponent(record.id)}`,
+    href: `/life-admin/items/${encodeURIComponent(record.id)}`,
   };
 }
 
@@ -254,7 +254,7 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
       agents: metrics.agents.map((agent) =>
         toDashboardAgent(agent, lastDay.find((group) => group.key === agent.agentId), timeZone, now)),
       reminders: metrics.reminders.map((record) => toDashboardReminder(record, metrics.today, metrics.catalogue)),
-      ...(metrics.toCheck ? { toCheck: { count: metrics.toCheck, href: "/life-admin?view=life&tab=records" } } : {}),
+      ...(metrics.toCheck ? { toCheck: { count: metrics.toCheck, href: "/life-admin" } } : {}),
       attention: attention > 0 ? { count: attention, href: "/activity?attention=1" } : undefined,
       ...(review
         ? {

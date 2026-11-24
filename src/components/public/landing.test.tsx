@@ -334,10 +334,13 @@ test("your context covers tasks between agents and taking everything with you", 
   assert.match(text, /export/i);
 });
 
-test("life admin has its own section: filled in by your agent from email, reminders, bookings, hand-over, moving", () => {
+test("life admin has its own section: filled in by your agent from email, reminders, bookings, hand-over", () => {
   const markup = section(render(), "life-admin");
   const text = visibleText(markup);
-  for (const point of [/email/i, /remind/i, /booking/i, /another agent|any agent/i, /moving/i, /confirm/i]) assert.match(text, point);
+  for (const point of [/email/i, /remind/i, /booking/i, /another agent|any agent/i, /confirm/i]) assert.match(text, point);
+  // The moving checklist was removed at the founder's request (23 Nov 2026), so the front door
+  // doesn't promise one.
+  assert.doesNotMatch(text, /moving house|checklist|old address/i, "no moving checklist is promised");
   assert.match(text, /doesn.t read your email itself/i, "Warthog's own part is stated plainly");
   const example = markup.match(/<figure\b[\s\S]*?<\/figure>/)?.[0];
   assert.ok(example, "an example of the records list");

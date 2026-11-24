@@ -30,8 +30,8 @@ import { ANY_ASSIGNEE, assigneeKey, groupTasksByStatus, resolveAssigneeFilter } 
 // the props a later Life Admin page loader hands it — titles and notes already
 // DECRYPTED, the assignee already resolved to a display name, the server actions passed
 // in — exactly the precedent the sibling life-admin / memory / inbox / connectors views
-// set (no clock / DB / session / crypto in the view). The page heading (and the Records |
-// Tasks views) belong to LifeAdminScreen, so this view starts at its first panel.
+// set (no clock / DB / session / crypto in the view). The page heading (and Life admin's
+// tabs) belong to LifeAdminScreen, so this view starts at its first panel.
 //
 // Layout (the UI/UX pass): a "Create a task" panel that is always open (one field and one
 // button, so a half-typed task survives switching views), the assignee filter in one
@@ -123,7 +123,7 @@ const NOT_BLANK = ".*\\S.*";
 
 // The page the Tasks view lives on, and the query state its filter links keep.
 const TASKS_PATH = "/life-admin";
-const TASKS_STATE = { view: "tasks" } as const;
+const TASKS_STATE = { tab: "tasks" } as const;
 
 // While a filter is applied, each task form carries it back so the redirect after the
 // action returns to the same filtered list.

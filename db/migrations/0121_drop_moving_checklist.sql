@@ -1,0 +1,11 @@
+-- 0121_drop_moving_checklist — the moving checklist is removed (founder decision 23 Nov 2026).
+--
+-- The moving-house helper's checklist (0036) listed the places that hold the person's old
+-- address once they added a new one with a moving date, to tick off or hand to an agent. The
+-- founder found it an arbitrary thing to anticipate: a person updates what they need
+-- themselves, and their agents already see the current and upcoming address. Its items were
+-- derived from the person's addresses, connected services and life-admin records, all of which
+-- stay, so nothing original is lost. The postal address's moving-on date and the household's
+-- shared address are unchanged. A task an item was handed off as stays a task (the link was the
+-- checklist's own column).
+DROP TABLE IF EXISTS moving_checklist;
