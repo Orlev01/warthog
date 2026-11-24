@@ -43,7 +43,7 @@
 //     name: string;                                    //   submits (set permissions "on the
 //     platform: string;                                //   same screen as the consent screen")
 //     template: string;                                //   "minimal" | "standard" | "custom"
-//     tickedServices?: readonly string[];
+//     accounts?: readonly string[];                    // the ticked connected accounts
 //     highTier?: boolean;                              // always opt-in (off unless true)
 //     card?: boolean;                                  // always opt-in; needs a budget when on
 //     cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -228,7 +228,7 @@ test("create names the agent, applies its chosen permissions, and issues a worki
     const userId = await makeUser(db, "create-ok");
     const actions = makeActions(db);
 
-    await createConnection(db, { userId, connectorId: "gmail", accountLabel: "My account", credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW));
+    const gmail = await createConnection(db, { userId, connectorId: "gmail", accountLabel: "My account", credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW));
 
     const result = await actions.create(
       sessionFor(userId),
@@ -236,7 +236,7 @@ test("create names the agent, applies its chosen permissions, and issues a worki
         name: "My Grok",
         platform: "grok",
         template: "standard",
-        tickedServices: ["gmail"],
+        accounts: [gmail.id],
         highTier: true,
         learningSharing: true,
       }),
@@ -264,7 +264,7 @@ test("create names the agent, applies its chosen permissions, and issues a worki
     assert.equal(agent.status, "connected", "a freshly created access-key agent is connected");
 
     // The chosen permissions were applied for that connection (the opt-ins reflect the
-    // input exactly, and a ticked service's read tools were granted).
+    // input exactly, and a ticked account's read tools were granted).
     const connectionId = agent.connectionId;
     const grants = await getConnectionPermissions(db, userId, connectionId);
     assert.ok(grants != null, "the chosen permissions are upserted for the connection");
@@ -272,9 +272,10 @@ test("create names the agent, applies its chosen permissions, and issues a worki
     assert.equal(grants!.sharing, true, "opting in turns sharing-what-it-learns on");
     assert.equal(grants!.cardAccess, false, "card access stays off when not opted in");
     assert.equal(grants!.cardBudget, null, "no card budget is recorded when card access is off");
-    assert.ok(
-      grants!.grantedConnectors.includes("gmail"),
-      "a ticked service's grant is applied to the connection",
+    assert.deepEqual(
+      grants!.accounts,
+      [{ accountId: gmail.id, connectorId: "gmail" }],
+      "a ticked account's grant is applied to the connection",
     );
 
     // The key VERIFIES as a bearer, resolving to the SAME connection the agent is bound to.
@@ -904,27 +905,63 @@ test("an alert that can't be sent doesn't undo the key: it is still shown and st
   } finally { await db.close(); }
 });
 
-// docs/adr/default-services.md — a ticked service with an account on for new agents is set to
-// that account, the same as on the consent screen.
-test("create sets a ticked service to its account that is on for new agents", async () => {
+// docs/adr/several-accounts-per-agent.md — the access-key screen lists each connected account,
+// as the consent screen does, and creating the key grants exactly the ticked accounts that are
+// the person's own: two of one service included, another person's never.
+test("create grants exactly the ticked accounts that are the person's own; another person's is ignored", async () => {
   const db = await freshDb();
   try {
-    const userId = await makeUser(db, "create-default-account");
-    const connect = async (accountLabel: string) =>
-      (await createConnection(db, { userId, connectorId: "gmail", accountLabel, credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW))).id;
-    await connect("Home");
-    const work = await connect("Work");
-    await setDefaultForAgents(db, { userId, id: work, on: true });
+    const userId = await makeUser(db, "create-accounts");
+    const otherId = await makeUser(db, "create-accounts-other");
+    const connect = async (owner: string, connectorId: string, accountLabel: string) =>
+      (await createConnection(db, { userId: owner, connectorId, accountLabel, credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW))).id;
+    const home = await connect(userId, "google-gmail", "home@gmail.com");
+    const billing = await connect(userId, "google-gmail", "billing@gmail.com");
+    await connect(userId, "google-gmail", "booking@gmail.com");
+    const theirs = await connect(otherId, "google-gmail", "them@gmail.com");
+    await setDefaultForAgents(db, { userId: otherId, id: theirs, on: true });
 
     const result = await makeActions(db).create(
       sessionFor(userId),
-      input({ name: "My Grok", platform: "grok", template: "standard", tickedServices: ["gmail"] }),
+      input({ name: "My Grok", platform: "grok", template: "standard", accounts: [home, billing, theirs] }),
     );
     assert.ok(result.ok);
     const agent = (await listAgentsForUser(db, userId))[0]!;
     const grants = await getConnectionPermissions(db, userId, agent.connectionId);
-    assert.deepEqual(grants!.grantedConnectors, ["gmail"]);
-    assert.deepEqual(grants!.connectorAccounts, { gmail: work });
+    assert.deepEqual(grants!.accounts.map((a) => a.accountId).sort(), [home, billing].sort(), "both ticked Gmail accounts, and only those");
+    assert.deepEqual(grants!.grantedConnectors, ["google-gmail"]);
+    assert.equal(grants!.readTools, true);
+    assert.equal(grants!.changeTools, "ask_first");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a malformed or oversized account list is refused with a 4xx and nothing is written", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "create-accounts-bad");
+    for (const accounts of [["gmail"], Array.from({ length: 101 }, () => randomUUID())]) {
+      await assertRejects4xx("create(bad accounts)", () => makeActions(db).create(sessionFor(userId), input({ accounts })));
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+// A screen loaded before the accounts were listed one by one sends services and no accounts.
+// Creating the key from it would grant nothing the person saw ticked, so nothing is made.
+test("a create that ticks services but no accounts (an older screen) makes nothing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "create-stale");
+    await createConnection(db, { userId, connectorId: "gmail", accountLabel: "Home", credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW));
+    const result = await makeActions(db).create(sessionFor(userId), input({ tickedServices: ["gmail"] }));
+    assert.deepEqual(result, { ok: false, reason: "accounts_changed" });
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "no agent and no key");
+    // An unconfirmed session hears the same, rather than confirming for nothing.
+    assert.deepEqual(await makeActions(db).create(unconfirmedSessionFor(userId), input({ tickedServices: ["gmail"] })), { ok: false, reason: "accounts_changed" });
   } finally {
     await db.close();
   }

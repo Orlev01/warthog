@@ -22,7 +22,7 @@ import { createClient } from "../../../server/oauth/store";
 import { createClientResolver } from "../../../server/oauth/clients";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
 import { listAgentsForUser } from "../../../server/db/agents";
-import { createConnection } from "../../../server/db/connections";
+import { createConnection, setDefaultForAgents } from "../../../server/db/connections";
 import { createUser } from "../../../server/db/users";
 import { loadConfig } from "../../../server/config";
 import { fixedClock } from "../../../server/seams/clock";
@@ -95,19 +95,23 @@ function formDataOf(markup: string): FormData {
   return form;
 }
 
-async function setUp(): Promise<{ db: Db; userId: string; handle: string }> {
+async function connectAccount(db: Db, userId: string, accountLabel: string): Promise<string> {
+  return (await createConnection(
+    db,
+    { userId, connectorId: "gmail", accountLabel, credentials: { token: "x" } },
+    new Uint8Array(32).fill(7),
+    fixedClock(NOW),
+  )).id;
+}
+
+async function setUp(): Promise<{ db: Db; userId: string; handle: string; gmail: string }> {
   const db = await freshDb();
   await createClient(db, { clientId: CLIENT_ID, registration: "cimd", redirectUris: [REDIRECT_URI] });
   const user = await createUser(db, { email: "round-trip@warthog.com.au", wrappedDek: "d3JhcHBlZA==" });
-  await createConnection(
-    db,
-    { userId: user.id, connectorId: "gmail", accountLabel: "me@example.com", credentials: { token: "x" } },
-    new Uint8Array(32).fill(7),
-    fixedClock(NOW),
-  );
+  const gmail = await connectAccount(db, user.id, "me@example.com");
   const begun = await beginAuthorization({ params: authorizeParams(), session: sessionFor(user.id) }, deps(db));
   if (!begun.ok) throw new Error(`begin failed: ${begun.error}`);
-  return { db, userId: user.id, handle: begun.handle };
+  return { db, userId: user.id, handle: begun.handle, gmail };
 }
 
 function authorizeParams(): URLSearchParams {
@@ -122,23 +126,23 @@ function authorizeParams(): URLSearchParams {
   });
 }
 
-test("the consent view lists the person's own connected services by name", async () => {
-  const { db, userId, handle } = await setUp();
+test("the consent view lists the person's own connected accounts by service and account name", async () => {
+  const { db, userId, handle, gmail } = await setUp();
   try {
     const props = await loadConsentView(handle, userId, { db, nameOf: (id) => (id === "gmail" ? "Gmail" : undefined) });
-    assert.deepEqual(props?.services, [{ id: "gmail", name: "Gmail", ticked: false }]);
+    assert.deepEqual(props?.accounts, [{ id: gmail, connectorId: "gmail", serviceName: "Gmail", label: "me@example.com", ticked: false }]);
   } finally {
     await db.close();
   }
 });
 
 test("the toggles the person leaves on the screen are exactly the grants stored", async () => {
-  const { db, userId, handle } = await setUp();
+  const { db, userId, handle, gmail } = await setUp();
   try {
     const props = await loadConsentView(handle, userId, { db, nameOf: () => "Gmail" });
     assert.ok(props != null);
-    // The person keeps Standard, unticks shared memory and tasks, ticks Gmail and card
-    // requests (leaving the A$200 a month default) and high-tier.
+    // The person keeps Standard, unticks shared memory and tasks, ticks their Gmail account
+    // and card requests (leaving the A$200 a month default) and high-tier.
     const left = {
       ...consentToggleState("standard", []),
       memoryRead: false,
@@ -146,7 +150,7 @@ test("the toggles the person leaves on the screen are exactly the grants stored"
       tasks: false,
       highTier: true,
       card: true,
-      services: ["gmail"],
+      accounts: [gmail],
     };
     const markup = renderToStaticMarkup(
       <ConsentView {...props!} approveAction={async () => {}} refuseAction={async () => {}} initialState={left} />,
@@ -169,8 +173,55 @@ test("the toggles the person leaves on the screen are exactly the grants stored"
     assert.equal(grants!.sharing, false, "sharing: unticked");
     assert.equal(grants!.cardAccess, true, "card requests: ticked");
     assert.deepEqual(grants!.cardBudget, { amount: 200, currency: "AUD", period: "month" });
-    assert.deepEqual(grants!.grantedConnectors, ["gmail"], "the ticked service");
+    assert.deepEqual(grants!.accounts, [{ accountId: gmail, connectorId: "gmail" }], "the ticked account");
+    assert.deepEqual(grants!.grantedConnectors, ["gmail"], "so its service");
     assert.equal(grants!.changeTools, "ask_first");
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/several-accounts-per-agent.md — each account is its own checkbox: two Gmail accounts
+// on for new agents arrive ticked and are both granted, and the one left off is not.
+test("two accounts of a service on for new agents arrive ticked and are both granted", async () => {
+  const { db, userId, handle, gmail } = await setUp();
+  try {
+    const billing = await connectAccount(db, userId, "billing@example.com");
+    const booking = await connectAccount(db, userId, "booking@example.com");
+    await setDefaultForAgents(db, { userId, id: gmail, on: true });
+    await setDefaultForAgents(db, { userId, id: billing, on: true });
+
+    const props = await loadConsentView(handle, userId, { db, nameOf: () => "Gmail" });
+    const form = formDataOf(renderToStaticMarkup(<ConsentView {...props!} approveAction={async () => {}} refuseAction={async () => {}} />));
+    assert.deepEqual([...form.getAll("account")].sort(), [gmail, billing].sort(), "the two accounts on for new agents are ticked");
+    assert.equal(form.getAll("service").length, 0, "the screen no longer sends services");
+
+    const decided = await createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approvalFromForm(form, props!.platform), String(form.get("request")));
+    assert.ok(decided.ok, `approve succeeds, got ${JSON.stringify(decided)}`);
+    const [agent] = await listAgentsForUser(db, userId);
+    const grants = await getConnectionPermissions(db, userId, agent!.connectionId);
+    assert.deepEqual(grants!.accounts.map((a) => a.accountId).sort(), [gmail, billing].sort(), "both ticked accounts are granted");
+    assert.ok(!grants!.accounts.some((a) => a.accountId === booking), "the unticked account is not");
+  } finally {
+    await db.close();
+  }
+});
+
+// A screen loaded before the accounts were listed one by one still posts services. It must not
+// grant nothing, or the wrong accounts: nothing is connected, the request is kept, and the
+// person is shown the accounts to check.
+test("an older screen that sends services connects nothing and keeps the request to review", async () => {
+  const { db, userId, handle } = await setUp();
+  try {
+    const form = new FormData();
+    form.append("name", "Claude");
+    form.append("starting-set", "standard");
+    form.append("service", "gmail");
+    form.append("request", consentRequestTag(handle));
+    const decided = await createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approvalFromForm(form, "Claude"), String(form.get("request")));
+    assert.deepEqual(decided, { ok: false, error: "accounts_changed" });
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is connected");
+    assert.ok((await loadConsentView(handle, userId)) != null, "the request is still there to review and approve");
   } finally {
     await db.close();
   }

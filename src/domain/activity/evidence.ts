@@ -71,7 +71,9 @@ const REJECTION_REASONS: Record<string, string> = {
   tool_unavailable: "That tool isn't available to this agent.",
 };
 
-// An agent's access, in the words its Permissions page uses.
+// An agent's access, in the words its Permissions page uses. `accounts` is the accounts an agent
+// may use, each with its own settings (docs/adr/several-accounts-per-agent.md); the three
+// service-keyed fields before it are what older entries stored, and keep their labels.
 const GRANT_LABELS: Record<string, string> = {
   identityAccess: "Everyday details",
   highTierAccess: "Protected details",
@@ -84,6 +86,7 @@ const GRANT_LABELS: Record<string, string> = {
   readTools: "Read from services",
   changeTools: "Make changes in services",
   grantedConnectors: "Services",
+  accounts: "Service accounts",
   connectorAccounts: "Service accounts",
   connectorPolicies: "Service rules",
   identityFields: "Everyday details it can read",
@@ -188,9 +191,40 @@ function changedSettings(before: unknown, after: unknown): string[] {
     if (JSON.stringify(from[key]) === JSON.stringify(to[key])) continue;
     if (isIdentifier(to[key]) || isIdentifier(from[key])) continue;
     const label = GRANT_LABELS[key] ?? words(key);
+    if (key === "accounts" && Array.isArray(from[key]) && Array.isArray(to[key])) {
+      lines.push(`${label}: ${accountChanges(from[key] as unknown[], to[key] as unknown[])}`);
+      continue;
+    }
     lines.push(key in from ? `${label}: ${setting(from[key])} → ${setting(to[key])}` : `${label}: ${setting(to[key])}`);
   }
   return lines;
+}
+
+/**
+ * What changed in the accounts an agent may use, counted: "1 added, 2 with new settings". An
+ * account is matched by its id, which is never shown.
+ */
+function accountChanges(before: readonly unknown[], after: readonly unknown[]): string {
+  const byAccount = (list: readonly unknown[]) =>
+    new Map(list.map((grant, i) => [isRecord(grant) && typeof grant.accountId === "string" ? grant.accountId : `#${i}`, grant]));
+  const from = byAccount(before);
+  const to = byAccount(after);
+  const added = [...to.keys()].filter((id) => !from.has(id)).length;
+  const removed = [...from.keys()].filter((id) => !to.has(id)).length;
+  const changed = [...to].filter(([id, grant]) => from.has(id) && !sameSettings(from.get(id), grant)).length;
+  const parts = [
+    added > 0 ? `${added} added` : "",
+    removed > 0 ? `${removed} removed` : "",
+    changed > 0 ? `${changed} with new settings` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : "changed";
+}
+
+// Two stored grants are the same whatever order their fields were written in.
+function sameSettings(a: unknown, b: unknown): boolean {
+  const sorted = (value: unknown) =>
+    isRecord(value) ? JSON.stringify(Object.keys(value).sort().map((key) => [key, value[key]])) : JSON.stringify(value);
+  return sorted(a) === sorted(b);
 }
 
 /** Each field of a stored object as "Label: value" lines, identifiers moved to `ids`. */
@@ -308,6 +342,17 @@ function guardLine(guard: Record<string, unknown>): string | undefined {
   return kept.length ? `Kept from the agent: ${kept.join(", ")}` : undefined;
 }
 
+// "levyoren1@gmail.com, booking@example.com (needs reconnecting)".
+function accountSetLine(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const accounts = value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.label !== "string" || item.label === "") return [];
+    const outcome = typeof item.outcome === "string" && item.outcome !== "searched" ? ` (${item.outcome})` : "";
+    return [`${item.label}${outcome}`];
+  });
+  return accounts.length > 0 ? accounts.join(", ") : undefined;
+}
+
 function clientLine(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const name = [value.name, value.version].filter((part) => typeof part === "string" && part.length > 0).join(" ");
@@ -376,7 +421,9 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
     if (typeof payload.reversalTool === "string") fact("How it was undone", toolLabel(payload.reversalTool));
   }
 
-  // Where and who.
+  // Where and who. A search across inboxes names each one, and how it went when it wasn't
+  // searched (docs/adr/several-accounts-per-agent.md); never their ids.
+  fact("Service accounts", accountSetLine(payload.connectorAccountSet));
   if (text("connectorAccountLabel")) fact("Service account", text("connectorAccountLabel"));
   else if (text("connectorAccountId") && !isIdentifier(text("connectorAccountId"))) fact("Service account", text("connectorAccountId"));
   else if (text("connectorAccountId")) ids.push({ label: "Service account ID", value: text("connectorAccountId") });

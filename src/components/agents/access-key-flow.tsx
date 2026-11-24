@@ -10,7 +10,7 @@ import { Notice } from "@/components/ui/notice";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { IssuedKey } from "./issued-key";
 import { ConnectionPermissions, ConnectionAccessSummary } from "./connection-permissions";
-import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
+import { connectionChoices, connectionChoiceInput, type ConnectionAccount, type ConnectionChoices } from "@/domain/permissions/connection-choices";
 
 // E10-S13 — Access-key flow (brief "Connect an agent" — "For a platform that cannot use
 // the standard connector sign-in, 'Create an access key' lets the person name the agent
@@ -56,7 +56,8 @@ export interface AccessKeyCreateInput {
   name: string;
   platform: string;
   template: AccessKeyTemplate;
-  tickedServices?: readonly string[];
+  // The ticked connected accounts' ids (docs/adr/several-accounts-per-agent.md).
+  accounts?: readonly string[];
   identity?: boolean;
   memoryRead?: boolean;
   memoryWrite?: boolean;
@@ -95,7 +96,7 @@ export interface AccessKeyFlowState {
 }
 
 export interface AccessKeyFlowDeps {
-  services?: readonly ConnectionService[];
+  accounts?: readonly ConnectionAccount[];
   create: AccessKeyCreate;
   defaultTemplate?: "minimal" | "standard";
   defaultName?: string; // the proposed agent name (page-supplied)
@@ -123,9 +124,9 @@ export const CONFIRM_TO_CREATE_COPY =
   "Before we make this key, we need to check it's really you. Anyone with the key can act as this agent.";
 
 export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyController {
-  // Services the person turned on for new agents start ticked, as on the consent screen
+  // Accounts the person turned on for new agents start ticked, as on the consent screen
   // (docs/adr/default-services.md).
-  const ticked = (deps.services ?? []).filter((service) => service.ticked).map((service) => service.id);
+  const ticked = (deps.accounts ?? []).filter((account) => account.ticked).map((account) => account.id);
   let state: AccessKeyFlowState = {
     name: deps.defaultName ?? "",
     platform: deps.defaultPlatform ?? "",
@@ -240,7 +241,7 @@ function IssuedPanel({ keyValue, agentId }: { keyValue: string; agentId?: string
 // ─── the client component (a thin binding over the controller) ─────────────────────────
 
 export interface AccessKeyFlowProps {
-  services?: readonly ConnectionService[];
+  accounts?: readonly ConnectionAccount[];
   // The page's "use server" wrapper over createAccessKeyActions.create.
   create: AccessKeyCreate;
   defaultTemplate?: "minimal" | "standard";
@@ -266,7 +267,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
   if (flowRef.current === null) {
     flowRef.current = createAccessKeyFlow({
       create: props.create,
-      services: props.services,
+      accounts: props.accounts,
       defaultTemplate: props.defaultTemplate,
       defaultName: props.defaultName,
       defaultPlatform: props.defaultPlatform,
@@ -312,10 +313,10 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
           <div className="wh-connection-name"><Field label="Agent name" name="name" id={nameId} value={state.name} placeholder={props.defaultName} required maxLength={200} aria-describedby={`${nameId}-help`} onChange={event => flow.setName(event.target.value)} /></div>
           <p id={`${nameId}-help`} className="wh-connection-name-help">This name appears in your agent list, approval requests and activity.</p>
         </section>
-        <ConnectionPermissions template={state.template} state={state.choices} services={props.services} onTemplate={flow.setTemplate} onChange={flow.setChoices} />
+        <ConnectionPermissions template={state.template} state={state.choices} accounts={props.accounts} onTemplate={flow.setTemplate} onChange={flow.setChoices} />
         <section className="wh-connection-section">
           <div className="wh-connection-section-heading"><span>03</span><div><h2>Review before creating the key</h2><p>The key will be limited to the choices shown here.</p></div></div>
-          <ConnectionAccessSummary state={state.choices} services={props.services} />
+          <ConnectionAccessSummary state={state.choices} accounts={props.accounts} />
           <p className="wh-connection-boundary">Your rules for all agents still apply. Warthog controls only what an agent does through Warthog, not its own tools or chats. You can change its access or disconnect it later; information it has already received can’t be recalled.</p>
         </section>
       </fieldset>

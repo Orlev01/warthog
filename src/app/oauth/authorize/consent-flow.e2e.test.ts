@@ -464,16 +464,23 @@ test("A2: the person's toggles override the starting set, and the stored grants 
   }
 });
 
-test("A2: a ticked service is granted only when the person has connected it", async () => {
+test("A2: a ticked account is granted only when it is one of the person's own connected accounts", async () => {
   const db = await freshDb();
   try {
     const config = devConfig();
     await createClient(db, { clientId: CLIENT_ID, registration: "cimd", redirectUris: [REDIRECT_URI] });
     const { userId, dek } = await makePerson(db, config);
-    await createConnection(
+    const { userId: otherId, dek: otherDek } = await makePerson(db, config);
+    const mine = await createConnection(
       db,
       { userId, connectorId: "gmail", accountLabel: "me@example.com", credentials: { token: "x" } },
       dek,
+      fixedClock(NOW),
+    );
+    const theirs = await createConnection(
+      db,
+      { userId: otherId, connectorId: "gmail", accountLabel: "them@example.com", credentials: { token: "y" } },
+      otherDek,
       fixedClock(NOW),
     );
     const session = sessionFor(userId);
@@ -482,13 +489,14 @@ test("A2: a ticked service is granted only when the person has connected it", as
     const decided = await createAuthorizeActions(deps(db, config)).approve(
       session,
       begun.handle,
-      approval({ template: "standard", tickedServices: ["gmail", "not-connected-service"] }),
+      approval({ template: "standard", accounts: [mine.id, theirs.id] }),
       consentRequestTag(begun.handle),
     );
     assert.ok(decided.ok);
     const agents = await listAgentsForUser(db, userId);
     const grants = await getConnectionPermissions(db, userId, agents[0]!.connectionId);
-    assert.deepEqual(grants!.grantedConnectors, ["gmail"], "only the person's own connected service is granted");
+    assert.deepEqual(grants!.accounts, [{ accountId: mine.id, connectorId: "gmail" }], "only the person's own account is granted");
+    assert.deepEqual(grants!.grantedConnectors, ["gmail"]);
     assert.equal(grants!.readTools, true, "its read tools are on");
     assert.equal(grants!.changeTools, "ask_first", "its changes ask first");
   } finally {
@@ -496,9 +504,10 @@ test("A2: a ticked service is granted only when the person has connected it", as
   }
 });
 
-// docs/adr/default-services.md — a service the person turned on for new agents arrives ticked;
-// approving grants it set to that account, so the agent can use it straight away.
-test("a ticked service with an account on for new agents is set to that account", async () => {
+// docs/adr/several-accounts-per-agent.md — one agent, several accounts of a service: the
+// accounts the person ticks (here the two on for new agents) are all granted, each as its own
+// grant, so the agent can use both straight away.
+test("two Gmail accounts ticked on consent are both granted to the agent", async () => {
   const db = await freshDb();
   try {
     const config = devConfig();
@@ -506,8 +515,10 @@ test("a ticked service with an account on for new agents is set to that account"
     const { userId, dek } = await makePerson(db, config);
     const connect = async (accountLabel: string) =>
       (await createConnection(db, { userId, connectorId: "gmail", accountLabel, credentials: { token: "x" } }, dek, fixedClock(NOW))).id;
-    await connect("home@example.com");
+    const home = await connect("home@example.com");
     const work = await connect("work@example.com");
+    await connect("booking@example.com");
+    await setDefaultForAgents(db, { userId, id: home, on: true });
     await setDefaultForAgents(db, { userId, id: work, on: true });
 
     const session = sessionFor(userId);
@@ -516,14 +527,14 @@ test("a ticked service with an account on for new agents is set to that account"
     const decided = await createAuthorizeActions(deps(db, config)).approve(
       session,
       begun.handle,
-      approval({ template: "standard", tickedServices: ["gmail"] }),
+      approval({ template: "standard", accounts: [home, work] }),
       consentRequestTag(begun.handle),
     );
     assert.ok(decided.ok);
     const agents = await listAgentsForUser(db, userId);
     const grants = await getConnectionPermissions(db, userId, agents[0]!.connectionId);
+    assert.deepEqual(grants!.accounts.map((account) => account.accountId).sort(), [home, work].sort(), "both ticked accounts");
     assert.deepEqual(grants!.grantedConnectors, ["gmail"]);
-    assert.deepEqual(grants!.connectorAccounts, { gmail: work }, "set to the account that is on for new agents");
     assert.equal(grants!.readTools, true);
   } finally {
     await db.close();

@@ -44,14 +44,14 @@ import type { ClientResolver } from "../../../server/oauth/clients";
 import { consumePendingAuthorization, isConsentRequestTag } from "../../../server/oauth/pending";
 import { requireStepUp } from "../../../server/auth/step-up";
 import { createAgent } from "../../../server/db/agents";
-import { defaultAccountsForAgents, listConnectionsForUser } from "../../../server/db/connections";
 import {
   upsertPermissions,
   type PermissionGrants,
 } from "../../../server/db/agent-permissions";
 import { parseParams } from "../../../server/http/validate";
 import { alertNewAgentConnection, type AlertDeps } from "../../../server/auth/alerts";
-import { initialGrants } from "../../../server/agents/initial-grants";
+import { initialGrants, tickedOwnAccounts } from "../../../server/agents/initial-grants";
+import { choseServicesNotAccounts } from "../../../domain/permissions/connection-choices";
 import type { Config } from "../../../server/config";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -62,19 +62,24 @@ import type { Session } from "../../../server/auth/session";
 // permissions page lets the person change it later (brief "Per-agent permissions page").
 
 // Bounds that keep a malformed or oversized approval out of the database. A name must
-// be present and reasonably short; the platform label and ticked-service ids are
-// likewise bounded so a grossly oversized field is rejected at the boundary.
+// be present and reasonably short; the platform label is likewise bounded, ticked accounts
+// are account ids (uuids), at most 100 of them, and an older screen's ticked-service ids are
+// bounded too, so a grossly oversized field is rejected at the boundary.
 const MAX_NAME_LENGTH = 200;
 const MAX_PLATFORM_LENGTH = 100;
+const MAX_ACCOUNTS = 100;
 const MAX_SERVICE_LENGTH = 200;
 const MAX_SERVICES = 100;
 
 // The person's consent decision, as the consent screen submits it. `template` is the
-// chosen starting set (validated to one of the three names below); `tickedServices`
-// are the service ids whose read tools are granted (kept only when the person has
-// actually connected that service). High-tier, card and learning-sharing are ALWAYS
-// opt-in — absent/false means off. `card` needs a budget when on. `template` is typed
-// as a plain string here (the untrusted form value); the validation boundary narrows it.
+// chosen starting set (validated to one of the three names below); `accounts` are the ids
+// of the connected accounts whose read tools are granted (kept only when the account is the
+// person's own; docs/adr/several-accounts-per-agent.md). `tickedServices` is what a screen
+// loaded before accounts were listed one by one sends instead: it is never granted, and an
+// approval carrying it without accounts is turned back (`accounts_changed`) for the person to
+// check the accounts. High-tier, card and learning-sharing are ALWAYS opt-in — absent/false
+// means off. `card` needs a budget when on. `template` is typed as a plain string here (the
+// untrusted form value); the validation boundary narrows it.
 //
 // Review fix A2 — `identity`, `memoryRead`, `tasks` and `records` are the screen's own
 // toggles (basic profile, shared memory, tasks, life-admin records). When given they
@@ -84,6 +89,7 @@ export interface ConsentApproval {
   readonly name: string;
   readonly platform: string;
   readonly template: string;
+  readonly accounts?: readonly string[];
   readonly tickedServices?: readonly string[];
   readonly identity?: boolean;
   readonly memoryRead?: boolean;
@@ -99,8 +105,10 @@ export interface ConsentApproval {
 // The outcome of a decision: a redirect back to the client (carrying the issued code
 // on approval, or none on refusal), or a rejection naming the OAuth error.
 // `request_changed`: the form was for a different request than the one the handle cookie now
-// names (nothing is consumed; the person reviews the current one). `step_up_required`: the
-// person must confirm it's them first (nothing is consumed; they can approve straight after).
+// names (nothing is consumed; the person reviews the current one). `accounts_changed`: the form
+// came from a screen that listed services rather than accounts (nothing is consumed; the person
+// checks the accounts and approves again). `step_up_required`: the person must confirm it's
+// them first (nothing is consumed; they can approve straight after).
 export type DecisionResult =
   | { readonly ok: true; readonly redirectTo: string }
   | { readonly ok: false; readonly error: string };
@@ -152,6 +160,7 @@ const approvalSchema = z
     name: z.string().min(1).max(MAX_NAME_LENGTH),
     platform: z.string().min(1).max(MAX_PLATFORM_LENGTH),
     template: z.enum(["minimal", "standard", "custom"]),
+    accounts: z.array(z.uuid().transform((id) => id.toLowerCase())).max(MAX_ACCOUNTS).optional(),
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
     identity: z.boolean().optional(),
     memoryRead: z.boolean().optional(),
@@ -180,10 +189,10 @@ function issuer(config: Config): string {
 // supplies every grant the approval does not state; each toggle the screen submits
 // overrides it (review fix A2), so the stored grants match the visible toggles.
 // High-tier, card and sharing are off in every template and switch on only when opted
-// in; a card budget is recorded only when card access is on. `connectedServices` is the
-// person's OWN connected service ids: a ticked service is granted only when it is one of
-// them (never trusting the form for this), with its read tools on and its changes set to
-// "ask me first". Tasks and records are their own grants, not the connector tool classes.
+// in; a card budget is recorded only when card access is on. A ticked account is granted only
+// when it is one of the person's OWN connected accounts (never trusting the form for this),
+// with its read tools on and its changes set to "ask me first". Tasks and records are their
+// own grants, not the connector tool classes.
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
   const { db, config, clock, random, resolveClient, alerts } = deps;
 
@@ -202,9 +211,12 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   ): Promise<DecisionResult> {
     const valid = parseParams(approvalSchema, approval);
 
-    // The screen the person approved on must be for the request the cookie names now; and a
-    // connection needs a fresh confirmation. Neither refusal consumes the request.
+    // The screen the person approved on must be for the request the cookie names now, and must
+    // have listed accounts (an older one ticked services, which would grant nothing the person
+    // saw ticked); and a connection needs a fresh confirmation. None of these refusals consumes
+    // the request, and the list check comes first so no one confirms for a screen turned back.
     if (!isConsentRequestTag(handle, requestTag)) return { ok: false, error: "request_changed" };
+    if (choseServicesNotAccounts(valid)) return { ok: false, error: "accounts_changed" };
     if (!requireStepUp(session, { clock })) return { ok: false, error: "step_up_required" };
 
     // Only the person who started the request can decide it: another signed-in person's
@@ -237,16 +249,12 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
         clock,
       );
 
-      // The person's own connected services (member-scoped by the session's user id): the
-      // only ones a ticked service can grant.
-      const connected = new Set(
-        (await listConnectionsForUser(tx, session.userId)).map((c) => c.connectorId),
-      );
-      // A ticked service with an account on for new agents is set to that account
-      // (docs/adr/default-services.md).
-      const defaultAccounts = await defaultAccountsForAgents(tx, session.userId);
+      // The ticked accounts that are the person's own (member-scoped by the session's user
+      // id), each with its service: the only accounts a tick can grant. Anything else — another
+      // person's account, or one disconnected since the screen loaded — is left out.
+      const tickedAccounts = await tickedOwnAccounts(tx, session.userId, valid.accounts ?? []);
       const grants = await upsertPermissions(tx, {
-        ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id)), defaultAccounts),
+        ...initialGrants(session.userId, connectionId, { ...valid, tickedAccounts }),
         rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
       });
 

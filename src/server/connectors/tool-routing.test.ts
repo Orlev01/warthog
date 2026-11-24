@@ -26,7 +26,7 @@ function connection(connectorId: string, status: Connection["status"] = "connect
 test("only granted, connected, catalogued services contribute tools; curated ones get no request tool", () => {
   const toolset = connectorToolsetFor(
     [connection("amadeus"), connection("google-gmail"), connection("unknown"), connection("alpaca", "needs_reconnect")],
-    ["amadeus", "google-gmail", "unknown", "alpaca"],
+    ["amadeus", "google-gmail", "unknown", "alpaca"].map((id) => ({ accountId: `c-${id}` })),
     catalogue,
   );
   assert.deepEqual(Object.keys(toolset).sort(), ["amadeus", "google-gmail"]);
@@ -48,7 +48,7 @@ test("messageRecipients reads Gmail MIME headers and Outlook recipient lists", (
 
 test("Gmail discovery explains search/read arguments and distinguishes an unsent draft from sending", () => {
   const gmailCatalogue = { get: () => ({ ...entry("google-gmail"), name: "Gmail" }) } as unknown as CatalogueIndex;
-  const tools = connectorToolsetFor([connection("google-gmail")], ["google-gmail"], gmailCatalogue)["google-gmail"]!;
+  const tools = connectorToolsetFor([connection("google-gmail")], [{ accountId: "c-google-gmail" }], gmailCatalogue)["google-gmail"]!;
   const get = (name: string) => {
     const tool = tools.find(t => typeof t !== "string" && t.name === name);
     assert.ok(tool && typeof tool !== "string");
@@ -65,7 +65,7 @@ test("Gmail discovery explains search/read arguments and distinguishes an unsent
 
 test("LinkedIn offers its profile, a post that always asks first, and deleting a post", () => {
   const linkedIn = { get: () => ({ ...entry("linkedin"), name: "LinkedIn", category: "social" }) } as unknown as CatalogueIndex;
-  const tools = connectorToolsetFor([connection("linkedin")], ["linkedin"], linkedIn)["linkedin"]!;
+  const tools = connectorToolsetFor([connection("linkedin")], [{ accountId: "c-linkedin" }], linkedIn)["linkedin"]!;
   const get = (name: string) => {
     const tool = tools.find(t => typeof t !== "string" && t.name === name);
     assert.ok(tool && typeof tool !== "string", name);
@@ -97,4 +97,14 @@ test("LinkedIn offers its profile, a post that always asks first, and deleting a
   assert.equal(get("delete_post").makesChange, true);
   assert.equal(get("delete_post").alwaysAsk, true, "an agent's delete can't be undone, so the person is asked (Undo is the person's own action)");
   assert.match(get("delete_post").description!, /query\.id/);
+});
+
+test("several granted accounts of a service share one set of its tools; an ungranted account adds nothing", () => {
+  const work = { ...connection("google-gmail"), id: "c-work" };
+  const spare = { ...connection("google-gmail"), id: "c-spare" };
+  const toolset = connectorToolsetFor([connection("google-gmail"), work, spare], [{ accountId: "c-google-gmail" }, { accountId: "c-work" }], catalogue);
+  const names = (toolset["google-gmail"] ?? []).map((tool) => (typeof tool === "string" ? tool : tool.name));
+  assert.equal(names.length, new Set(names).size, "each tool once");
+  assert.ok(names.includes("search") && names.includes("send"));
+  assert.deepEqual(connectorToolsetFor([spare], [{ accountId: "c-work" }], catalogue), {}, "only granted accounts count");
 });

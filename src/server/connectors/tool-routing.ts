@@ -36,6 +36,7 @@ import { checkLinkedInPost, LinkedInPostError, MAX_POST_CHARS } from "../../doma
 import { sendConnectorRequest } from "./request-tool";
 import { draftRecipients, MailComposeError, type MailDraft } from "../../domain/content/compose-mail";
 import type { ConnectorToolDeclaration, ConnectorToolset } from "../mcp/tools/registry";
+import type { AccountGrant } from "../../domain/permissions/account-access";
 
 // The general request tool's verb: `<id>__request {method, path, query, body}`.
 export const REQUEST_TOOL = "request";
@@ -230,7 +231,7 @@ function mimeRecipients(raw: string): string[] {
 const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Gmail: Search messages",
-    description: "Search the connected Gmail account. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults (up to 25, default 10) and query.pageToken page through results. Returns who, subject, date, a preview and whether it's unread for each message: read one by id for its full text. Doesn't change mail.",
+    description: "Search the Gmail accounts this agent can use: with no account, one search covers all of them and each result names its inbox; account picks one. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults (up to 25, default 10) sets the page, and query.pageToken (with account) gets the next. Returns who, subject, date, a preview and whether it's unread for each message: read one by id for its full text. Doesn't change mail.",
   },
   read: {
     title: "Gmail: Read message",
@@ -249,7 +250,7 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
 const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Outlook: Search messages",
-    description: "Search the connected Outlook mailbox. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby, $top (up to 25, default 10) and $skip page and sort. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
+    description: "Search the Outlook mailboxes this agent can use: with no account, one search covers all of them and each result names its mailbox; account picks one. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby and $top (up to 25, default 10) sort and size the page, and $skip (with account) gets the next. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
   },
   draft: {
     title: "Outlook: Create unsent draft",
@@ -333,48 +334,56 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
   };
 }
 
-// The connector tools a connection is served: for each of the person's CONNECTED services
-// that is granted to this agent and known to the catalogue, its curated tools, or the
-// general request tool when it has none.
+// The connector tools one of the person's accounts offers: its service's curated tools, the
+// tools its provider listed for that account, or the general request tool when it has none.
+// Undefined when the service is unknown or the provider listed nothing.
+export function accountToolsFor(
+  connection: Pick<Connection, "id" | "connectorId">,
+  catalogue: CatalogueIndex,
+  providerTools: Readonly<Record<string, readonly ConnectorToolDeclaration[]>> = {},
+): readonly ConnectorToolDeclaration[] | undefined {
+  const entry = catalogue.get(connection.connectorId);
+  if (!entry) return undefined;
+  if (entry.auth_kind === "provider_mcp") return providerTools[connection.id]?.length ? providerTools[connection.id] : undefined;
+  const curated = CURATED_BY_CONNECTOR.get(connection.connectorId);
+  return curated
+    ? curated.map((tool) => declarationOf(tool, entry.name))
+    : [
+        {
+          ...(entry.get_is_change
+            ? {
+                name: REQUEST_TOOL,
+                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). ${entry.name} can send messages on any request, so every request, GET included, makes a change.`,
+                getIsChange: true,
+              }
+            : {
+                name: REQUEST_TOOL,
+                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
+              }),
+          // A change through an email, messaging or calendar service (Nylas sends mail; booking
+          // services email invitees) sends something to other people.
+          ...(entry.category === "email" || entry.category === "messaging" || entry.category === "calendar" ? { outbound: true } : {}),
+        },
+      ];
+}
+
+// The connector tools an agent is served, by service: the tools of every CONNECTED account it
+// was given (docs/adr/several-accounts-per-agent.md), once each. Tools stay one set per
+// service however many accounts it has; each call is bound to one account by the pipeline.
 export function connectorToolsetFor(
   connections: readonly Connection[],
-  grantedConnectors: readonly string[],
+  accounts: readonly Pick<AccountGrant, "accountId">[],
   catalogue: CatalogueIndex,
-  accounts: Readonly<Record<string, string>> = {},
   providerTools: Readonly<Record<string, readonly ConnectorToolDeclaration[]>> = {},
 ): ConnectorToolset {
-  const toolset: Record<string, readonly ConnectorToolDeclaration[]> = {};
+  const granted = new Set(accounts.map((account) => account.accountId));
+  const toolset: Record<string, ConnectorToolDeclaration[]> = {};
   for (const connection of connections) {
-    const id = connection.connectorId;
-    if (connection.status !== "connected" || !grantedConnectors.includes(id) || toolset[id]) continue;
-    const selected = selectConnectorAccount(connections, id, accounts[id]);
-    if (!selected || selected.id !== connection.id) continue;
-    const entry = catalogue.get(id);
-    if (!entry) continue;
-    if (entry.auth_kind === "provider_mcp") {
-      if (providerTools[connection.id]?.length) toolset[id] = providerTools[connection.id]!;
-      continue;
-    }
-    const curated = CURATED_BY_CONNECTOR.get(id);
-    toolset[id] = curated
-      ? curated.map((tool) => declarationOf(tool, entry.name))
-      : [
-          {
-            ...(entry.get_is_change
-              ? {
-                  name: REQUEST_TOOL,
-                  description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). ${entry.name} can send messages on any request, so every request, GET included, makes a change.`,
-                  getIsChange: true,
-                }
-              : {
-                  name: REQUEST_TOOL,
-                  description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
-                }),
-            // A change through an email, messaging or calendar service (Nylas sends mail; booking
-            // services email invitees) sends something to other people.
-            ...(entry.category === "email" || entry.category === "messaging" || entry.category === "calendar" ? { outbound: true } : {}),
-          },
-        ];
+    if (connection.status !== "connected" || !granted.has(connection.id)) continue;
+    const tools = accountToolsFor(connection, catalogue, providerTools);
+    if (!tools) continue;
+    const merged = (toolset[connection.connectorId] ??= []);
+    for (const tool of tools) if (!merged.some((known) => known.name === tool.name)) merged.push(tool);
   }
   return toolset;
 }
@@ -410,9 +419,10 @@ export function createConnectorToolExecutor(
     }
     const verb = call.tool.slice(prefix.length);
 
-    // The person's live connection to this service (member-scoped by the session user).
+    // The account the call was bound to, when it is the person's live connection to this
+    // service (member-scoped by the session user). Never another account in its place.
     const connections = await listConnectionsForUser(deps.db, userId);
-    const connection = selectConnectorAccount(connections, call.connector, accountId);
+    const connection = connections.find((c) => c.id === accountId && c.connectorId === call.connector && c.status === "connected");
     if (!connection) {
       throw new HttpError(409, "Choose a connected account for this service in the agent settings.");
     }
@@ -467,11 +477,3 @@ export function createConnectorToolExecutor(
   };
 }
 
-// A service grant never silently picks an arbitrary account. A pinned account
-// never falls back to another one when disconnected.
-export function selectConnectorAccount(connections: readonly Connection[], connectorId: string, accountId?: string): Connection | undefined {
-  const available = connections.filter(c => c.connectorId === connectorId && c.status === "connected");
-  if (accountId) return available.find(c => c.id === accountId);
-  const all = connections.filter(c => c.connectorId === connectorId);
-  return all.length === 1 ? available[0] : undefined;
-}

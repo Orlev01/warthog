@@ -24,7 +24,8 @@ import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { consentRequestTag, getPendingAuthorization } from "../../../server/oauth/pending";
 import { isAllowedRedirectUri } from "../../../server/oauth/clients";
 import { defaultAccountsForAgents, listConnectionsForUser } from "../../../server/db/connections";
-import type { ConsentViewProps, ConsentViewService } from "../../../components/agents/consent-view";
+import type { ConsentViewAccount, ConsentViewProps } from "../../../components/agents/consent-view";
+import { byServiceThenAccount } from "../../../domain/permissions/connection-choices";
 import type { ConsentApproval } from "../authorize/actions";
 import type { Db } from "../../../server/db/index";
 
@@ -51,21 +52,29 @@ const REQUESTED_SCOPES: ReadonlyArray<string> = [
   "Use only the permissions you choose below",
 ];
 
-// Review fix A2 — the person's own connected services, offered on the screen so their
-// read tools can be ticked. Member-scoped by the SESSION's user id; one row per connected
-// service (a person can connect two accounts of one service), named through the
-// catalogue when it knows the service. A service starts ticked only when the person turned
-// one of its accounts on for new agents on the Connectors page (docs/adr/default-services.md);
-// every other service starts unticked, for the person to opt in.
+// Review fix A2 — the person's own connected accounts, offered on the screen so their read
+// tools can be ticked. Member-scoped by the SESSION's user id; one row per connected ACCOUNT
+// (docs/adr/several-accounts-per-agent.md: an agent can use several accounts of a service, and
+// each is its own grant), with its service named through the catalogue when it knows it, and
+// listed by service and then account. An account starts ticked only when the person turned it
+// on for new agents on the Connectors page (docs/adr/default-services.md); every other account
+// starts unticked, for the person to opt in.
 export interface ConsentServicesSource {
   readonly db: Db;
   readonly nameOf?: (connectorId: string) => string | undefined;
 }
 
-export async function connectedServices(source: ConsentServicesSource, userId: string): Promise<ConsentViewService[]> {
-  const ids = [...new Set((await listConnectionsForUser(source.db, userId)).map((c) => c.connectorId))];
-  const defaults = await defaultAccountsForAgents(source.db, userId);
-  return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: Object.hasOwn(defaults, id) }));
+export async function connectedAccounts(source: ConsentServicesSource, userId: string): Promise<ConsentViewAccount[]> {
+  const defaults = new Set(await defaultAccountsForAgents(source.db, userId));
+  return (await listConnectionsForUser(source.db, userId))
+    .map((connection) => ({
+      id: connection.id,
+      connectorId: connection.connectorId,
+      serviceName: source.nameOf?.(connection.connectorId) ?? connection.connectorId,
+      label: connection.accountLabel,
+      ticked: defaults.has(connection.id),
+    }))
+    .sort(byServiceThenAccount);
 }
 
 // The consent view for the pending request under `handle`, as seen by the signed-in
@@ -100,7 +109,7 @@ export async function loadConsentView(
     // The form's binding to THIS request (review 2026-11-23, the consent swap): the decision
     // acts only while the handle cookie still names the request this screen shows.
     requestTag: consentRequestTag(handle),
-    ...(services ? { services: await connectedServices(services, userId) } : {}),
+    ...(services ? { accounts: await connectedAccounts(services, userId) } : {}),
   };
 }
 
@@ -108,7 +117,9 @@ export async function loadConsentView(
 // chosen name, the starting set, and EVERY toggle the screen shows as adjustable (a
 // ticked checkbox is present in the form data, an unticked one is absent — so each is
 // submitted as an explicit true/false and overrides the starting set), the ticked
-// services, and the card budget when card requests are on. The connecting platform is
+// accounts, and the card budget when card requests are on. A screen loaded before accounts
+// were listed one by one sends `service` fields instead; they are passed on as they came, so
+// the decision can show the screen again rather than grant nothing the person saw ticked. The connecting platform is
 // taken SERVER-SIDE from the pending request (never the form); the acting person's id and
 // the pending request come from the session and the handle cookie. Values are passed
 // through as typed — the decision's zod boundary rejects a malformed one (a 4xx).
@@ -119,6 +130,7 @@ export function approvalFromForm(formData: FormData, platform: string): ConsentA
   const template = VALID_TEMPLATES.has(rawTemplate) ? rawTemplate : "standard";
   const ticked = (name: string) => formData.get(name) != null;
   const card = ticked("card");
+  const services = formData.getAll("service").map(String);
   return {
     name: String(formData.get("name") ?? "").trim(),
     platform,
@@ -130,7 +142,8 @@ export function approvalFromForm(formData: FormData, platform: string): ConsentA
     records: ticked("records"),
     highTier: ticked("highTier"),
     learningSharing: ticked("learningSharing"),
-    tickedServices: formData.getAll("service").map(String),
+    accounts: formData.getAll("account").map(String),
+    ...(services.length > 0 ? { tickedServices: services } : {}),
     card,
     cardBudget: card
       ? {

@@ -75,3 +75,7 @@ Notion accounts. Two things stood in the way:
   published, unverified mode).
 - **Design doc change:** technical-design.md §7.
 - **No migration**, no new setting, and no new approvals.
+
+Superseded in part (24 Nov 2026) by [one agent, several accounts of a service](several-accounts-per-agent.md):
+one agent can now use several accounts of a service, and disconnecting one account leaves the
+others granted. Rules still apply to a whole service.

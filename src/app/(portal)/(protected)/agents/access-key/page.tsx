@@ -12,7 +12,7 @@ import { systemRandom } from "@/server/seams/random";
 import { HttpError } from "@/server/http/validate";
 import { createAccessKeyActions, type AccessKeyInput, type CreateResult } from "./actions";
 import { AccessKeyFlow } from "@/components/agents/access-key-flow";
-import { connectedServices } from "@/app/oauth/consent/actions";
+import { connectedAccounts } from "@/app/oauth/consent/actions";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
 import { notificationSenders } from "@/server/notify/production";
@@ -106,11 +106,12 @@ export default async function AccessKeyPage({
 
   const defaults = await getAgentDefaults(db, session.userId);
   const catalogue = getProcessCatalogue(loadConfig());
-  const services = await connectedServices({ db, nameOf: id => catalogue.get(id)?.name }, session.userId);
+  // Each of the person's connected accounts, one checkbox each, as on the consent screen.
+  const accounts = await connectedAccounts({ db, nameOf: id => catalogue.get(id)?.name }, session.userId);
   const factors = await confirmFactors(db, session.userId);
   return (
     <PageContainer className="flex flex-col gap-6">
-      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} passkey={factors.passkey} authenticator={factors.authenticator} />
+      <AccessKeyFlow accounts={accounts} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} passkey={factors.passkey} authenticator={factors.authenticator} />
     </PageContainer>
   );
 }

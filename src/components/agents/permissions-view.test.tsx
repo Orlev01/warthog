@@ -46,9 +46,15 @@ import { ruleSentence, type Rule } from "@/domain/rules/rules";
 
 // --- the prop shape this task introduces (described here as the contract) -------
 
-type ConnectorAccess = {
+// One connected account (docs/adr/several-accounts-per-agent.md): an agent may use several
+// accounts of one service, so each account is listed with its own grant (null: not allowed).
+type AccountAccess = {
   id: string;
-  name: string;
+  connectorId: string;
+  serviceName: string;
+  label: string;
+  connected: boolean;
+  grant: { readTools?: boolean; changeTools?: "off" | "allow" | "ask_first"; allowedTools?: string[] | null } | null;
   // the tool names the agent may use, split into the two groups the brief names:
   // read tools and change-making tools (the latter default to "Ask me first").
   readTools: ReadonlyArray<string>;
@@ -60,8 +66,8 @@ type SkillGrant = { id: string; name: string; granted: boolean };
 type PermissionsViewProps = {
   // the agent being shaped, named on the screen.
   agentName: string;
-  // granted connectors and the tools it may use, reads and changes listed apart.
-  connectors: ReadonlyArray<ConnectorAccess>;
+  // every connected account, whether it may use it, and its tools, reads and changes apart.
+  accounts: ReadonlyArray<AccountAccess>;
   // low-tier identity read (always low tier only) vs. the high-tier REQUEST toggle.
   lowTierRead: boolean;
   highTierRequest: boolean;
@@ -88,10 +94,14 @@ type PermissionsViewProps = {
 // / memory / learn / limit / minute / 120 / 200). That keeps the checks honest: a
 // keyword landing in the asserted surface can only come from the control it names.
 
-const CONNECTORS: ConnectorAccess[] = [
+const ACCOUNTS: AccountAccess[] = [
   {
-    id: "gcal",
-    name: "Google Calendar",
+    id: "6f1c1d0e-5a4b-4c3d-8e2f-1a0b9c8d7e6f",
+    connectorId: "google-calendar",
+    serviceName: "Google Calendar",
+    label: "sam@example.com",
+    connected: true,
+    grant: {},
     readTools: ["See events", "List calendars"],
     changeTools: ["Create an event", "Delete an event"],
   },
@@ -120,7 +130,7 @@ const RULES: Rule[] = [
 function base(overrides: Partial<PermissionsViewProps> = {}): PermissionsViewProps {
   return {
     agentName: "Claude",
-    connectors: CONNECTORS,
+    accounts: ACCOUNTS,
     lowTierRead: true,
     highTierRequest: false,
     cardAccess: false,
@@ -319,12 +329,12 @@ test("renders each of the agent's own rules as its exact plain-English sentence"
 // "Ask me first".
 // ================================================================================
 
-test("lists each granted connector and the tools it may use", () => {
+test("lists each granted account and the tools it may use", () => {
   const text = visibleText(render(base()));
-  for (const c of CONNECTORS) {
-    assert.ok(text.includes(c.name), `connector "${c.name}" must be listed; text="${text}"`);
+  for (const c of ACCOUNTS) {
+    assert.ok(text.includes(`${c.serviceName} · ${c.label}`), `account "${c.label}" must be listed; text="${text}"`);
     for (const t of [...c.readTools, ...c.changeTools]) {
-      assert.ok(text.includes(t), `tool "${t}" (on "${c.name}") must be shown; text="${text}"`);
+      assert.ok(text.includes(t), `tool "${t}" (on "${c.label}") must be shown; text="${text}"`);
     }
   }
 });
@@ -347,7 +357,7 @@ test("read tools and change-making tools are listed separately, changes defaulti
   // change tools (not merely somewhere unrelated on the page) — so a change tool and
   // its ask-me-first default read together.
   assert.match(text, /ask me first/i, `change tools must default to "Ask me first"; text="${text}"`);
-  for (const c of CONNECTORS) {
+  for (const c of ACCOUNTS) {
     const firstChange = c.changeTools[0];
     assert.ok(
       firstChange && nearInText(markup, firstChange, /ask me first/i),
@@ -552,6 +562,117 @@ test("shows the skills the agent receives", () => {
   if (grantedToggle) {
     assert.ok(grantedToggle.on === true, "a granted skill rendered as a toggle must read as ON");
   }
+});
+
+// ================================================================================
+// Several accounts of one service (docs/adr/several-accounts-per-agent.md): one row per
+// connected account, each with its own controls, inside the one Connected services panel.
+// ================================================================================
+
+const LEVY = "a0000000-0000-4000-8000-000000000001";
+const BILLING = "a0000000-0000-4000-8000-000000000002";
+const BOOKING = "a0000000-0000-4000-8000-000000000003";
+const CALENDAR = "a0000000-0000-4000-8000-000000000004";
+const gmail = (id: string, label: string, grant: AccountAccess["grant"], connected = true): AccountAccess => ({
+  id, connectorId: "google-gmail", serviceName: "Gmail", label, connected, grant,
+  readTools: ["google-gmail__search", "google-gmail__read"], changeTools: ["google-gmail__send"],
+});
+const SEVERAL: AccountAccess[] = [
+  gmail(BOOKING, "levyorenbooking@gmail.com", null, false),
+  { ...ACCOUNTS[0]!, id: CALENDAR, label: "levyoren1@gmail.com", grant: null },
+  gmail(LEVY, "levyoren1@gmail.com", {}),
+  gmail(BILLING, "levyorenbilling@gmail.com", { readTools: false, changeTools: "allow", allowedTools: ["google-gmail__search"] }),
+];
+
+// Whether an account's tool box for `tool` renders ticked (attribute order doesn't matter).
+function toolTicked(markup: string, accountId: string, tool: string): boolean | undefined {
+  for (const m of markup.matchAll(/<input\b([^>]*?)\/?>/g)) {
+    if (attr(m[1], "name") === `accountTool:${accountId}` && attr(m[1], "value") === tool) return hasBoolAttr(m[1], "checked");
+  }
+  return undefined;
+}
+
+// Each account row's markup, in the order shown, with the text of its header.
+function accountRows(markup: string): Array<{ header: string; html: string }> {
+  const starts = [...markup.matchAll(/<li class="min-w-0"><details\b/g)];
+  return starts.map((m, i) => {
+    const html = markup.slice(m.index!, i + 1 < starts.length ? starts[i + 1]!.index : markup.indexOf("</ul>", m.index!));
+    const summary = html.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/);
+    assert.ok(summary, "each row has a header");
+    return { header: visibleText(summary![1]!), html };
+  });
+}
+
+test("each connected account is its own row, by service and then account, headed with both", () => {
+  const rows = accountRows(render(base({ accounts: SEVERAL })));
+  assert.deepEqual(rows.map((row) => row.header.split(" Claude can use it")[0]!.split(" Not allowed")[0]), [
+    "Gmail · levyoren1@gmail.com",
+    "Gmail · levyorenbilling@gmail.com",
+    "Gmail · levyorenbooking@gmail.com",
+    "Google Calendar · levyoren1@gmail.com",
+  ]);
+});
+
+test("each row's header says whether the agent can use the account, and when it needs reconnecting", () => {
+  const rows = accountRows(render(base({ accounts: SEVERAL })));
+  assert.match(rows[0]!.header, /Claude can use it/);
+  assert.match(rows[1]!.header, /Claude can use it/);
+  assert.match(rows[2]!.header, /Not allowed/);
+  assert.match(rows[2]!.header, /Reconnect needed/, "the account that isn't connected says so");
+  assert.doesNotMatch(rows[0]!.header, /Reconnect needed/);
+  assert.match(rows[3]!.header, /Not allowed/);
+});
+
+test("the section counts accounts, not services", () => {
+  assert.match(visibleText(render(base({ accounts: SEVERAL }))), /4 accounts · 2 allowed for Claude\. Open an account to change its access\./);
+  assert.match(visibleText(render(base())), /1 account · 1 allowed for Claude\./);
+});
+
+test("every account's controls carry that account's own names, and no id is used twice", () => {
+  const markup = render(base({ accounts: SEVERAL }));
+  for (const id of [LEVY, BILLING, BOOKING, CALENDAR]) {
+    for (const name of [`account:${id}`, `accountRead:${id}`, `accountChange:${id}`, `accountToolScope:${id}`]) {
+      const count = (markup.match(new RegExp(`name="${name}"`, "g")) ?? []).length;
+      assert.equal(count, 1, `exactly one control named ${name}`);
+    }
+  }
+  const ids = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(ids).size, ids.length, `ids are unique: ${ids.join(", ")}`);
+  // One account's tool boxes are its own: Billing's tick list never names Levy's.
+  const billing = accountRows(markup).find((row) => row.header.includes("levyorenbilling"))!.html;
+  assert.doesNotMatch(billing, new RegExp(`accountTool:${LEVY}`));
+  assert.notEqual(toolTicked(billing, BILLING, "google-gmail__send"), undefined, "Billing lists its own tools");
+});
+
+test("there is no account drop-down any more: each account is chosen by its own toggle", () => {
+  const markup = render(base({ accounts: SEVERAL }));
+  assert.doesNotMatch(markup, /connectorAccount:|name="connector:/);
+  assert.doesNotMatch(visibleText(markup), /Choose an account/);
+  assert.match(markup, new RegExp(`<input[^>]*name="account:${BILLING}"[^>]*checked=""`));
+  assert.doesNotMatch(markup, new RegExp(`<input[^>]*name="account:${BOOKING}"[^>]*checked=""`));
+});
+
+test("an account's own settings are shown as chosen; the others follow the agent's", () => {
+  const markup = render(base({ accounts: SEVERAL, readTools: true, changeTools: "ask_first" }));
+  const selected = (name: string) => markup.match(new RegExp(`<select[^>]*name="${name}"[^>]*>([\\s\\S]*?)</select>`))?.[1]?.match(/<option[^>]*selected=""[^>]*value="([^"]*)"|<option value="([^"]*)" selected=""/)?.slice(1).find(Boolean);
+  assert.equal(selected(`accountRead:${BILLING}`), "off");
+  assert.equal(selected(`accountChange:${BILLING}`), "allow");
+  assert.equal(selected(`accountToolScope:${BILLING}`), "chosen");
+  assert.equal(selected(`accountRead:${LEVY}`), "default");
+  assert.equal(selected(`accountChange:${LEVY}`), "default");
+  assert.equal(selected(`accountToolScope:${LEVY}`), "all");
+  assert.equal(toolTicked(markup, BILLING, "google-gmail__search"), true, "the chosen tool is ticked");
+  assert.equal(toolTicked(markup, BILLING, "google-gmail__send"), false, "a tool left out is not");
+  assert.equal(toolTicked(markup, LEVY, "google-gmail__send"), true, "all tools: every one ticked");
+});
+
+// UI/UX audit W-35: options are rows divided inside the panel, not bordered cards in a card.
+test("the accounts are divided rows inside the Connected services panel, not cards inside it", () => {
+  const markup = render(base({ accounts: SEVERAL }));
+  assert.doesNotMatch(markup, /wh-connector-module|wh-tool-group/);
+  const list = markup.match(/<ul role="list" aria-label="Connected accounts"[^>]*>/);
+  assert.ok(list, "one list of accounts");
+  assert.match(list![0], /divide-y/);
 });
 
 // ================================================================================

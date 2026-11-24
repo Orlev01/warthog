@@ -101,3 +101,8 @@ durable attempt/outcome evidence, investigation and chunked account transfers.
 [Agent runs](agent-runs.md) tells one agent's conversations apart without new credentials: Warthog
 hands each conversation a run through `get_context`, and Activity, the Inbox and the agent's
 Overview group by it.
+
+[One agent, several accounts of a service](several-accounts-per-agent.md) (24 Nov 2026) replaces
+the single chosen account per service: an agent is given accounts, each with its own settings, and
+every connector call is bound to one granted account before the policy runs. "Never falls back"
+and "the server binds the account before holding it" still hold.

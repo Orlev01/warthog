@@ -130,6 +130,72 @@ test("a changed setting reads as before → after", () => {
   assert.equal(evidence.changedBy, "you");
 });
 
+// Several accounts of one service (docs/adr/several-accounts-per-agent.md): an agent's access now
+// records the ACCOUNTS it may use, each with its own settings. The change reads as counts in the
+// Permissions page's words, never as the accounts' ids.
+const LEVY = "a0000000-0000-4000-8000-000000000001";
+const BILLING = "a0000000-0000-4000-8000-000000000002";
+const BOOKING = "a0000000-0000-4000-8000-000000000003";
+const gmail = (accountId: string, settings: Record<string, unknown> = {}) => ({ accountId, connectorId: "google-gmail", ...settings });
+
+test("a change to the accounts an agent may use reads as counts, never ids", () => {
+  const evidence = activityEvidence({
+    kind: "permission_change",
+    outcome: "saved",
+    payload: {
+      before: { userId: USER, connectionId: CONNECTION, grantedConnectors: ["google-gmail"], accounts: [gmail(LEVY), gmail(BILLING)] },
+      after: { userId: USER, connectionId: CONNECTION, grantedConnectors: ["google-gmail"], accounts: [gmail(LEVY, { changeTools: "off" }), gmail(BOOKING), gmail(BILLING, { allowedTools: ["google-gmail__search"] })] },
+    },
+  });
+  assert.equal(value(evidence, "What changed"), "Service accounts: 1 added, 2 with new settings");
+  const everything = JSON.stringify(evidence);
+  for (const id of [LEVY, BILLING, BOOKING]) assert.ok(!everything.includes(id), `no account id is shown, not even as a technical detail: ${id}`);
+});
+
+test("accounts added and removed are counted; the services line follows the accounts", () => {
+  const removed = activityEvidence({
+    kind: "permission_change",
+    payload: { before: { grantedConnectors: ["google-calendar", "google-gmail"], accounts: [gmail(LEVY), gmail(BILLING), { accountId: BOOKING, connectorId: "google-calendar" }] }, after: { grantedConnectors: ["google-gmail"], accounts: [gmail(LEVY)] } },
+  });
+  assert.equal(value(removed, "What changed"), "Services: 2 → 1\nService accounts: 2 removed");
+  const first = activityEvidence({ kind: "permission_change", payload: { before: { accounts: [] }, after: { accounts: [gmail(LEVY), gmail(BILLING)] } } });
+  assert.equal(value(first, "What changed"), "Service accounts: 2 added");
+  const unchanged = activityEvidence({ kind: "permission_change", payload: { before: { accounts: [gmail(LEVY)] }, after: { accounts: [gmail(LEVY)] } } });
+  assert.equal(value(unchanged, "What changed"), "Nothing changed");
+});
+
+test("a new agent's accounts are counted in its access sentence", () => {
+  const evidence = activityEvidence({
+    kind: "agent_connected",
+    payload: { changes: { credentialKind: "oauth", grants: { identityAccess: false, accounts: [{ accountId: LEVY }, { accountId: BILLING, readTools: false }], rateLimit: 120 } } },
+  });
+  const access = value(evidence, "Access it was given") ?? "";
+  assert.match(access, /Service accounts 2/);
+  assert.ok(!access.includes(LEVY) && !access.includes(BILLING));
+  const none = activityEvidence({ kind: "agent_connected", payload: { changes: { grants: { accounts: [] } } } });
+  assert.match(value(none, "Access it was given") ?? "", /Service accounts none/);
+});
+
+// Entries written before several accounts were stored the service-keyed fields; they still read
+// as they did.
+test("an older entry with services, a chosen account and service rules still reads as before", () => {
+  const evidence = activityEvidence({
+    kind: "permission_change",
+    outcome: "saved",
+    payload: {
+      before: { userId: USER, grantedConnectors: ["google-gmail"], connectorAccounts: {}, connectorPolicies: {} },
+      after: { userId: USER, grantedConnectors: ["google-gmail", "notion"], connectorAccounts: { "google-gmail": LEVY }, connectorPolicies: { notion: { changeTools: "off" } } },
+    },
+  });
+  assert.equal(value(evidence, "What changed"), "Services: 1 → 2\nService accounts: none → set\nService rules: none → set");
+  assert.ok(!JSON.stringify(evidence).includes(LEVY));
+  const connected = activityEvidence({
+    kind: "agent_connected",
+    payload: { changes: { grants: { grantedConnectors: ["google-gmail"], connectorAccounts: { "google-gmail": LEVY }, connectorPolicies: {} } } },
+  });
+  assert.equal(value(connected, "Access it was given"), "Services 1");
+});
+
 test("an intent record explains itself and pairs with its result; an unmatched one stays", () => {
   const intent = activityEvidence({ ...addTask, kind: "tool_attempt", outcome: "attempted", payload: { ...addTask.payload, resultEvidence: { outcome: "attempted" } } });
   assert.equal(intent.intent, true);
@@ -195,4 +261,22 @@ test("a life-admin save reads as what it did, counted, never what it saved", asy
   assert.equal(value(evidence, "Result"), "Done\nRecords: 2 added, 1 proposed (waiting for you to accept)");
   assert.ok(!readable(evidence).includes("travel.flight"));
   assert.equal(value(evidence, "Results ids", "technical"), [REFERENCE, ATTEMPT, REQUEST].join(", "), "the saved records' ids are technical details");
+});
+
+test("a search across inboxes names each inbox, and which weren't searched, never their ids", () => {
+  const home = "5b3c51a2-4b6c-4b55-9f7b-1d4d1c2e9a01";
+  const booking = "5b3c51a2-4b6c-4b55-9f7b-1d4d1c2e9a02";
+  const evidence = activityEvidence({
+    kind: "tool_call", tool: "google-gmail__search", outcome: "executed", connectorId: "google-gmail",
+    payload: {
+      params: { query: { q: "from:hostplus" } },
+      connectorAccountSet: [
+        { id: home, label: "levyoren1@gmail.com", outcome: "searched", count: 7 },
+        { id: booking, label: "booking@example.com", outcome: "needs reconnecting", count: 0 },
+      ],
+      resultEvidence: { outcome: "executed", counts: { messages: 7 } },
+    },
+  });
+  assert.equal(value(evidence, "Service accounts"), "levyoren1@gmail.com, booking@example.com (needs reconnecting)");
+  assert.ok(!JSON.stringify(evidence).includes(home) && !JSON.stringify(evidence).includes(booking), "no account id is shown, even as a technical detail");
 });

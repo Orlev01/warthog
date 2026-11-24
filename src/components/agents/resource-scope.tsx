@@ -20,7 +20,7 @@ const RESOURCES: Record<string, { section: string; noun: string; description: st
     section: "connectors",
     noun: "connectors",
     description:
-      "Services you connect belong to you. Choose an agent to turn one on, or pick which account it uses.",
+      "Services you connect belong to you. Choose an agent to choose which of your accounts it can use.",
   },
   vault: {
     section: "vault",

@@ -19,16 +19,18 @@ import { timeZoneFor } from "@/server/spending/time-zone";
 // immediately removes every agent's access to that service and revokes Warthog's stored
 // access to the provider"): it asks the provider to revoke the stored access where the
 // provider allows it (the oauth2 provider-sign-in kind, whose tokens Warthog holds — best
-// effort, while the tokens still exist), then in ONE transaction strips the connector slug
-// from every one of the person's agents' grants, DELETES the connection with its encrypted
-// credentials, and records the disconnection in the person's activity.
+// effort, while the tokens still exist), then in ONE transaction DELETES the connection with
+// its encrypted credentials and records the disconnection in the person's activity. Agents
+// are given accounts (docs/adr/several-accounts-per-agent.md), and an account's grants go
+// with it, so the account leaves every agent that used it; the person's other accounts of
+// the service stay granted.
 //
 // Security (each a reviewer veto):
 //   • Every read/write is member-scoped by `session.userId` — never a client value
 //     (CLAUDE.md). `load` reads only the session user's connections / agents / catalogue;
 //     disconnectService resolves the connection by (session.userId, id) FIRST, so another
 //     person's connection id is refused with their service + their agents left untouched,
-//     and the strip only ever walks the session user's own agents.
+//     and the delete is bound to the session user too.
 //   • Input is validated at the boundary (INV-102): a malformed / oversized / SQL-shaped
 //     connection id, connector id, account label, api key or requested name is refused with
 //     a 4xx `HttpError` BEFORE any query — so a mis-shaped uuid never reaches `WHERE id = $1`
@@ -49,7 +51,7 @@ import { defaultAccountsForAgents, getConnectionById, getConnectionCredentials, 
 import { cleanShortText } from "@/domain/content/untrusted";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { listAgentsForUser } from "@/server/db/agents";
-import { getConnectionPermissions, upsertPermissions } from "@/server/db/agent-permissions";
+import { agentsUsingAccount, refreshServiceCopy } from "@/server/db/agent-permissions";
 import {
   browseCatalogue,
   listConnectionsForPage,
@@ -290,11 +292,11 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   }
 
   // Build one connected-service card from its page read, naming the connector (the catalogue
-  // display name) and the agents that may use it (an agent "uses" the service when its grants
-  // list the service's connector slug).
+  // display name) and the agents that may use THIS account (docs/adr/several-accounts-per-agent.md:
+  // an agent is given accounts, so two accounts of a service can have different agents).
   function toConnectionItem(
     connection: ConnectionForPage,
-    agentsByConnector: ReadonlyMap<string, string[]>,
+    agentsByAccount: ReadonlyMap<string, string[]>,
     timeZone: string,
     defaultIds: ReadonlySet<string>,
   ): ConnectionItem {
@@ -313,7 +315,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       status: unavailable ? "error" : toStatusKey(connection.status),
       connectedAt: formatAccountTime(connection.connectedAt, timeZone, { dateOnly: true }),
       tools: unavailable ? [] : tools,
-      agents: unavailable ? [] : agentsByConnector.get(connection.id) ?? [],
+      agents: unavailable ? [] : agentsByAccount.get(connection.id) ?? [],
       defaultForAgents: defaultIds.has(connection.id),
     };
   }
@@ -393,24 +395,18 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
         ? POPULAR_SERVICES.flatMap((id) => offered.filter((item) => item.id === id))
         : [];
 
-    // The session user's OWN agents (to name which agents use each service).
-    const agents = await listAgentsForUser(db, userId);
-    const agentsByConnector = new Map<string, string[]>();
-    for (const agent of agents) {
-      const grants = await getConnectionPermissions(db, userId, agent.connectionId);
-      if (!grants || agent.status !== "connected") continue;
-      for (const slug of grants.grantedConnectors) {
-        const accounts = connections.filter(c => c.connectorId === slug);
-        const selected = grants.connectorAccounts?.[slug] ?? (accounts.length === 1 ? accounts[0]!.id : undefined);
-        if (!selected) continue;
-        const bucket = agentsByConnector.get(selected);
-        if (bucket) bucket.push(agent.displayName);
-        else agentsByConnector.set(selected, [agent.displayName]);
-      }
+    // The session user's OWN connected agents, named under each account they may use (both
+    // reads member-scoped; a disconnected agent uses nothing).
+    const agents = (await listAgentsForUser(db, userId)).filter((agent) => agent.status === "connected");
+    const using = await agentsUsingAccount(db, userId);
+    const agentsByAccount = new Map<string, string[]>();
+    for (const [accountId, agentConnections] of using) {
+      const named = agents.filter((agent) => agentConnections.includes(agent.connectionId)).map((agent) => agent.displayName);
+      if (named.length > 0) agentsByAccount.set(accountId, named);
     }
 
     // The accounts the person turned on for new agents (docs/adr/default-services.md).
-    const defaultIds = new Set(Object.values(await defaultAccountsForAgents(db, userId)));
+    const defaultIds = new Set(await defaultAccountsForAgents(db, userId));
 
     return {
       groups,
@@ -418,7 +414,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       categories,
       category,
       connections: connections
-        .map((connection) => toConnectionItem(connection, agentsByConnector, timeZone, defaultIds))
+        .map((connection) => toConnectionItem(connection, agentsByAccount, timeZone, defaultIds))
         .sort(byAttentionThenName),
       query: browse.query,
       // A miss is judged on what can be offered: a term that only matched a service that
@@ -516,13 +512,13 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     );
   }
 
-  // Disconnect ONE of the session user's own connected services. Shape-guard the id at the
+  // Disconnect ONE of the session user's own connected accounts. Shape-guard the id at the
   // boundary (a 4xx before any query) and resolve it member-scoped (another person's id is
   // refused). Then ask the provider to revoke the stored access where it allows it — best
   // effort, BEFORE the tokens are deleted, so a provider outage never keeps the person
-  // connected — and in one transaction strip the service's connector from EVERY one of the
-  // person's agents' grants, delete the connection with its encrypted credentials, and
-  // record the disconnection.
+  // connected — and in one transaction delete the connection with its encrypted credentials
+  // and record the disconnection. Deleting it removes the account from every agent that uses
+  // it (its grants cascade with it); the person's other accounts of the service stay granted.
   async function disconnectService(
     session: Session,
     connectionId: string,
@@ -555,24 +551,17 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       }
     }
 
-    // One transaction: the grant strip, the delete and the activity record commit together
-    // or not at all. The record is LAST, so a failure in any step rolls the others back.
-    const agents = await listAgentsForUser(db, userId);
+    // One transaction: the delete and the activity record commit together or not at all. The
+    // record is LAST, so a failure in either step rolls the other back.
     const recordingDek = await dekFor(userId);
     await withTransaction(db, async (tx) => {
-      for (const agent of agents) {
-        const grants = await getConnectionPermissions(tx, userId, agent.connectionId, { lock: true });
-        if (!grants || !grants.grantedConnectors.includes(connectorId)) continue;
-        if (grants.connectorAccounts?.[connectorId] && grants.connectorAccounts[connectorId] !== id) continue;
-        await upsertPermissions(tx, {
-          ...grants,
-          grantedConnectors: grants.grantedConnectors.filter((slug) => slug !== connectorId),
-        });
-      }
-
-      // Forget the connection and its credentials (member-scoped). Nothing references a
-      // connection row, so re-granting the connector later cannot revive the old credential.
+      // Forget the connection and its credentials (member-scoped). The agents' grants of this
+      // account go with it (agent_account_grants cascades), so no agent keeps a choice of an
+      // account that's gone, and connecting again later grants it to no one.
       await tx.query("DELETE FROM connections WHERE id = $1 AND user_id = $2", [id, userId]);
+      // Until the old service columns are dropped, keep their copy in line, so an earlier release
+      // never reaches the service's remaining accounts through it.
+      await refreshServiceCopy(tx, userId);
 
       // Warthog writes the record (principle 14): which service and account went, and whether
       // the provider confirmed the revocation (null when the kind has nothing to revoke).
@@ -635,16 +624,17 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   }
 
   // Turn "On for new agents" on or off for one of the person's own accounts
-  // (docs/adr/default-services.md): every agent connected afterwards starts with that service,
-  // set to that account; agents already connected don't change. Turning on a second account of
-  // a service moves it there. The change and its activity record commit together; another
-  // person's id changes nothing and records nothing.
+  // (docs/adr/default-services.md): every agent connected afterwards starts with that account
+  // ticked; agents already connected don't change. Each account's setting is its own, so
+  // several accounts of a service can be on (docs/adr/several-accounts-per-agent.md). The
+  // change and its activity record commit together; another person's id changes nothing and
+  // records nothing.
   async function setDefaultForAgents(session: Session, input: { connectionId: string; on: boolean }): Promise<{ readonly ok: boolean }> {
     const { connectionId, on } = parseParams(defaultForAgentsSchema, input);
     const userId = session.userId;
     const connection = await getConnectionById(db, userId, connectionId);
     if (!connection) return { ok: false };
-    const before = Object.values(await defaultAccountsForAgents(db, userId)).includes(connection.id);
+    const before = (await defaultAccountsForAgents(db, userId)).includes(connection.id);
     const recordingDek = await dekFor(userId);
     const changed = await withTransaction(db, async (tx) => {
       if (!(await setConnectionDefault(tx, { userId, id: connection.id, on }))) return false;

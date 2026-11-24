@@ -51,10 +51,11 @@ import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
 import { getAgentByConnectionId, getAgentById } from "../db/agents";
 import { getApproval } from "../db/approvals";
-import { getConnectionPermissions } from "../db/agent-permissions";
-import { listConnectionsForUser } from "../db/connections";
+import { getConnectionPermissions, type ConnectionPermissions } from "../db/agent-permissions";
+import { listConnectionsForUser, type Connection } from "../db/connections";
 import { getProcessCatalogue, type CatalogueIndex } from "../connectors/catalogue";
-import { connectorToolsetFor, createConnectorToolExecutor, selectConnectorAccount } from "../connectors/tool-routing";
+import { connectorToolsetFor, createConnectorToolExecutor } from "../connectors/tool-routing";
+import { bindAccount, grantedAccounts, type ServiceAccount } from "../../domain/permissions/account-access";
 import { HttpError } from "../http/validate";
 import { createGuardedFetch } from "../http/guarded-fetch";
 import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approval-notifier";
@@ -131,6 +132,18 @@ const UNKNOWN_TOOL = "tools/call";
 // An address plain enough to put into a mail search without changing what the search means.
 const SEARCHABLE_ADDRESS = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
+// The mail searches that cover every inbox the agent may read when no account is named
+// (docs/adr/several-accounts-per-agent.md, decision 5).
+const MAIL_SEARCH_TOOLS = new Set(["google-gmail__search", "microsoft-outlook-mail__search"]);
+
+// The field a mail search pages with, when it asks for a further page: a page belongs to one
+// inbox (Gmail's pageToken; Outlook's $skip, with or without the "$", in any case).
+function pagingField(call: AgentCall): string | undefined {
+  const query = (call.params as { query?: Record<string, unknown> } | undefined)?.query ?? {};
+  if (call.tool === "google-gmail__search") return query.pageToken !== undefined ? "pageToken" : undefined;
+  return Object.keys(query).some((key) => key.replace(/^\$/, "").toLowerCase() === "skip") ? "$skip" : undefined;
+}
+
 // A thrown tool call maps to a plain-English reason the agent sees; an internal failure is
 // never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
 const TOOL_FAILED_REASON = "The tool call could not be completed. A change may have occurred; inspect Activity and the service before retrying.";
@@ -152,6 +165,17 @@ export const RUN_FIELD = z
 export function withRunField(schema: z.ZodType): z.ZodType {
   if (!(schema instanceof z.ZodObject) || "run" in schema.shape) return schema;
   return schema.safeExtend({ run: RUN_FIELD });
+}
+
+// A connected account as account binding sees it.
+function serviceAccount(connection: Connection): ServiceAccount {
+  return { id: connection.id, connectorId: connection.connectorId, label: connection.accountLabel, connected: connection.status === "connected" };
+}
+
+// The person's connected accounts that this agent was given.
+function grantedLive(connections: readonly Connection[], permissions: Pick<ConnectionPermissions, "accounts">): Connection[] {
+  const granted = new Set(permissions.accounts.map((account) => account.accountId));
+  return connections.filter((c) => c.status === "connected" && granted.has(c.id));
 }
 
 // Links the current request to the run a call names, when it is one of this agent's.
@@ -376,9 +400,12 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
   // doing nothing.
   const executeTool = async (call: AgentCall, connection: AgentConnection): Promise<unknown> => {
     if (call.connector !== null) {
+      // The bound account must still be one the agent was given, and still connected; a held
+      // call never runs on any other account (docs/adr/several-accounts-per-agent.md).
       const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-      const selected = selectConnectorAccount(await listConnectionsForUser(db, connection.userId), call.connector, grants?.connectorAccounts?.[call.connector]);
-      if (!selected || selected.id !== call.connectorAccountId) return { status: "refused", reason: "The service account changed or is unavailable. Submit a new request." };
+      const granted = grants?.accounts.some((account) => account.accountId === call.connectorAccountId && account.connectorId === call.connector) === true;
+      const live = (await listConnectionsForUser(db, connection.userId)).some((c) => c.id === call.connectorAccountId && c.connectorId === call.connector && c.status === "connected");
+      if (!granted || !live) return { status: "refused", reason: "The service account changed or is unavailable. Submit a new request." };
       return executeConnectorTool({ ...call, connector: call.connector }, connection.userId, call.connectorAccountId);
     }
     switch (call.tool) {
@@ -388,8 +415,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
         if(!grants) return {tools:[],nextCursor:null};
         const catalogue=deps.catalogue ?? getProcessCatalogue(config);
         const connections=await listConnectionsForUser(db,connection.userId);
-        const selected=connections.filter(c=>grants.grantedConnectors.includes(c.connectorId)&&selectConnectorAccount(connections,c.connectorId,grants.connectorAccounts?.[c.connectorId])?.id===c.id);
-        const declarations=connectorToolsetFor(connections,grants.grantedConnectors,catalogue,grants.connectorAccounts,await provider.toolsets(connection.userId,selected));
+        const declarations=connectorToolsetFor(connections,grants.accounts,catalogue,await provider.toolsets(connection.userId,grantedLive(connections,grants)));
         const all=createToolRegistry({pipeline}).resolveTools(grants,declarations,{expanded:true}).filter(t=>t.name.includes("__")&&(!query.query||`${t.name} ${t.description}`.toLowerCase().includes(query.query.toLowerCase())));
         const start=query.cursor??0,end=start+(query.limit??20);
         return {tools:all.slice(start,end).map(t=>({name:t.name,title:t.title,description:t.description,inputSchema:z.toJSONSchema(t.inputSchema),annotations:t.annotations})),nextCursor:end<all.length?end:null};
@@ -475,13 +501,35 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
         unchecked: recipients.filter((address) => !searchable.includes(address)),
       };
     },
-    prepareCall: async (call, connection) => {
+    // One of the agent's granted accounts for each connector call: the one it named, the one an
+    // approved hold or an Undo was bound to, the inbox a message id says it's in, or the only one
+    // that fits. Never a fallback. A mail search with nothing of the kind covers every inbox the
+    // agent may read, one bound call each.
+    bindAccount: async (call, connection, permissions) => {
       if (call.connector === null) return call;
-      const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-      const selected = selectConnectorAccount(await listConnectionsForUser(db, connection.userId), call.connector, grants?.connectorAccounts?.[call.connector]);
-      if (!selected) return null;
-      if (call.connectorAccountId && selected.id !== call.connectorAccountId) return null;
-      return { ...call, connectorAccountId: selected.id, connectorAccountLabel: selected.accountLabel };
+      const accounts = (await listConnectionsForUser(db, connection.userId)).map(serviceAccount);
+      const fanOut = MAIL_SEARCH_TOOLS.has(call.tool) && !call.requestedAccount && !call.idHandle && !call.connectorAccountId;
+      const paging = fanOut ? pagingField(call) : undefined;
+      const binding = bindAccount({
+        serviceName: catalogue.get(call.connector)?.name ?? call.connector,
+        granted: grantedAccounts(permissions.accounts, accounts, call.connector),
+        defaults: permissions,
+        tool: { name: call.tool, makesChange: call.makesChange },
+        ...(call.requestedAccount ? { named: call.requestedAccount } : {}),
+        ...(call.connectorAccountId ? { presetId: call.connectorAccountId } : {}),
+        ...(call.idHandle ? { idHandle: call.idHandle } : {}),
+        ...(fanOut ? { fanOut: true } : {}),
+        ...(paging ? { paging } : {}),
+      });
+      if (binding.kind === "refused") return { refused: binding.reason };
+      if (binding.kind === "several") {
+        return {
+          several: binding.accounts.map((account) => ({ ...call, connectorAccountId: account.id, connectorAccountLabel: account.label })),
+          needsReconnecting: binding.accounts.filter((account) => !account.connected).map((account) => account.id),
+          ...(binding.note ? { note: binding.note } : {}),
+        };
+      }
+      return { ...call, connectorAccountId: binding.account.id, connectorAccountLabel: binding.account.label };
     },
     notifyApprovalCreated: async (input) => {
       try {
@@ -571,18 +619,9 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       // The connector tools this connection may use: its person's connected services that
       // this agent is granted (member-scoped by the verified connection's owner).
       const connections = await listConnectionsForUser(db, connection.userId);
-      const providerTools = permissions ? await provider.toolsets(connection.userId,connections.filter(c => permissions.grantedConnectors.includes(c.connectorId) && selectConnectorAccount(connections,c.connectorId,permissions.connectorAccounts?.[c.connectorId])?.id===c.id)) : {};
+      const providerTools = permissions ? await provider.toolsets(connection.userId, grantedLive(connections, permissions)) : {};
       tools = permissions
-        ? registry.resolveTools(
-            permissions,
-            connectorToolsetFor(
-              connections,
-              permissions.grantedConnectors,
-              catalogue,
-              permissions.connectorAccounts,
-              providerTools,
-            ),
-          )
+        ? registry.resolveTools(permissions, connectorToolsetFor(connections, permissions.accounts, catalogue, providerTools))
         : registry.coreTools;
     } else {
       // No connection resolved: advertise the core tools so tools/list still answers; a

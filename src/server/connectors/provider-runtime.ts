@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { withTransaction, type Db } from "../db/index";
-import { pinAgentsToSoleAccount } from "../db/agent-permissions";
 import { encrypt, decrypt } from "../crypto/envelope";
 import {
   createConnection,
@@ -213,8 +212,6 @@ export function createProviderRuntime(deps: {
             status: "connected",
           });
         } else {
-          // Agents that use the service keep the account they use today.
-          await pinAgentsToSoleAccount(tx, input.userId, entry.id);
           connection = await createConnection(
             tx,
             {

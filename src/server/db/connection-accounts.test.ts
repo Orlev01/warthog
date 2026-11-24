@@ -2,22 +2,23 @@
 //   - findConnectionByAccount finds the person's own connection for one provider account,
 //     ignoring case, so connecting the same Google or Microsoft account again renews it;
 //   - renameConnection names one of the person's own accounts, never another person's;
-//   - pinAgentsToSoleAccount keeps every agent on the account it uses today, just before
-//     another account of that service is added.
+//   - connecting another account of a service grants it to no agent: each agent keeps exactly
+//     the accounts it was given (docs/adr/several-accounts-per-agent.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
 import { createConnection, findConnectionByAccount, renameConnection } from "./connections";
-import { getConnectionPermissions, pinAgentsToSoleAccount, upsertPermissions } from "./agent-permissions";
+import { agentsUsingAccount, getConnectionPermissions, upsertPermissions } from "./agent-permissions";
+import { saveApiKeyConnection } from "../connectors/api-key";
 import { createUser } from "./users";
+import type { CatalogueEntry } from "../../domain/catalogue/schema";
 import { freshDb } from "../../test/db";
 import type { Db } from "./index";
 
 const clock = { now: () => new Date("2026-11-17T00:00:00Z") };
-const AGENT_A = "33333333-3333-3333-3333-333333333333";
-const AGENT_B = "44444444-4444-4444-4444-444444444444";
-const AGENT_C = "55555555-5555-5555-5555-555555555555";
+const AGENT_A = "33333333-3333-4333-8333-333333333333";
+const AGENT_B = "44444444-4444-4444-8444-444444444444";
 
 async function person(db: Db, who: string): Promise<string> {
   return (await createUser(db, { email: `${who}@example.test`, wrappedDek: "wrapped" })).id;
@@ -28,13 +29,25 @@ async function connect(db: Db, userId: string, connectorId: string, accountLabel
   return connection.id;
 }
 
-async function grant(db: Db, userId: string, agent: string, grantedConnectors: string[], connectorAccounts: Record<string, string> = {}): Promise<void> {
+async function grant(db: Db, userId: string, agent: string, accountIds: string[]): Promise<void> {
   await upsertPermissions(db, {
-    userId, connectionId: agent, grantedConnectors, connectorAccounts, readTools: true, changeTools: "ask_first",
+    userId, connectionId: agent, accounts: accountIds.map((accountId) => ({ accountId })), readTools: true, changeTools: "ask_first",
     identityAccess: false, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [],
     memoryRead: false, sharing: false, rulesScope: [], rateLimit: 60,
   });
 }
+
+// A key service connected without a check request, so saving a key makes no outbound call.
+const KEY_SERVICE: CatalogueEntry = {
+  id: "plainkey",
+  name: "Plain Key Service",
+  aliases: ["plainkey"],
+  category: "developer-tools",
+  auth_kind: "api_key",
+  base_url: "https://api.plain.example",
+  auth: { header: "X-API-Key: {api_key}" },
+  instructions: "Create a key. See https://docs.plain.example/keys.",
+};
 
 test("findConnectionByAccount finds the person's own account of that service, ignoring case", async () => {
   const db = await freshDb();
@@ -70,34 +83,23 @@ test("renameConnection names the person's own account and refuses another person
   }
 });
 
-test("pinAgentsToSoleAccount keeps each agent on the one account it uses, and only then", async () => {
+test("connecting another account of a service grants it to no agent", async () => {
   const db = await freshDb();
   try {
     const me = await person(db, "me");
-    const other = await person(db, "other");
-    const first = await connect(db, me, "google-gmail", "first@gmail.test");
-    await grant(db, me, AGENT_A, ["google-gmail", "notion"]);
-    await grant(db, me, AGENT_B, ["google-gmail"], { "google-gmail": "66666666-6666-6666-6666-666666666666" });
-    await grant(db, me, AGENT_C, ["notion"]);
-    await grant(db, other, AGENT_A, ["google-gmail"]);
+    const first = await connect(db, me, KEY_SERVICE.id, "First workspace");
+    await grant(db, me, AGENT_A, [first]);
+    await grant(db, me, AGENT_B, []);
 
-    await pinAgentsToSoleAccount(db, me, "google-gmail");
+    const { connection: second } = await saveApiKeyConnection(
+      { entry: KEY_SERVICE, userId: me, accountLabel: "Second workspace", apiKey: "key-2", dek: randomBytes(32) },
+      { db, clock, fetch: (async () => { throw new Error("no outbound call"); }) as unknown as typeof fetch },
+    );
 
-    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_A))?.connectorAccounts, { "google-gmail": first }, "an unpinned agent stays on the account it used");
-    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_B))?.connectorAccounts, { "google-gmail": "66666666-6666-6666-6666-666666666666" }, "a chosen account is never changed");
-    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_C))?.connectorAccounts, {}, "an agent without the service is untouched");
-    assert.deepEqual((await getConnectionPermissions(db, other, AGENT_A))?.connectorAccounts, {}, "another person's agents are untouched");
-
-    // With two accounts already, there is no one account to keep an agent on.
-    await connect(db, me, "google-gmail", "second@gmail.test");
-    await grant(db, me, AGENT_C, ["google-gmail"]);
-    await pinAgentsToSoleAccount(db, me, "google-gmail");
-    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_C))?.connectorAccounts, {});
-
-    // With none, there is nothing to keep.
-    await grant(db, me, AGENT_C, ["microsoft-outlook-mail"]);
-    await pinAgentsToSoleAccount(db, me, "microsoft-outlook-mail");
-    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_C))?.connectorAccounts, {});
+    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_A))?.accounts, [{ accountId: first, connectorId: KEY_SERVICE.id }],
+      "an agent using the service keeps only the account it was given");
+    assert.deepEqual((await getConnectionPermissions(db, me, AGENT_B))?.accounts, [], "an agent without the service still has none");
+    assert.equal((await agentsUsingAccount(db, me)).get(second.id), undefined, "no agent uses the new account");
   } finally {
     await db.close();
   }

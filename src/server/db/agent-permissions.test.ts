@@ -107,6 +107,7 @@ import { z } from "zod";
 import { getConnectionPermissions, upsertPermissions } from "./agent-permissions";
 import { createUser } from "./users";
 import { freshDb } from "../../test/db";
+import { grantServices } from "../../test/grants";
 import { loadMigrations, runMigrations, type Db } from "./index";
 import { parseBody, HttpError } from "../http/validate";
 
@@ -241,7 +242,7 @@ test("upsertPermissions writes a connection's grants and getConnectionPermission
       rateLimit: 60,
     });
 
-    const saved = await upsertPermissions(db, grants);
+    const saved = await grantServices(db, grants);
     // upsert returns the grants it wrote.
     assert.equal(saved.userId, userId, "the saved grants belong to the person");
     assert.equal(saved.connectionId, CONN_A, "the saved grants are for the connection");
@@ -250,7 +251,7 @@ test("upsertPermissions writes a connection's grants and getConnectionPermission
     assert.ok(loaded, "a connection's grants are readable by their owner");
     assert.equal(loaded!.userId, userId, "scoped to the person");
     assert.equal(loaded!.connectionId, CONN_A, "and to the connection");
-    assert.deepEqual(loaded!.grantedConnectors, ["gmail", "notion", "linear"], "granted connectors round-trip");
+    assert.deepEqual(loaded!.grantedConnectors, ["gmail", "linear", "notion"], "granted services round-trip, through their accounts");
     assert.equal(loaded!.readTools, true, "read-tools setting round-trips");
     assert.equal(loaded!.changeTools, "allow", "change-tools setting round-trips");
     assert.equal(loaded!.identityAccess, true, "low-tier identity access round-trips");
@@ -287,8 +288,8 @@ test("upsertPermissions overwrites the same (user, connection) in place, never d
   try {
     const userId = await makeUser(db, "ac1-upsert");
 
-    await upsertPermissions(db, baseGrants(userId, CONN_A, { rateLimit: 120, changeTools: "ask_first" }));
-    await upsertPermissions(
+    await grantServices(db, baseGrants(userId, CONN_A, { rateLimit: 120, changeTools: "ask_first" }));
+    await grantServices(
       db,
       baseGrants(userId, CONN_A, { rateLimit: 30, changeTools: "off", grantedConnectors: ["dropbox"] }),
     );
@@ -314,7 +315,7 @@ test("upsertPermissions rejects card access enabled with no budget set, and writ
 
     await assert.rejects(
       async () => {
-        await upsertPermissions(db, baseGrants(userId, CONN_A, { cardAccess: true, cardBudget: null }));
+        await grantServices(db, baseGrants(userId, CONN_A, { cardAccess: true, cardBudget: null }));
       },
       "card access cannot be switched on without a budget",
     );
@@ -356,7 +357,7 @@ test("upsertPermissions allows card access OFF with no budget", async () => {
   try {
     const userId = await makeUser(db, "ac2-off");
 
-    await upsertPermissions(db, baseGrants(userId, CONN_A, { cardAccess: false, cardBudget: null }));
+    await grantServices(db, baseGrants(userId, CONN_A, { cardAccess: false, cardBudget: null }));
 
     const loaded = await getConnectionPermissions(db, userId, CONN_A);
     assert.equal(loaded!.cardAccess, false, "card access off needs no budget");
@@ -377,7 +378,7 @@ test("getConnectionPermissions never returns another user's connection permissio
     const alice = await makeUser(db, "owner-alice");
     const bob = await makeUser(db, "owner-bob");
 
-    await upsertPermissions(db, baseGrants(alice, CONN_A, { rateLimit: 90 }));
+    await grantServices(db, baseGrants(alice, CONN_A, { rateLimit: 90 }));
 
     assert.ok(await getConnectionPermissions(db, alice, CONN_A), "Alice can read her own connection's grants");
     assert.equal(
@@ -396,11 +397,11 @@ test("upsertPermissions cannot change another user's connection permissions by c
     const alice = await makeUser(db, "change-alice");
     const bob = await makeUser(db, "change-bob");
 
-    await upsertPermissions(db, baseGrants(alice, CONN_A, { rateLimit: 120, changeTools: "allow" }));
+    await grantServices(db, baseGrants(alice, CONN_A, { rateLimit: 120, changeTools: "allow" }));
 
     // Bob upserts the SAME connection id — member-scoped, so this writes BOB's own row
     // and must not touch Alice's grants for that connection id.
-    await upsertPermissions(db, baseGrants(bob, CONN_A, { rateLimit: 10, changeTools: "off" }));
+    await grantServices(db, baseGrants(bob, CONN_A, { rateLimit: 10, changeTools: "off" }));
 
     const alicePerms = await getConnectionPermissions(db, alice, CONN_A);
     assert.equal(alicePerms!.rateLimit, 120, "Alice's grants are untouched by Bob's upsert on the same connection id");
@@ -425,7 +426,7 @@ test("upsertPermissions binds the user id and connection id as parameters, never
   // The recording db returns no rows, so an upsert reading a row back may reject — either
   // way, the query it issued must have BOUND the probe, not spliced it.
   try {
-    await upsertPermissions(db, baseGrants(probe, probe));
+    await grantServices(db, baseGrants(probe, probe));
   } catch {
     // no row came back from the recording db; irrelevant to what we assert below.
   }
@@ -459,7 +460,7 @@ test("a SQL-injection probe in a granted connector is stored as data: the table 
     const userId = await makeUser(db, "inject");
     const probe = "gmail'); DROP TABLE agent_permissions; --";
 
-    await upsertPermissions(db, baseGrants(userId, CONN_A, { grantedConnectors: ["gmail", probe] }));
+    await grantServices(db, baseGrants(userId, CONN_A, { grantedConnectors: ["gmail", probe] }));
 
     assert.equal(
       await tableExists(db, "agent_permissions"),
@@ -468,7 +469,7 @@ test("a SQL-injection probe in a granted connector is stored as data: the table 
     );
 
     const loaded = await getConnectionPermissions(db, userId, CONN_A);
-    assert.deepEqual(loaded!.grantedConnectors, ["gmail", probe], "the probe round-trips verbatim as data");
+    assert.deepEqual([...loaded!.grantedConnectors].sort(), ["gmail", probe].sort(), "the probe round-trips verbatim as data");
   } finally {
     await db.close();
   }
@@ -510,7 +511,7 @@ function permissionsHandler(db: Db, sessionUserId: string): (req: Request) => Pr
   return async (req: Request): Promise<Response> => {
     try {
       const body = await parseBody(schema, req, { maxBytes: 4 * 1024 });
-      const saved = await upsertPermissions(db, { userId: sessionUserId, ...body });
+      const saved = await grantServices(db, { userId: sessionUserId, ...body });
       return new Response(JSON.stringify({ connectionId: saved.connectionId }), { status: 200 });
     } catch (err) {
       if (err instanceof HttpError) {

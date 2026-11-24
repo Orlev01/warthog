@@ -44,7 +44,6 @@ import {
   type Connection,
   type ConnectionStatus,
 } from "../db/connections";
-import { pinAgentsToSoleAccount } from "../db/agent-permissions";
 import { REFRESH_TYPE } from "./jobs";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
@@ -250,7 +249,6 @@ export async function exchangeCodeForConnection(
     const renewed = await renewConnection(deps.db, { userId: input.userId, id: existing.id, credentials, status: input.status ?? "connected" }, input.dek, deps.clock);
     return { ...renewed, reused: true };
   }
-  await pinAgentsToSoleAccount(deps.db, input.userId, input.entry.id);
   return createConnection(
     deps.db,
     { userId: input.userId, connectorId: input.entry.id, accountLabel, credentials, status: input.status },

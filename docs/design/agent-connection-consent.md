@@ -32,7 +32,7 @@ template silently restore an unchecked capability.
 - Memory reading and saving are independent, matching the existing server model.
 - Tasks and life-admin records include changes, not only viewing.
 - Services require an explicit selection. Reads are allowed; changes ask first.
-  Multiple accounts still require selection in the agent workspace before use.
+  Multiple accounts still require selection in the agent workspace before use. (Superseded 24 Nov 2026: the screen lists each account as its own checkbox, and an agent can be given several accounts of a service; see ../adr/several-accounts-per-agent.md.)
 - Protected identity and cards permit requests; each release still needs approval.
   A card budget limits approved releases, not purchases or bank charges outside
   Warthog.

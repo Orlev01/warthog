@@ -46,3 +46,7 @@ connected in Warthog. It reached none of them, for two reasons:
 - **Brief:** the Agent consent screen requirement is amended (services on for new agents start
   ticked).
 - **Design doc:** technical-design.md §7 links here.
+
+Superseded in part (24 Nov 2026) by [one agent, several accounts of a service](several-accounts-per-agent.md):
+several accounts of a service can be on for new agents, and the consent and access-key screens tick
+each of them. Migration 0122 drops the one-per-service index.

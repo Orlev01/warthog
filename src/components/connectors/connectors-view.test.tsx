@@ -790,3 +790,29 @@ test("a lapsed Google or Microsoft account offers Reconnect, naming the account 
   assert.match(visibleText(markup), /Reconnect shared diary/);
   assert.doesNotMatch(visibleText(markup), /refresh tools/);
 });
+
+// docs/adr/several-accounts-per-agent.md — each account is its own row. Disconnecting one removes
+// it from every agent that uses it; the person's other accounts of that service stay as they are.
+test("each account says disconnecting removes it from every agent; other accounts of its service stay", () => {
+  const home: ConnectionItem = { ...CONN_A, id: "conn-home", connectorId: "fastmail", accountLabel: "home mailbox" };
+  const work: ConnectionItem = { ...CONN_A, id: "conn-work", connectorId: "fastmail", accountLabel: "work mailbox", agents: ["Inbox helper"] };
+  const text = visibleText(render(base({ groups: [], connections: [home, work, CONN_C] })));
+  assert.equal(text.split("Disconnecting removes this account from every agent that uses it.").length - 1, 3, "on every account");
+  assert.equal(text.split("Your other Fastmail accounts stay as they are.").length - 1, 2, "only where the service has other accounts");
+  assert.doesNotMatch(text, /Your other Dropbox accounts/);
+});
+
+// Several accounts of a service can be on for new agents: each switch is its own, and none
+// claims that turning it on moves the switch from another account.
+test("two accounts of a service can both be on for new agents", () => {
+  const home: ConnectionItem = { ...CONN_A, id: "conn-home", connectorId: "fastmail", accountLabel: "home mailbox", defaultForAgents: true };
+  const work: ConnectionItem = { ...CONN_A, id: "conn-work", connectorId: "fastmail", accountLabel: "work mailbox", defaultForAgents: true };
+  const billing: ConnectionItem = { ...CONN_A, id: "conn-billing", connectorId: "fastmail", accountLabel: "billing mailbox" };
+  const markup = render(base({ groups: [], connections: [home, work, billing], defaultForAgentsAction: noopAction }));
+  const switches = [...markup.matchAll(/<input[^>]*role="switch"[^>]*>/g)].map((m) => m[0]);
+  assert.deepEqual(switches.map((s) => /checked=""/.test(s)), [true, true, false]);
+  const text = visibleText(markup);
+  assert.equal(text.split("Every agent you connect from now on starts with this Fastmail account.").length - 1, 2);
+  assert.match(text, /Turn on so every agent you connect from now on starts with this Fastmail account\./);
+  assert.doesNotMatch(text, /New agents use|instead/);
+});

@@ -106,7 +106,8 @@ export function AgentOverview({
   lastActive?: string | null;
 }) {
   const name = data.agent.displayName;
-  const grantedServices = permissions.connectors.filter((c) => c.granted !== false).length;
+  // Counted by account: an agent can use several accounts of one service.
+  const grantedAccounts = permissions.accounts.filter((account) => account.grant !== null).length;
   const skills = permissions.skillCount ?? permissions.skills.filter((s) => s.granted).length;
   const attention = attentionCount(data.auditSummary);
   const tasksAndRecords =
@@ -118,7 +119,7 @@ export function AgentOverview({
           ? "Can use your records"
           : "Tasks and records off";
   const cards = [
-    ["connectors", "Connectors", `${plural(grantedServices, "service", "services")} allowed`],
+    ["connectors", "Connectors", `${plural(grantedAccounts, "account", "accounts")} allowed`],
     [
       "vault",
       "Vault",

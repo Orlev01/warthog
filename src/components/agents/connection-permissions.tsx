@@ -5,8 +5,8 @@ import { Check, ChevronDown, Info, SlidersHorizontal } from "lucide-react";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import {
-  CONNECTION_CAPABILITIES, CONNECTION_PRESETS,
-  type ChoiceKey, type ConnectionChoices, type ConnectionService,
+  CONNECTION_CAPABILITIES, CONNECTION_PRESETS, accountName, byServiceThenAccount,
+  type ChoiceKey, type ConnectionAccount, type ConnectionChoices,
 } from "@/domain/permissions/connection-choices";
 import type { PermissionTemplate } from "@/domain/permissions/templates";
 import { formatMoney } from "@/domain/approvals/request-sentence";
@@ -32,8 +32,21 @@ function PermissionChoice({ choice, state, onChange }: { choice: ChoiceKey; stat
   </div>;
 }
 
-export function ConnectionPermissions({ template, state, services = [], onTemplate, onChange, currency = "AUD" }: {
-  template: PermissionTemplate; state: ConnectionChoices; services?: readonly ConnectionService[];
+// The person's connected accounts, one checkbox each (docs/adr/several-accounts-per-agent.md):
+// each account is its own grant, so two Gmail accounts are two rows, listed by service and
+// then account.
+function AccountChoices({ accounts, state, onChange }: { accounts: readonly ConnectionAccount[]; state: ConnectionChoices; onChange: (state: ConnectionChoices) => void }) {
+  const toggle = (id: string, on: boolean) => onChange({ ...state, accounts: on ? [...state.accounts.filter(ticked => ticked !== id), id] : state.accounts.filter(ticked => ticked !== id) });
+  return <>
+    {[...accounts].sort(byServiceThenAccount).map(account => <div className="wh-permission-row" key={account.id}>
+      <label className="wh-permission-label"><input type="checkbox" name="account" value={account.id} checked={state.accounts.includes(account.id)} onChange={e => toggle(account.id, e.target.checked)} /><span>{accountName(account)}</span></label>
+      <p>{MAIL_CONNECTOR_IDS.has(account.connectorId) ? "Reads a checked copy of your email, without sign-in codes or password links." : "Read information using this service’s available tools."} Changes: Ask me first.</p>
+    </div>)}
+  </>;
+}
+
+export function ConnectionPermissions({ template, state, accounts = [], onTemplate, onChange, currency = "AUD" }: {
+  template: PermissionTemplate; state: ConnectionChoices; accounts?: readonly ConnectionAccount[];
   onTemplate: (template: PermissionTemplate) => void; onChange: (state: ConnectionChoices) => void; currency?: string;
 }) {
   const [editing, setEditing] = React.useState(template === "custom");
@@ -69,13 +82,10 @@ export function ConnectionPermissions({ template, state, services = [], onTempla
           </div> : null}
         </fieldset>)}
         <fieldset className="wh-permission-group">
-          <legend>Your connected services</legend>
-          <p className="text-sm text-fg-muted">Selected services allow reads. Changes are set to <strong>Ask me first</strong>, and your rules still apply.</p>
-          {services.length ? services.map(service => <div className="wh-permission-row" key={service.id}>
-            <label className="wh-permission-label"><input type="checkbox" name="service" value={service.id} checked={state.services.includes(service.id)} onChange={e => onChange({ ...state, services: e.target.checked ? [...state.services.filter(id => id !== service.id), service.id] : state.services.filter(id => id !== service.id) })} /><span>Read from {service.name}</span></label>
-            <p>{MAIL_CONNECTOR_IDS.has(service.id) ? "Reads a checked copy of your email, without sign-in codes or password links." : "Read information using this service’s available tools."} Changes: Ask me first.</p>
-          </div>) : <p className="wh-permission-empty">No services connected. You can connect a service and grant this agent access later.</p>}
-          {services.length ? <PermissionHelp label="How service access works">For example, an email service may allow searching messages; sending or changing something asks you first. Available tools depend on the service. If you connected multiple accounts for a service, choose its account in the agent’s settings before it can be used.</PermissionHelp> : null}
+          <legend>Your connected accounts</legend>
+          <p className="text-sm text-fg-muted">Selected accounts allow reads. Changes are set to <strong>Ask me first</strong>, and your rules still apply.</p>
+          {accounts.length ? <AccountChoices accounts={accounts} state={state} onChange={onChange} /> : <p className="wh-permission-empty">No services connected. You can connect a service and grant this agent access later.</p>}
+          {accounts.length ? <PermissionHelp label="How service access works">For example, an email service may allow searching messages; sending or changing something asks you first. Available tools depend on the service. Each account is separate. You can change these later in the agent’s settings.</PermissionHelp> : null}
         </fieldset>
       </div>
     </details>
@@ -93,18 +103,18 @@ function budgetText(amount: string, currency: string): string {
   return amount.trim() === "" || !Number.isFinite(value) ? "—" : formatMoney(value, currency);
 }
 
-export function ConnectionAccessSummary({ state, services = [], currency = "AUD" }: { state: ConnectionChoices; services?: readonly ConnectionService[]; currency?: string }) {
+export function ConnectionAccessSummary({ state, accounts = [], currency = "AUD" }: { state: ConnectionChoices; accounts?: readonly ConnectionAccount[]; currency?: string }) {
   const everyday: ChoiceKey[] = ["identity", "memoryRead", "memoryWrite", "tasks", "records"];
-  const selected = services.filter(service => state.services.includes(service.id));
+  const selected = accounts.filter(account => state.accounts.includes(account.id)).sort(byServiceThenAccount);
   return <div className="wh-permission-summary">
     <div><h3>Allowed through Warthog</h3>
-      <ul>{everyday.filter(key => state[key]).map(key => <li key={key}>{CONNECTION_CAPABILITIES[key].label}</li>)}<li>Assigned skills and your preferences</li>{selected.map(service => <li key={service.id}>Read from {service.name}; changes ask you first</li>)}</ul>
+      <ul>{everyday.filter(key => state[key]).map(key => <li key={key}>{CONNECTION_CAPABILITIES[key].label}</li>)}<li>Assigned skills and your preferences</li>{selected.map(account => <li key={account.id}>Read from {accountName(account)}; changes ask you first</li>)}</ul>
     </div>
     <div><h3>Requests and sharing</h3><ul>
       <li>Protected details: {state.highTier ? "may ask; you approve each one" : "off"}</li>
       <li>Card requests: {state.card ? `${budgetText(state.cardBudget.amount, currency)} a ${state.cardBudget.period}; you approve each one` : "off"}</li>
       <li>Sharing new memories: {state.learningSharing ? (state.memoryWrite ? "on, with your other agents" : "on, but saving memories is off") : "off; new memories stay private to this agent"}</li>
-      {!selected.length ? <li>Connected services: none selected</li> : null}
+      {!selected.length ? <li>Connected accounts: none selected</li> : null}
     </ul></div>
   </div>;
 }

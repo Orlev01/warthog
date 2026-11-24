@@ -46,9 +46,7 @@ export async function verifyPostgresAgentControls(runtime: Db, purge: Db) {
     await upsertPermissions(runtime, {
       ...initialGrants(user.id, a.connectionId, { template: "standard" }),
       identityFields: [],
-      connectorPolicies: {
-        notion: { readTools: false, changeTools: "ask_first" },
-      },
+      accounts: [],
     });
     const grants = await getConnectionPermissions(
       runtime,
@@ -56,7 +54,7 @@ export async function verifyPostgresAgentControls(runtime: Db, purge: Db) {
       a.connectionId,
     );
     assert.deepEqual(grants?.identityFields, []);
-    assert.equal(grants?.connectorPolicies?.notion?.readTools, false);
+    assert.deepEqual(grants?.accounts, []);
 
     const task = await createTask(
       runtime,

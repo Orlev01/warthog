@@ -1,7 +1,7 @@
 import { getAgentById } from "../../db/agents";
 import { savedByResolver } from "../../agents/saved-by";
 import { listConnectionsForUser } from "../../db/connections";
-import { selectConnectorAccount } from "../../connectors/tool-routing";
+import { accountHandle, accountPolicy } from "../../../domain/permissions/account-access";
 import { HOUSE_SKILL_BODY } from "./get-skill";
 import { z } from "zod";
 import { parseParams } from "../../http/validate";
@@ -98,7 +98,15 @@ export interface AgentContextView {
   // This conversation's run (docs/adr/agent-runs.md). Null only while paging without one.
   readonly run: { id: string; workingOn: string | null; note: string } | null;
   readonly instructions: string;
-  readonly serviceAccounts: readonly { service: string; accountId: string | null; label: string | null; status: string }[];
+  readonly serviceAccounts: readonly {
+    service: string;
+    account: string;
+    handle: string;
+    status: string;
+    reads: boolean;
+    changes: "off" | "allow" | "ask_first";
+    tools: "all" | readonly string[];
+  }[];
   readonly profile: readonly ProfileField[] | null;
   readonly next?: { memory: string | null; skills: string | null };
   readonly preferences: Record<string, string> | null;
@@ -121,10 +129,6 @@ export interface AgentContextView {
   readonly permissions: {
     readonly resources?: { tasks: { read: boolean; write: boolean }; records: { read: boolean; write: boolean; scope: string } };
     readonly services: readonly string[];
-    readonly servicePolicies?: Record<
-      string,
-      { readTools?: boolean; changeTools?: string }
-    >;
     readonly vaultScope?: "all" | "chosen";
     readonly readTools: boolean;
     readonly changeTools: string;
@@ -271,12 +275,14 @@ export function createGetContextTool(deps: GetContextDeps): {
       if (permissions.recordsAccess) {
         const person = await catalogueFor(db, userId, dek);
         const visible = (await listRecordsForUser(db, userId, dek)).filter(visibleTo(permissions, agentId));
-        const readsMail = permissions.readTools && permissions.grantedConnectors.some((id) => MAIL_CONNECTOR_IDS.has(id));
+        // The mail accounts this agent may read, each by its own settings.
+        const readable = new Set(permissions.accounts
+          .filter((grant) => MAIL_CONNECTOR_IDS.has(grant.connectorId) && accountPolicy(grant, permissions).readTools)
+          .map((grant) => grant.accountId));
+        const readsMail = readable.size > 0;
         const writes = permissions.resourceControls?.recordsWrite !== false;
-        // A mail account the person connected that this agent can't read (not granted, or not the
-        // account it uses): a hint only, never which one.
+        // A mail account the person connected that this agent can't read: a hint only, never which one.
         const connections = await listConnectionsForUser(db, userId);
-        const readable = new Set(permissions.grantedConnectors.map((service) => selectConnectorAccount(connections, service, permissions.connectorAccounts?.[service])?.id).filter(Boolean));
         const otherMailAccounts = connections.some((account) => MAIL_CONNECTOR_IDS.has(account.connectorId) && !readable.has(account.id));
         const now = clock.now();
         const savedByLife = await savedByResolver(db, userId, agentId);
@@ -295,9 +301,24 @@ export function createGetContextTool(deps: GetContextDeps): {
         connection: { agentId: connection.agentId, name: agent?.displayName ?? "This connection", platform: agent?.platform ?? "other", identitySource: "Warthog credential; display name and platform are owner supplied, not verification of the chat user or model." },
         run: run ? { id: run.id, workingOn: run.label ?? null, note: RUN_NOTE } : null,
         instructions: HOUSE_SKILL_BODY,
-        serviceAccounts: permissions.grantedConnectors.map(service => {
-          const selected = selectConnectorAccount(accounts, service, permissions.connectorAccounts?.[service]);
-          return { service, accountId: selected?.id ?? null, label: selected?.accountLabel ?? null, status: selected?.status ?? "selection_required" };
+        // Every account this agent may use, with its own settings (docs/adr/several-accounts-per-agent.md).
+        // An agent names one in a tool's `account` by its address or handle; no internal ids.
+        serviceAccounts: [...permissions.accounts].sort((a, b) => {
+          const label = (grant: typeof a) => accounts.find((account) => account.id === grant.accountId)?.accountLabel ?? "";
+          return a.connectorId.localeCompare(b.connectorId) || label(a).localeCompare(label(b), "en", { sensitivity: "base" });
+        }).flatMap((grant) => {
+          const account = accounts.find((a) => a.id === grant.accountId);
+          if (!account) return [];
+          const policy = accountPolicy(grant, permissions);
+          return [{
+            service: grant.connectorId,
+            account: account.accountLabel,
+            handle: accountHandle(account.id),
+            status: account.status,
+            reads: policy.readTools,
+            changes: policy.changeTools,
+            tools: policy.allowedTools ?? ("all" as const),
+          }];
         }),
         profile,
         next: { memory: memoryPage.nextCursor, skills: skillPage.nextCursor },
@@ -310,7 +331,6 @@ export function createGetContextTool(deps: GetContextDeps): {
         permissions: {
           services: permissions.grantedConnectors,
           resources: { tasks: { read: permissions.tasksAccess, write: permissions.tasksAccess && permissions.resourceControls?.tasksWrite !== false }, records: { read: permissions.recordsAccess, write: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, scope: permissions.resourceControls?.recordIds == null ? "all" : "chosen_and_created_by_this_agent" } },
-          servicePolicies: permissions.connectorPolicies ?? {},
           vaultScope: permissions.identityFields == null ? "all" : "chosen",
           readTools: permissions.readTools,
           changeTools: permissions.changeTools,

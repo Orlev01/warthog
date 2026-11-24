@@ -18,13 +18,14 @@ import {
 import { ruleSentence, type Rule } from "@/domain/rules/rules";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { RuleKindBadge } from "@/components/rules/rule-badges";
-import { ConnectorModule } from "./connector-module";
+import { AccountAccessRow, type RowAccount, type RowGrant } from "./account-access-row";
 
 // E10-S07 — Per-agent permissions view (design §7; brief "Per-agent permissions
 // page"). Each agent's reach is shaped on ONE screen. For a given agent the person
-// sees which connected services and which of their tools it may use (read tools and
-// change-making tools listed SEPARATELY, change-making tools defaulting to "Ask me
-// first"), which identity fields it may read without asking (low tier only) and
+// sees which connected accounts it may use — one row per account, so several accounts
+// of one service each have their own settings (docs/adr/several-accounts-per-agent.md)
+// — and which of their tools (read tools and change-making tools listed SEPARATELY,
+// change-making tools defaulting to "Ask me first"), which identity fields it may read without asking (low tier only) and
 // whether it may request high-tier fields, whether it may request a card and its
 // spending budget (card access cannot be switched on without a budget; the budget
 // defaults to A$200 per month), which skills it receives, whether it may read shared
@@ -46,20 +47,10 @@ import { ConnectorModule } from "./connector-module";
 // minute, set per agent by the person on that agent's permissions page").
 const DEFAULT_REQUEST_LIMIT = 120;
 
-export type ConnectorAccess = {
-  accounts?: readonly { id: string; label: string }[];
-  accountId?: string;
-  policy?: { allowedTools?: string[] | null; readTools?: boolean; changeTools?: "off" | "allow" | "ask_first" };
-  id: string;
-  name: string;
-  // whether the agent may use this connected service (review fix W2.3): when present, the
-  // service carries its own toggle; absent ⇒ the service is listed as already granted.
-  granted?: boolean;
-  // the tool names the agent may use, split into the two groups the brief names:
-  // read tools and change-making tools (the latter default to "Ask me first").
-  readTools: ReadonlyArray<string>;
-  changeTools: ReadonlyArray<string>;
-};
+// One of the person's connected accounts and this agent's grant of it (null: not allowed).
+// Its tools are split into the two groups the brief names: read tools and change-making
+// tools (the latter default to "Ask me first").
+export type AccountAccess = RowAccount & { grant: RowGrant | null };
 
 export type SkillGrant = { id: string; name: string; granted: boolean };
 // A life-admin record the agent may be given: its own name, plus its type in words
@@ -83,8 +74,8 @@ export type PermissionsViewProps = {
   saving?: boolean;
   // True while the person has changed something that isn't saved yet (UI/UX audit W-03).
   unsaved?: boolean;
-  // granted connectors and the tools it may use, reads and changes listed apart.
-  connectors: ReadonlyArray<ConnectorAccess>;
+  // every connected account, whether this agent may use it, and its tools.
+  accounts: ReadonlyArray<AccountAccess>;
   // low-tier identity read (always low tier only) vs. the high-tier REQUEST toggle.
   lowTierRead: boolean;
   highTierRequest: boolean;
@@ -158,7 +149,7 @@ export function PermissionsView({
   embedded = false,
   saving = false,
   unsaved = false,
-  connectors,
+  accounts,
   lowTierRead,
   highTierRequest,
   identityFields = null,
@@ -189,6 +180,14 @@ export function PermissionsView({
 
   const show = (part: PermissionsSection) =>
     section === "all" || section === part;
+  // By service, then account, so a service's accounts sit together.
+  const sortedAccounts = [...accounts].sort(
+    (a, b) =>
+      a.serviceName.localeCompare(b.serviceName, "en", { sensitivity: "base" }) ||
+      a.label.localeCompare(b.label, "en", { sensitivity: "base" }) ||
+      a.id.localeCompare(b.id),
+  );
+  const allowedAccounts = accounts.filter((account) => account.grant !== null).length;
   return (
     <section className="wh-permissions flex flex-col gap-4 sm:gap-6">
       {!embedded ? (
@@ -205,13 +204,13 @@ export function PermissionsView({
 
       {show("connectors") ? (
         <>
-          {/* Connected services: the agent-wide defaults, then one collapsible module per
-              service (reads and changes listed separately inside each). */}
+          {/* Connected services: the agent-wide defaults, then one divided row per connected
+              account (reads and changes listed separately inside each). */}
           <div className="wh-permission-group flex flex-col gap-4">
             <div className="flex flex-col gap-1">
               <SectionHeading>Connected services</SectionHeading>
               <p className="text-sm text-fg-muted">
-                Services you connect belong to you. Choose which ones {agentName} may
+                Services you connect belong to you. Choose which accounts {agentName} may
                 use and how. Connecting a service does not grant agent access.
               </p>
             </div>
@@ -232,9 +231,9 @@ export function PermissionsView({
                   </Select>
                 </label>
               </div>
-              <p className="text-xs text-fg-muted">A service set to “Same as this agent’s setting” follows these.</p>
+              <p className="text-xs text-fg-muted">An account set to “Same as this agent’s setting” follows these.</p>
             </div>
-            {connectors.length === 0 ? (
+            {accounts.length === 0 ? (
               <EmptyState
                 variant="inline"
                 icon={Plug}
@@ -243,23 +242,23 @@ export function PermissionsView({
                 action={<ButtonLink href="/connectors" size="sm">Connect a service</ButtonLink>}
               />
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
                 <p className="text-sm text-fg-muted">
-                  {connectors.length} {connectors.length === 1 ? "service" : "services"} ·{" "}
-                  {connectors.filter((connector) => connector.granted !== false).length} allowed for {agentName}. Open a service to change its access.
+                  {accounts.length} {accounts.length === 1 ? "account" : "accounts"} ·{" "}
+                  {allowedAccounts} allowed for {agentName}. Open an account to change its access.
                 </p>
-                {[...connectors]
-                  .sort((a, b) => Number(b.granted !== false) - Number(a.granted !== false) || a.name.localeCompare(b.name))
-                  .map((connector) => (
-                  <ConnectorModule
-                    key={connector.id}
-                    agentName={agentName}
-                    connector={connector}
-                    defaultReads={readTools}
-                    defaultChanges={changeTools}
-                    defaultOpen={connectors.length === 1}
-                  />
-                ))}
+                <ul role="list" aria-label="Connected accounts" className="flex flex-col divide-y divide-line border-t border-line">
+                  {sortedAccounts.map((account) => (
+                    <AccountAccessRow
+                      key={account.id}
+                      agentName={agentName}
+                      account={account}
+                      grant={account.grant}
+                      defaults={{ readTools, changeTools }}
+                      defaultOpen={accounts.length === 1}
+                    />
+                  ))}
+                </ul>
               </div>
             )}
           </div>

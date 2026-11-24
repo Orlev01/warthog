@@ -27,7 +27,7 @@ function render(rules: Rule[]): string {
   const props: PermissionsViewProps = {
     agentName: "Claude",
     section: "rules",
-    connectors: [],
+    accounts: [],
     lowTierRead: false,
     highTierRequest: false,
     cardAccess: false,

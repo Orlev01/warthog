@@ -20,6 +20,7 @@ import { fixedClock } from "../../seams/clock";
 import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
 import type { AgentConnection } from "../context";
 
+import { grantServices } from "../../../test/grants";
 const clock = fixedClock(new Date("2026-11-23T01:00:00.000Z"));
 
 async function setup(grants: { recordsAccess: boolean; grantedConnectors?: string[]; recordIds?: string[] }) {
@@ -29,7 +30,7 @@ async function setup(grants: { recordsAccess: boolean; grantedConnectors?: strin
   const user = await createUser(db, { email: `${randomUUID()}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
   const connectionId = randomUUID();
   const agent = await createAgent(db, { userId: user.id, connectionId, displayName: "Claude", platform: "claude" }, clock);
-  await upsertPermissions(db, {
+  await grantServices(db, {
     userId: user.id, connectionId, grantedConnectors: grants.grantedConnectors ?? [], readTools: true, changeTools: "allow",
     identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true,
     sharing: false, rulesScope: [], rateLimit: 120, recordsAccess: grants.recordsAccess, tasksAccess: true,

@@ -77,7 +77,7 @@ test("saving one workspace section does not overwrite unrelated permissions", ()
     {
       currency: "AUD",
       period: "month",
-      connectors: ["gmail"],
+      accounts: ["0b0e5a8e-1c2d-4e3f-8a9b-0c1d2e3f4a5b"],
       skills: ["skill"],
       section: "memory",
     },
@@ -90,7 +90,7 @@ test("saving one workspace section does not overwrite unrelated permissions", ()
     collectEdits([], {
       currency: "AUD",
       period: "month",
-      connectors: [],
+      accounts: [],
       section: "memory",
     }).ok,
     false,
@@ -113,7 +113,7 @@ function workspaceData(overrides: Partial<AgentWorkspaceData["agent"]> = {}): Ag
   } as unknown as AgentWorkspaceData;
 }
 const PERMISSIONS = {
-  agentName: "Dev console", connectors: [], lowTierRead: true, highTierRequest: false, cardAccess: false, budget: null,
+  agentName: "Dev console", accounts: [], lowTierRead: true, highTierRequest: false, cardAccess: false, budget: null,
   skills: [], tasksAccess: true, recordsAccess: false, sharedMemoryRead: true, learningSharing: false, rules: [],
 } as PermissionsViewProps;
 const text = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/&#x27;|&rsquo;/g, "’").replace(/\s+/g, " ");
@@ -142,6 +142,19 @@ test("the Overview leads with a plain summary and folds the diagnostics away", (
   assert.doesNotMatch(text(outside), /95th percentile|heartbeat|client metadata/i, "no diagnostics in the lead");
   assert.match(shown, /Warthog controls only what Dev console does through Warthog, not its own tools or chats\./);
   assert.match(shown, /2 need attention/);
+});
+
+// An agent can use several accounts of one service (docs/adr/several-accounts-per-agent.md), so
+// the Overview counts the accounts it may use, not the services.
+test("the Overview's Connectors node counts the accounts the agent may use", () => {
+  const account = (id: string, granted: boolean) => ({
+    id, connectorId: "google-gmail", serviceName: "Gmail", label: `${id}@example.com`, connected: true,
+    grant: granted ? {} : null, readTools: [], changeTools: [],
+  });
+  const permissions = { ...PERMISSIONS, accounts: [account("a", true), account("b", true), account("c", false)] } as PermissionsViewProps;
+  const shown = text(renderToStaticMarkup(<AgentOverview data={workspaceData()} permissions={permissions} lastActive={null} />));
+  assert.match(shown, /Connectors 2 accounts allowed/);
+  assert.match(text(renderToStaticMarkup(<AgentOverview data={workspaceData()} permissions={PERMISSIONS} lastActive={null} />)), /Connectors 0 accounts allowed/);
 });
 
 test("the memory and spending read-outs are panels with a next step when empty", () => {

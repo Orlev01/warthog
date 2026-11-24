@@ -31,7 +31,7 @@ import { GOOGLE_CURATED_TOOLS } from "@/server/connectors/curated/google";
 import { MICROSOFT_CURATED_TOOLS } from "@/server/connectors/curated/microsoft";
 import { LINKEDIN_CURATED_TOOLS } from "@/server/connectors/curated/linkedin";
 import { readProviderToolsets } from "@/server/connectors/provider-runtime";
-import { REQUEST_TOOL, connectorToolsetFor } from "@/server/connectors/tool-routing";
+import { REQUEST_TOOL, accountToolsFor } from "@/server/connectors/tool-routing";
 import { listConnectionsForUser, type Connection } from "@/server/db/connections";
 import { processSingleton } from "@/server/seams/process-singleton";
 import { createToolRegistry } from "@/server/mcp/tools/registry";
@@ -112,7 +112,7 @@ function offlineToolLabel(catalogue: CatalogueIndex, tool: string): string | und
   if (!entry || entry.auth_kind === "provider_mcp") return undefined;
   const verb = tool.slice(split + NAMESPACE.length);
   const served: Connection = { id: entry.id, userId: "", connectorId: entry.id, accountLabel: "", status: "connected", connectedAt: new Date(0) };
-  const declaration = (connectorToolsetFor([served], [entry.id], catalogue)[entry.id] ?? []).find(
+  const declaration = (accountToolsFor(served, catalogue) ?? []).find(
     (candidate) => (typeof candidate === "string" ? candidate : candidate.name) === verb,
   );
   if (declaration === undefined) return undefined;
@@ -144,16 +144,9 @@ export async function ruleTargetsFor(
     for (const tool of providerTools[connection.id] ?? []) known.add(`${connection.connectorId}${NAMESPACE}${tool.name}`);
   }
 
-  const toolset = connectorToolsetFor(
-    firstPerService,
-    firstPerService.map((connection) => connection.connectorId),
-    catalogue,
-    {},
-    providerTools,
-  );
   const serviceGroups: RuleTargetGroup[] = firstPerService.flatMap((connection) => {
     const entry = catalogue.get(connection.connectorId)!;
-    const declarations = toolset[entry.id] ?? [];
+    const declarations = accountToolsFor(connection, catalogue, providerTools) ?? [];
     if (!declarations.length) return [];
     return [
       {

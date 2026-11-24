@@ -3,18 +3,38 @@ import {
   type PermissionTemplate,
 } from "../../domain/permissions/templates";
 import type { PermissionGrants, CardBudget } from "../db/agent-permissions";
+import { listConnectionsForUser } from "../db/connections";
+import type { Db } from "../db/index";
+
+// An account the person ticked on the consent or access-key screen, already checked to be one
+// of their own connected accounts.
+export interface TickedAccount {
+  readonly id: string;
+  readonly connectorId: string;
+}
+
+// The ticked account ids that are `userId`'s own connected accounts, each with its service
+// (member-scoped; the user id is the session's). Ids that aren't theirs are dropped.
+export async function tickedOwnAccounts(db: Db, userId: string, ids: readonly string[]): Promise<TickedAccount[]> {
+  const own = new Map((await listConnectionsForUser(db, userId)).map((c) => [c.id, c.connectorId]));
+  return [...new Set(ids)].flatMap((id) => {
+    const connectorId = own.get(id);
+    return connectorId ? [{ id, connectorId }] : [];
+  });
+}
 
 /**
- * Shared mapping for OAuth consent and access-key onboarding. `defaultAccounts` is the
- * person's accounts that are on for new agents ({ service: account id },
- * docs/adr/default-services.md): each granted service that has one is set to that account.
+ * Shared mapping for OAuth consent and access-key onboarding. The person ticks accounts, not
+ * services (docs/adr/several-accounts-per-agent.md); the template decides whether services are
+ * granted at all, and each ticked account of a granted service is given to the agent with the
+ * agent's own settings.
  */
 export function initialGrants(
   userId: string,
   connectionId: string,
   input: {
     template: PermissionTemplate;
-    tickedServices?: readonly string[];
+    tickedAccounts?: readonly TickedAccount[];
     identity?: boolean;
     highTier?: boolean;
     memoryRead?: boolean;
@@ -25,23 +45,18 @@ export function initialGrants(
     cardBudget?: CardBudget | null;
     learningSharing?: boolean;
   },
-  explicitServices?: string[],
-  defaultAccounts?: Readonly<Record<string, string>>,
 ): PermissionGrants {
-  const set = permissionTemplate(input.template, input.tickedServices ?? []);
-  const services = explicitServices ?? set.services.map((s) => s.service);
+  const ticked = input.tickedAccounts ?? [];
+  const set = permissionTemplate(input.template, [...new Set(ticked.map((account) => account.connectorId))]);
+  const services = new Set(set.services.map((s) => s.service));
+  const accounts = ticked.filter((account, index) => services.has(account.connectorId) && ticked.findIndex((a) => a.id === account.id) === index);
   const cardAccess = input.card === true;
-  const pinned = services.flatMap((service) => {
-    const account = defaultAccounts?.[service];
-    return account ? [[service, account] as const] : [];
-  });
   return {
     userId,
     connectionId,
-    grantedConnectors: services,
-    ...(pinned.length > 0 ? { connectorAccounts: Object.fromEntries(pinned) } : {}),
-    readTools: services.length > 0,
-    changeTools: services.length > 0 ? "ask_first" : "off",
+    accounts: accounts.map((account) => ({ accountId: account.id })),
+    readTools: accounts.length > 0,
+    changeTools: accounts.length > 0 ? "ask_first" : "off",
     identityAccess: input.identity ?? set.lowTierProfile,
     highTierAccess: input.highTier === true,
     cardAccess,

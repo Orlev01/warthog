@@ -24,6 +24,7 @@ import { createResultGuard } from "../connectors/result-guard";
 import { createAgentCallPipeline, type AgentCall } from "./pipeline";
 import { createRateLimiter } from "./rate-limit";
 
+import { grantServices } from "../../test/grants";
 const NOW = new Date("2026-11-16T01:00:00Z");
 const b64url = (text: string) => Buffer.from(text, "utf8").toString("base64url");
 const HOSTILE = {
@@ -47,7 +48,7 @@ async function setup(changeTools: "allow" | "ask_first", withGuard = true) {
   const user = await createUser(db, { email: `guard-${randomUUID()}@example.test`, wrappedDek: await keyWrapper.wrap(dek) });
   const agent = await createAgent(db, { userId: user.id, connectionId: randomUUID(), displayName: "Claude", platform: "claude" }, clock);
   const connection = { userId: user.id, connectionId: agent.connectionId, agentId: agent.id, active: true };
-  await upsertPermissions(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail", "provider-x"], readTools: true, changeTools, identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
+  await grantServices(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail", "provider-x"], readTools: true, changeTools, identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
   const metrics: { name: string; dimensions?: Record<string, unknown> }[] = [];
   let result: unknown = HOSTILE;
   const pipeline = createAgentCallPipeline({

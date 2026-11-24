@@ -11,7 +11,7 @@ const notices: Record<string, ConnectorNotice> = {
   "verification-failed": { tone: "error", text: "We saved your key, but the service didn't accept it. Disconnect that account under Your services, then connect again with a different key." },
   "provider-revoke-needed": { tone: "info", text: "Disconnected from Warthog. To remove the provider’s consent too, open that account’s app permissions (on LinkedIn, Settings › Data privacy › Permitted services) and remove Warthog." },
   "connection-declined": { tone: "info", text: "That service was not connected. You can try again when you're ready." },
-  disconnected: { tone: "success", text: "Service disconnected. No agent can use it now." },
+  disconnected: { tone: "success", text: "Account disconnected. No agent can use it now." },
   connected: { tone: "success", text: "Service connected. Next, turn it on for the agents that should use it, on each agent's page. Once an agent can read your email, you can ask it to fill in your Life admin for you to check." },
   requested: { tone: "success", text: "Thanks — we've recorded your request. You'll see it under Your services, and we'll email you when it's ready to connect." },
   "early-access-requested": { tone: "success", text: "Thanks — we've asked for you to join early access. We'll email you when you're in, and you can connect it here." },

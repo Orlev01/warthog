@@ -379,8 +379,8 @@ export async function gmailHasSentTo(input: Pick<CuratedToolCallInput, "entry" |
 // together, at most 25 a page (10 by default), so triage takes one call. Warthog checks the
 // previews like any other content. A result whose headers can't be fetched keeps its ids and
 // says so. Gmail's per-second quota can turn a busy search's fetch away (429): it's tried once more.
-const MAX_SEARCH_RESULTS = 25;
-const DEFAULT_SEARCH_RESULTS = 10;
+export const MAX_SEARCH_RESULTS = 25;
+export const DEFAULT_SEARCH_RESULTS = 10;
 const SUMMARY_CONCURRENCY = 6;
 const RETRY_AFTER_MS = 400;
 

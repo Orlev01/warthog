@@ -242,7 +242,8 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   `Origin` and the `Mcp-*` headers; `X-Accel-Buffering: no` on SSE; GET/DELETE → 405.
 - Tool list for an agent = Warthog core tools + the connector tools it is permitted, namespaced
   `<connector>__<tool>`. If the total exceeds 80, connector tools collapse into `find_tools` +
-  `call_tool`.
+  `call_tool`. A service's tools are listed once however many of its accounts the agent has; each
+  takes an optional `account` ([ADR](../adr/several-accounts-per-agent.md)).
 - Core tools: `get_context`, `get_skill`, `request_identity_detail`, `request_card`, `check_approval`
   (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`, `list_tasks`,
   `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`, `update_record`,
@@ -318,11 +319,18 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   its connection in place; adding another account keeps agents on the account they use; other
   accounts can be renamed; a card names the account when there are several
   ([ADR](../adr/google-published-and-accounts.md)).
-- **On for new agents:** one account of each service can be marked on Connectors
-  (`connections.default_for_agents`); later consent and access-key screens tick that service, and
-  approval pins the agent to that account. An agent's first grant on its page keeps reads on and
-  changes "ask me first" unless the person changed those defaults in the same save
-  ([ADR](../adr/default-services.md)).
+- **On for new agents:** any account can be marked on Connectors (`connections.default_for_agents`);
+  later consent and access-key screens tick those accounts, and approval grants the ticked ones.
+  An agent's first grant on its page keeps reads on and changes "ask me first" unless the person
+  changed those defaults in the same save ([ADR](../adr/default-services.md)).
+- **Account grants** (24 Nov 2026, [ADR](../adr/several-accounts-per-agent.md)): an agent is given
+  accounts (`agent_account_grants`, one row per agent and account, each with its own read, change
+  and tool settings; NULL = the agent's). A service is granted when one of its accounts is.
+  Disconnecting an account removes its grants by cascade. Tools stay one set per service with an
+  optional `account`; every connector call is bound to one granted account
+  (`src/domain/permissions/account-access.ts`) before the policy runs, and that binding is what
+  the hold, execution and Undo use. A mail search with no account named covers every inbox the
+  agent may read (checked per inbox, then merged), and its ids carry their inbox.
 - Launch target: ≥ 30 `provider_mcp` + ≥ 60 `api_key` entries + Google + Microsoft (+ any the founder
   registers: Slack, GitHub, Spotify, Strava, …) ≥ 100 connectable.
 - LinkedIn (20 Nov 2026, [ADR](../adr/linkedin-connector.md)): a founder-registered `oauth2` entry

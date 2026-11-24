@@ -57,9 +57,9 @@
 //     saveApiKeyConnection(session: Session, input: { connectorId: string; accountLabel: string; apiKey: string }): Promise<unknown>;
 //     // Connect a provider_mcp connection for the session user.
 //     connectProviderMcp(session: Session, input: { connectorId: string; accountLabel: string }): Promise<unknown>;
-//     // Disconnect ONE of the session user's own connected services: it REMOVES EVERY
-//     // agent's access to that service AND revokes the stored provider access where the
-//     // provider allows it. A malformed / oversized / SQL-shaped connection id throws a
+//     // Disconnect ONE of the session user's own connected accounts: it REMOVES the account
+//     // from EVERY agent that uses it (the person's other accounts of the service stay
+//     // granted) AND revokes the stored provider access where the provider allows it. A malformed / oversized / SQL-shaped connection id throws a
 //     // 4xx HttpError at the boundary BEFORE any query; another person's connection id is
 //     // refused ({ ok:false }) with their service + their agents left wholly untouched.
 //     disconnectService(session: Session, connectionId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -73,12 +73,13 @@
 //        ConnectorsView wired to connectProviderSignin / saveApiKeyConnection /
 //        connectProviderMcp / disconnectService / requestConnector (the five controls
 //        render LIVE, each carrying its own id — never a dead button).
-//   AC2  disconnectService removes EVERY agent's access to that service (the connector is
-//        stripped from every agent's grants) and revokes the stored provider access where
-//        the provider allows it (the revocation seam fires for a provider-sign-in service).
+//   AC2  disconnectService removes EVERY agent's access to that account (its grant goes from
+//        every agent; other accounts of the service stay) and revokes the stored provider
+//        access where the provider allows it (the revocation seam fires for a provider-sign-in
+//        service).
 //   AC3  a connector / connection id that is not the expected shape is rejected with a 4xx
 //        (not a raw cast); a person cannot disconnect another person's connection, and the
-//        strip is member-scoped (another person's agents keep their access).
+//        removal is member-scoped (another person's agents keep their access).
 //   AC4  a handler rejects malformed / oversized input with a 4xx; a SQL-injection probe in
 //        an input field cannot alter a query (parameter binding — the table survives and
 //        nothing is mutated).                          [obligation:validate-and-parameterize-input]
@@ -320,16 +321,17 @@ async function seedConnection(
   );
 }
 
-// A complete baseline grants record (every field present, as the store requires).
+// A complete baseline grants record (every field present, as the store requires), giving the
+// agent the listed accounts (connection ids) with the agent's own settings.
 function baselineGrants(
   userId: string,
   connectionId: string,
-  grantedConnectors: string[],
+  accountIds: string[],
 ): PermissionGrants {
   return {
     userId,
     connectionId,
-    grantedConnectors,
+    accounts: accountIds.map((accountId) => ({ accountId })),
     readTools: true,
     changeTools: "ask_first",
     identityAccess: true,
@@ -345,13 +347,13 @@ function baselineGrants(
 }
 
 // Seed an agent (its row AND its permission grants) for `userId`, granting it the given
-// connector slugs. Returns the agent's connection id — the (userId, connectionId) handle
-// its grants are read back by. One row per connection: the grant connection id differs from
-// any service connection id, so the tests exercise the real two-id model.
+// accounts. Returns the agent's connection id — the (userId, connectionId) handle its grants
+// are read back by. One row per connection: the grant connection id differs from any service
+// connection id, so the tests exercise the real two-id model.
 async function seedAgent(
   db: Db,
   userId: string,
-  opts: { displayName: string; grantedConnectors: string[] },
+  opts: { displayName: string; accounts: string[]; status?: "connected" | "disconnected" },
 ): Promise<string> {
   const connectionId = randomUUID();
   await createAgent(
@@ -361,12 +363,17 @@ async function seedAgent(
       connectionId,
       displayName: opts.displayName,
       platform: "someplatform",
-      status: "connected",
+      status: opts.status ?? "connected",
     },
     fixedClock(NOW),
   );
-  await upsertPermissions(db, baselineGrants(userId, connectionId, opts.grantedConnectors));
+  await upsertPermissions(db, baselineGrants(userId, connectionId, opts.accounts));
   return connectionId;
+}
+
+// The ids of the accounts an agent may use, in a stable order.
+async function accountsOf(db: Db, userId: string, agentConnectionId: string): Promise<string[]> {
+  return (await getConnectionPermissions(db, userId, agentConnectionId))!.accounts.map((a) => a.accountId).sort();
 }
 
 // --- tiny markup helpers (no DOM), mirrored from the sibling component/loader tests --
@@ -610,39 +617,87 @@ test("the loader reads ONLY the session user's connections — another person's 
 // stored provider access where the provider allows it.
 // =====================================================================================
 
-test("disconnectService strips the service's connector from EVERY one of the person's agents' grants", async () => {
+test("disconnectService removes the account from EVERY one of the person's agents, and nothing else", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "disc-grants");
-    // The service being disconnected (its connector slug is what agents are granted).
+    // The account being disconnected, and two unrelated accounts that must survive.
     const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
-    // Three agents, each granted the service PLUS an unrelated connector that must survive.
-    const agentA = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync", "data-grid"] });
-    const agentB = await seedAgent(db, userId, { displayName: "NarwhalPlanner", grantedConnectors: ["acme-mail", "widget-sync"] });
-    const agentC = await seedAgent(db, userId, { displayName: "WallabyInbox", grantedConnectors: ["data-grid"] });
+    const grid = await seedConnection(db, userId, { connectorId: "data-grid", accountLabel: "Grid" });
+    const mail = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMail" });
+    const agentA = await seedAgent(db, userId, { displayName: "QuokkaResearcher", accounts: [service.id, grid.id] });
+    const agentB = await seedAgent(db, userId, { displayName: "NarwhalPlanner", accounts: [mail.id, service.id] });
+    const agentC = await seedAgent(db, userId, { displayName: "WallabyInbox", accounts: [grid.id] });
 
     const result: DisconnectResult = await makeActions(db).actions.disconnectService(sessionFor(userId), service.id);
     assert.equal(result.ok, true, "disconnecting one's own connected service succeeds");
 
-    // The disconnected service's connector is gone from every agent that had it…
-    const after = async (connectionId: string) =>
-      (await getConnectionPermissions(db, userId, connectionId))!.grantedConnectors;
-    assert.deepEqual(
-      [...(await after(agentA))].sort(),
-      ["data-grid"],
-      "agent A loses access to the disconnected service, keeps its other connector",
-    );
-    assert.deepEqual(
-      [...(await after(agentB))].sort(),
-      ["acme-mail"],
-      "agent B loses access to the disconnected service, keeps its other connector",
-    );
-    // …and an agent that never had it is untouched.
-    assert.deepEqual(
-      [...(await after(agentC))].sort(),
-      ["data-grid"],
-      "an agent that never had the service is left exactly as it was",
-    );
+    assert.deepEqual(await accountsOf(db, userId, agentA), [grid.id], "agent A loses the disconnected account, keeps its other one");
+    assert.deepEqual(await accountsOf(db, userId, agentB), [mail.id], "agent B loses the disconnected account, keeps its other one");
+    assert.deepEqual(await accountsOf(db, userId, agentC), [grid.id], "an agent that never had it is left exactly as it was");
+    assert.deepEqual((await getConnectionPermissions(db, userId, agentA))!.grantedConnectors, ["data-grid"], "so its service is no longer granted");
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/several-accounts-per-agent.md — the founder's three Gmail accounts: disconnecting one
+// removes only that one, from every agent that used it. The other two stay granted, and the
+// page says who uses each of them.
+test("disconnecting one of three accounts of a service keeps the other two granted", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-one-of-three");
+    const home = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "levyoren1@acme.test" });
+    const billing = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "levyorenbilling@acme.test" });
+    const booking = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "levyorenbooking@acme.test" });
+    const all = await seedAgent(db, userId, { displayName: "Claude", accounts: [home.id, billing.id, booking.id] });
+    const homeOnly = await seedAgent(db, userId, { displayName: "Muse", accounts: [home.id] });
+    const billingOnly = await seedAgent(db, userId, { displayName: "Grok", accounts: [billing.id] });
+
+    const { actions } = makeActions(db);
+    assert.equal((await actions.disconnectService(sessionFor(userId), home.id)).ok, true);
+
+    assert.deepEqual(await accountsOf(db, userId, all), [billing.id, booking.id].sort(), "the other two accounts stay granted");
+    assert.deepEqual((await getConnectionPermissions(db, userId, all))!.grantedConnectors, ["acme-mail"], "so the service stays granted");
+    assert.deepEqual(await accountsOf(db, userId, homeOnly), [], "an agent that had only that account has none left");
+    assert.deepEqual(await accountsOf(db, userId, billingOnly), [billing.id], "an agent using another account keeps it");
+
+    const byId = new Map((await actions.load(sessionFor(userId))).connections.map((c) => [c.id, c]));
+    assert.equal(byId.has(home.id), false, "the disconnected account is no longer listed");
+    assert.deepEqual([...byId.get(billing.id)!.agents].sort(), ["Claude", "Grok"]);
+    assert.deepEqual(byId.get(booking.id)?.agents, ["Claude"]);
+  } finally {
+    await db.close();
+  }
+});
+
+// "Used by" is per account: an agent is listed under each account it may use, and only under
+// those, so two accounts of one service can have different agents. Disconnected agents and
+// another person's agents are never named.
+test("Used by names, for each account, the connected agents that may use that account", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "used-by");
+    const otherId = await makeUser(db, "used-by-other");
+    const home = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "home@acme.test" });
+    const work = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "work@acme.test" });
+    const grid = await seedConnection(db, userId, { connectorId: "data-grid", accountLabel: "Grid" });
+    await seedAgent(db, userId, { displayName: "QuokkaResearcher", accounts: [home.id] });
+    await seedAgent(db, userId, { displayName: "NarwhalPlanner", accounts: [home.id, work.id] });
+    await seedAgent(db, userId, { displayName: "WallabyInbox", accounts: [work.id], status: "disconnected" });
+    const theirs = await seedConnection(db, otherId, { connectorId: "acme-mail", accountLabel: "them@acme.test" });
+    await seedAgent(db, otherId, { displayName: "DingoScheduler", accounts: [theirs.id] });
+
+    const byId = new Map((await makeActions(db).actions.load(sessionFor(userId))).connections.map((c) => [c.id, c]));
+    assert.deepEqual([...byId.get(home.id)!.agents].sort(), ["NarwhalPlanner", "QuokkaResearcher"]);
+    assert.deepEqual(byId.get(work.id)!.agents, ["NarwhalPlanner"], "a disconnected agent isn't named");
+    assert.deepEqual(byId.get(grid.id)!.agents, [], "no agent uses the account");
+
+    const words = visibleText(renderScreen(await makeActions(db).actions.load(sessionFor(userId))));
+    assert.match(words, /Used by NarwhalPlanner(?!,)/, "the second account names only its own agent");
+    assert.ok(!words.includes("DingoScheduler"), "another person's agent is never named");
+    assert.ok(!words.includes("WallabyInbox"));
   } finally {
     await db.close();
   }
@@ -680,7 +735,7 @@ test("disconnectService deletes the connection and its stored credentials, so th
     const userId = await makeUser(db, "disc-delete");
     const service = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMail", token: "SECRET" });
     const kept = await seedConnection(db, userId, { connectorId: "data-grid", accountLabel: "Grid" });
-    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["acme-mail"] });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", accounts: [service.id] });
 
     const { actions } = makeActions(db);
     const result = await actions.disconnectService(sessionFor(userId), service.id);
@@ -697,7 +752,8 @@ test("disconnectService deletes the connection and its stored credentials, so th
     const data = await actions.load(sessionFor(userId));
     assert.deepEqual(data.connections.map((c) => c.id), [kept.id], "the page lists only the remaining service");
 
-    // Re-granting the connector cannot silently reactivate the old credential: there is none.
+    // The agent's grant went with the account: nothing can reactivate the old credential.
+    assert.deepEqual((await getConnectionPermissions(db, userId, agent))!.accounts, []);
     assert.deepEqual((await getConnectionPermissions(db, userId, agent))!.grantedConnectors, []);
   } finally {
     await db.close();
@@ -757,7 +813,7 @@ test("a failed provider revocation never blocks the disconnect, and the record s
   try {
     const userId = await makeUser(db, "disc-revoke-fails");
     const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
-    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", accounts: [service.id] });
 
     const { actions } = makeActions(db, fixtureIndex(), {
       revoke: async () => {
@@ -809,7 +865,7 @@ test("a person cannot disconnect another person's connection — it and its agen
     const alice = await makeUser(db, "disc-victim");
     const bob = await makeUser(db, "disc-attacker");
     const aliceService = await seedConnection(db, alice, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
-    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", accounts: [aliceService.id] });
 
     const { actions, revokeCalls } = makeActions(db);
     // Bob, holding Alice's real connection id, tries to disconnect it.
@@ -823,8 +879,8 @@ test("a person cannot disconnect another person's connection — it and its agen
       "another person's refused disconnect leaves the owner's connection in place",
     );
     assert.deepEqual(
-      (await getConnectionPermissions(db, alice, aliceAgent))!.grantedConnectors,
-      ["widget-sync"],
+      await accountsOf(db, alice, aliceAgent),
+      [aliceService.id],
       "the owner's agent keeps its access after a stranger's refused disconnect",
     );
     assert.equal(revokeCalls.length, 0, "no provider access is revoked on a refused disconnect");
@@ -833,27 +889,28 @@ test("a person cannot disconnect another person's connection — it and its agen
   }
 });
 
-test("the grant strip is member-scoped — another person granted the same connector keeps it", async () => {
+test("the removal is member-scoped — another person's agent on the same service keeps its account", async () => {
   const db = await freshDb();
   try {
     const alice = await makeUser(db, "strip-self");
     const bob = await makeUser(db, "strip-other");
-    // Both people have their OWN "widget-sync" service and an agent granted it.
+    // Both people have their OWN "widget-sync" account and an agent granted it.
     const aliceService = await seedConnection(db, alice, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
-    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
-    const bobAgent = await seedAgent(db, bob, { displayName: "DingoScheduler", grantedConnectors: ["widget-sync"] });
+    const bobService = await seedConnection(db, bob, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", accounts: [aliceService.id] });
+    const bobAgent = await seedAgent(db, bob, { displayName: "DingoScheduler", accounts: [bobService.id] });
 
     await makeActions(db).actions.disconnectService(sessionFor(alice), aliceService.id);
 
     assert.deepEqual(
-      (await getConnectionPermissions(db, alice, aliceAgent))!.grantedConnectors,
+      await accountsOf(db, alice, aliceAgent),
       [],
-      "Alice's agent loses access to the service she disconnected",
+      "Alice's agent loses access to the account she disconnected",
     );
     assert.deepEqual(
-      (await getConnectionPermissions(db, bob, bobAgent))!.grantedConnectors,
-      ["widget-sync"],
-      "Bob's agent — same connector, different person — is NOT stripped",
+      await accountsOf(db, bob, bobAgent),
+      [bobService.id],
+      "Bob's agent — same service, different person — keeps its account",
     );
   } finally {
     await db.close();
@@ -889,8 +946,8 @@ test("a SQL-injection probe in the connection id cannot alter a query: the table
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "disc-sqli");
-    await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
-    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", accounts: [service.id] });
     const { actions, revokeCalls } = makeActions(db);
 
     // A canonical SQL-breaking id. Concatenated into a statement it would drop a table;
@@ -903,9 +960,9 @@ test("a SQL-injection probe in the connection id cannot alter a query: the table
     assert.equal(await tableExists(db, "agent_permissions"), true, "the agent_permissions table survives the probe");
     // …nothing was stripped or revoked (no query was altered).
     assert.deepEqual(
-      (await getConnectionPermissions(db, userId, agent))!.grantedConnectors,
-      ["widget-sync"],
-      "the SQL-injection probe stripped nothing — the agent still has access",
+      await accountsOf(db, userId, agent),
+      [service.id],
+      "the SQL-injection probe removed nothing — the agent still has access",
     );
     assert.equal(revokeCalls.length, 0, "the SQL-injection probe revoked nothing");
   } finally {

@@ -1,9 +1,9 @@
-// "On for new agents" (docs/adr/default-services.md): a person marks one account of a service,
-// and every agent connected afterwards starts with that service, set to that account.
+// "On for new agents" (docs/adr/default-services.md): a person marks an account, and every agent
+// connected afterwards starts with that account ticked.
 //   - setDefaultForAgents marks or unmarks one of the person's own accounts, never another
-//     person's; marking a second account of a service moves the mark, because an agent uses
-//     one account of each service;
-//   - defaultAccountsForAgents reads the marks, one account id per service.
+//     person's. An agent can use several accounts of a service
+//     (docs/adr/several-accounts-per-agent.md), so each account's mark is its own;
+//   - defaultAccountsForAgents reads the marks, as account ids.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -24,12 +24,14 @@ async function connect(db: Db, userId: string, connectorId: string, accountLabel
   return connection.id;
 }
 
+const sorted = (ids: readonly string[]) => [...ids].sort();
+
 test("no account is on for new agents until the person turns one on", async () => {
   const db = await freshDb();
   try {
     const me = await person(db, "me");
     await connect(db, me, "google-gmail", "home@gmail.test");
-    assert.deepEqual(await defaultAccountsForAgents(db, me), {});
+    assert.deepEqual(await defaultAccountsForAgents(db, me), []);
   } finally {
     await db.close();
   }
@@ -44,42 +46,31 @@ test("turning an account on and off for new agents", async () => {
 
     assert.equal(await setDefaultForAgents(db, { userId: me, id: gmail, on: true }), true);
     assert.equal(await setDefaultForAgents(db, { userId: me, id: notion, on: true }), true);
-    assert.deepEqual(await defaultAccountsForAgents(db, me), { "google-gmail": gmail, notion });
+    assert.deepEqual(sorted(await defaultAccountsForAgents(db, me)), sorted([gmail, notion]));
 
     assert.equal(await setDefaultForAgents(db, { userId: me, id: gmail, on: false }), true);
-    assert.deepEqual(await defaultAccountsForAgents(db, me), { notion });
+    assert.deepEqual(await defaultAccountsForAgents(db, me), [notion]);
   } finally {
     await db.close();
   }
 });
 
-test("turning on a second account of a service moves the default to it", async () => {
+test("two accounts of a service can both be on for new agents, each on its own", async () => {
   const db = await freshDb();
   try {
     const me = await person(db, "me");
     const home = await connect(db, me, "google-gmail", "home@gmail.test");
     const work = await connect(db, me, "google-gmail", "work@gmail.test");
+    const billing = await connect(db, me, "google-gmail", "billing@gmail.test");
 
     await setDefaultForAgents(db, { userId: me, id: home, on: true });
     await setDefaultForAgents(db, { userId: me, id: work, on: true });
-    assert.deepEqual(await defaultAccountsForAgents(db, me), { "google-gmail": work });
+    assert.deepEqual(sorted(await defaultAccountsForAgents(db, me)), sorted([home, work]), "turning one on leaves the other on");
 
-    // Turning off an account that isn't the default leaves the default alone.
+    // Turning one off leaves the others as they are.
     await setDefaultForAgents(db, { userId: me, id: home, on: false });
-    assert.deepEqual(await defaultAccountsForAgents(db, me), { "google-gmail": work });
-  } finally {
-    await db.close();
-  }
-});
-
-test("the database holds at most one default account per service", async () => {
-  const db = await freshDb();
-  try {
-    const me = await person(db, "me");
-    const home = await connect(db, me, "google-gmail", "home@gmail.test");
-    const work = await connect(db, me, "google-gmail", "work@gmail.test");
-    await setDefaultForAgents(db, { userId: me, id: home, on: true });
-    await assert.rejects(db.query("UPDATE connections SET default_for_agents = true WHERE id = $1", [work]));
+    assert.deepEqual(await defaultAccountsForAgents(db, me), [work]);
+    assert.ok(!(await defaultAccountsForAgents(db, me)).includes(billing), "an account never turned on stays off");
   } finally {
     await db.close();
   }
@@ -94,8 +85,8 @@ test("another person's account is never turned on or off", async () => {
     await setDefaultForAgents(db, { userId: other, id: theirs, on: true });
 
     assert.equal(await setDefaultForAgents(db, { userId: me, id: theirs, on: false }), false);
-    assert.deepEqual(await defaultAccountsForAgents(db, other), { "google-gmail": theirs });
-    assert.deepEqual(await defaultAccountsForAgents(db, me), {});
+    assert.deepEqual(await defaultAccountsForAgents(db, other), [theirs]);
+    assert.deepEqual(await defaultAccountsForAgents(db, me), []);
   } finally {
     await db.close();
   }
@@ -108,7 +99,7 @@ test("a disconnected account stops being a default", async () => {
     const gmail = await connect(db, me, "google-gmail", "home@gmail.test");
     await setDefaultForAgents(db, { userId: me, id: gmail, on: true });
     await db.query("DELETE FROM connections WHERE id = $1 AND user_id = $2", [gmail, me]);
-    assert.deepEqual(await defaultAccountsForAgents(db, me), {});
+    assert.deepEqual(await defaultAccountsForAgents(db, me), []);
   } finally {
     await db.close();
   }

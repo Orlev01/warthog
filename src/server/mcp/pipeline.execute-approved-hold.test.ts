@@ -76,6 +76,7 @@ import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { fixedClock, type Clock } from "../seams/clock";
 import type { Db } from "../db/index";
 
+import { grantServices } from "../../test/grants";
 // --- shapes derived from the stores' own signatures, so a later type rename that
 // preserves behaviour does not redden these tests. ---------------------------------
 type Grants = Parameters<typeof upsertPermissions>[1];
@@ -279,7 +280,7 @@ async function arrangeHeldCall(
   } = {},
 ) {
   const { userId, dek } = await makePerson(db, who, keyWrapper);
-  await upsertPermissions(
+  await grantServices(
     db,
     baseGrants(userId, CONN, {
       cardAccess: true,
@@ -705,14 +706,14 @@ test("revoking connector access after approval refuses a held call before execut
     const { userId, dek } = await makePerson(db, "revoked-after-approval", keyWrapper);
     const clock = fixedClock(NOW);
     const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Agent", platform: "Other" }, clock);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
     let executions = 0;
     const pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter: createRateLimiter(clock), recorder: createInMemoryRecorder({ clock }), executeTool: async () => { executions++; return "done"; } });
     const pending = await pipeline.handleAgentCall(connectionFor(userId, { agentId: agent.id }), heldChangeCall());
     assert.equal(pending.status, "pending_approval");
     if (pending.status !== "pending_approval") throw new Error("expected approval");
     await decide(db, { userId, id: pending.approval_id, decision: { status: "approved" } }, dek, clock);
-    await upsertPermissions(db, baseGrants(userId, CONN, { grantedConnectors: [] }));
+    await grantServices(db, baseGrants(userId, CONN, { grantedConnectors: [] }));
     assert.equal((await pipeline.executeApprovedHold(userId, pending.approval_id)).status, "refused");
     assert.equal(executions, 0);
     assert.equal((await pipeline.executeApprovedHold(userId, pending.approval_id)).status, "refused");

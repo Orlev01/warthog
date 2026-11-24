@@ -82,6 +82,7 @@ import { createUser } from "../../../../server/db/users";
 import { createAgent } from "../../../../server/db/agents";
 import { createConnection } from "../../../../server/db/connections";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
+import { adoptStandIn, grantServices } from "../../../../test/grants";
 import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
 import { readActivity } from "../../../../server/activity/writer";
 import { createRule } from "../../../../server/db/rules";
@@ -300,7 +301,7 @@ async function arrangeHeld(
 ) {
   const clock: Clock = fixedClock(NOW);
   const { userId, dek } = await makePerson(db, who, keyWrapper);
-  await upsertPermissions(db, baseGrants(userId, CONN, grantsOverrides));
+  await grantServices(db, baseGrants(userId, CONN, grantsOverrides));
   const agent = await createAgent(
     db,
     { userId, connectionId: CONN, displayName: "Claude", platform: "claude" },
@@ -954,7 +955,7 @@ test("a foreign-currency card request shows the converted amount and the rate's 
   try {
     const clock: Clock = fixedClock(NOW);
     const { userId } = await makePerson(db, "c6-converted", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } }),
     );
@@ -990,7 +991,7 @@ test("a rule-triggered held email shows who it goes to and the rule's own senten
     const clock: Clock = fixedClock(NOW);
     const { userId, dek } = await makePerson(db, "c6-rule", keyWrapper);
     // Changes are allowed without asking; only the rule asks.
-    await upsertPermissions(db, baseGrants(userId, CONN, { changeTools: "allow" }));
+    await grantServices(db, baseGrants(userId, CONN, { changeTools: "allow" }));
     await createRule(
       db,
       {
@@ -1266,6 +1267,24 @@ test("after reading a stranger's email, the card says so: a reply to that sender
   }
 });
 
+// Several accounts of one service (docs/adr/several-accounts-per-agent.md): the card says which
+// inbox the agent read the email in.
+test("what the agent recently read names the inbox it was in", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const recentRead = { lastReadAt: new Date(NOW.getTime() - 3 * 60_000), untilAt: new Date(NOW.getTime() + 57 * 60_000),
+      sources: [{ service: "Gmail", kind: "email" as const, sender: "billing@payfast-au.co", account: "levyoren1@gmail.com" }] };
+    const held = await arrangeHeld(db, keyWrapper, "read-inbox", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
+      { recipientHistory: async () => ({ fresh: ["accounts@payfast-au.co"], unchecked: [] }), readExposures: { record: async () => {}, active: async () => recentRead } });
+    const card = (await held.actions.load(await freshSession(db, held.userId))).pending[0]!;
+    assert.equal(line(card, "Claude recently read"), "an email from billing@payfast-au.co in levyoren1@gmail.com, 3 min ago");
+    assert.match(card.headsUp ?? "", /Claude read an email from billing@payfast-au\.co in levyoren1@gmail\.com 3 min ago\./);
+  } finally {
+    await db.close();
+  }
+});
+
 // Several accounts of one service (docs/adr/google-published-and-accounts.md): with two Gmail
 // accounts connected, the card's sentence says which one it sends from; with one, it doesn't.
 test("a card names the account up front only when the person has more than one of that service", async () => {
@@ -1275,7 +1294,8 @@ test("a card names the account up front only when the person has more than one o
     const call = { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail", connectorAccountLabel: "work@gmail.test" } as AgentCallArg;
     const a = await arrangeHeld(db, keyWrapper, "two-accounts", call, { grantedConnectors: ["google-gmail"] });
     const clock = fixedClock(NOW);
-    await createConnection(db, { userId: a.userId, connectorId: "google-gmail", accountLabel: "work@gmail.test", credentials: { access_token: "a" } }, a.dek, clock);
+    const work = await createConnection(db, { userId: a.userId, connectorId: "google-gmail", accountLabel: "work@gmail.test", credentials: { access_token: "a" } }, a.dek, clock);
+    await adoptStandIn(db, a.userId, "google-gmail", work.id);
     const single = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
     assert.equal(single.sentence, "wants to send an email to accounts@payfast-au.co", "one account needs no naming");
 
@@ -1341,7 +1361,7 @@ test("held calls to Warthog's own tools each say what they would add, pending an
   try {
     const clock: Clock = fixedClock(NOW);
     const { userId, dek } = await makePerson(db, "w01-core", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN, { changeTools: "allow" }));
+    await grantServices(db, baseGrants(userId, CONN, { changeTools: "allow" }));
     // The rule the reviewer set: "Ask me before any agent makes any change".
     await createRule(db, { userId, kind: "ask_first", scope: { type: "any_agent" }, action: { type: "any_change" } }, dek);
     const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);

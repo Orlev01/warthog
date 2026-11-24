@@ -33,8 +33,28 @@ describe("renderCheckedView", () => {
       { id: "b", withheld: true, kind: "sign-in code", from: "Google", tellThePerson: "Tell the person it arrived." },
     ], nextPageToken: "p2", note: "Previews only: read a message by its id for its full text." })!;
     assert.match(text, /^n\n1\. 2026-11-16 · Qantas <q@qantas\.com> · “Your booking” \[unread\] — Booking reference ABC123 \(id a\)\n2\. Withheld sign-in code from Google/);
-    assert.match(text, /query\.pageToken=p2/);
+    assert.match(text, /More results: search again with the same account, query\.q and query\.pageToken=p2/);
     assert.equal(renderCheckedView({ status: 200, body: "{}" }), null);
+  });
+
+  it("reads a search across inboxes with the inbox on each line, what was searched, and each inbox's next page", () => {
+    const text = renderCheckedView({ notice: "n", source: { service: "Gmail" }, messages: [
+      { account: "home@example.com", id: "abc234.a", date: "2026-11-16", from: "Qantas <q@qantas.com>", subject: "Your booking", unread: true },
+      { account: "work@example.com", id: "xyz789.b", withheld: true, kind: "sign-in code", from: "Google", tellThePerson: "Tell the person it arrived." },
+    ], accounts: [
+      { account: "home@example.com", status: "searched", count: 1, nextPageToken: "p2" },
+      { account: "work@example.com", status: "searched", count: 1 },
+      { account: "a@outlook.com", status: "searched", count: 0, nextSkip: "5" },
+    ], coverage: "Searched 2 inboxes: home@example.com (1), work@example.com (1).", note: "Previews only: read a message by its id for its full text." })!;
+    const lines = text.split("\n");
+    assert.equal(lines[1], "Searched 2 inboxes: home@example.com (1), work@example.com (1).");
+    assert.equal(lines[2], "1. In home@example.com · 2026-11-16 · Qantas <q@qantas.com> · “Your booking” [unread] (id abc234.a)");
+    assert.match(lines[3]!, /^2\. In work@example\.com · Withheld sign-in code from Google/);
+    assert.match(text, /More from home@example\.com: search again with account home@example\.com, the same query\.q and query\.pageToken=p2/);
+    assert.match(text, /More from a@outlook\.com: search again with account a@outlook\.com, the same query and query\.\$skip=5/);
+    // Nothing found still says what was searched.
+    const none = renderCheckedView({ notice: "n", messages: [], accounts: [], coverage: "Searched 2 inboxes: a (0), b (0)." })!;
+    assert.equal(none, "n\nSearched 2 inboxes: a (0), b (0).\nNo messages found.");
   });
 });
 

@@ -24,6 +24,7 @@ import { createRule } from "../db/rules";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 
+import { adoptStandIn, grantServices } from "../../test/grants";
 const NOW = new Date("2026-11-16T00:00:00.000Z");
 
 function devConfig(): Config {
@@ -85,12 +86,13 @@ async function seed(db: Db, config: Config, changeTools: "allow" | "ask_first", 
   const user = await createUser(db, { email: `p-${randomUUID()}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
   const connectionId = randomUUID();
   await createAgent(db, { userId: user.id, connectionId, displayName: "Claude", platform: "claude" }, fixedClock(NOW));
-  await upsertPermissions(db, {
+  await grantServices(db, {
     userId: user.id, connectionId, grantedConnectors: connectors, readTools: true, changeTools, identityAccess: true,
     highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120,
   });
   for (const connectorId of connectors) {
-    await createConnection(db, { userId: user.id, connectorId, accountLabel: "sam@example.com", credentials: { access_token: "tok", api_key: "k" } }, dek, fixedClock(NOW));
+    const created = await createConnection(db, { userId: user.id, connectorId, accountLabel: "sam@example.com", credentials: { access_token: "tok", api_key: "k" } }, dek, fixedClock(NOW));
+    await adoptStandIn(db, user.id, connectorId, created.id);
   }
   return { userId: user.id, connectionId, dek };
 }
@@ -115,7 +117,7 @@ test("after reading a stranger's email, an 'allowed' agent's send to a new addre
     assert.equal(detail.readCheck, true);
     assert.deepEqual(detail.newRecipients, ["billing@payfast-au.co"]);
     const sources = (detail.recentRead as { sources: { at?: string }[] }).sources;
-    assert.deepEqual(sources.map(({ at, ...rest }) => (assert.ok(at), rest)), [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co" }]);
+    assert.deepEqual(sources.map(({ at, ...rest }) => (assert.ok(at), rest)), [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co", account: "sam@example.com" }], "who wrote it and the inbox it was read in, never what it said");
 
     const known = await rpc(dispatch, connectionId, "google-gmail__send", send("accountant@example.com"));
     assert.notEqual(known.result?.structuredContent?.status, "pending_approval", "a known address goes ahead");

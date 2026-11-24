@@ -2,7 +2,7 @@ import { listRecordsForUser, type RecordKind } from "@/server/db/life-admin-reco
 import { storedRecordName } from "@/domain/life-admin/normalise";
 import { BUILT_IN, type Catalogue } from "@/domain/life-admin/catalogue";
 import { catalogueFor } from "@/server/life-admin/catalogue";
-import { connectorToolsetFor } from "@/server/connectors/tool-routing";
+import { accountToolsFor } from "@/server/connectors/tool-routing";
 import { readProviderToolsets } from "@/server/connectors/provider-runtime";
 import type { CatalogueIndex } from "@/server/connectors/catalogue";
 import { pageSkillChoices } from "../../../../../server/db/skills";
@@ -60,12 +60,14 @@ import { setAgentSkillAccess } from "@/server/agents/skill-access";
 import { lockOAuthConnection } from "@/server/oauth/connection-lock";
 
 import { getAgentById } from "../../../../../server/db/agents";
-import { listConnectionsForUser } from "../../../../../server/db/connections";
+import { listConnectionsForUser, type Connection } from "../../../../../server/db/connections";
 import { listAllRules } from "../../../../../server/db/rules";
 import { getUserById } from "../../../../../server/db/users";
 import {
   getConnectionPermissions,
   upsertPermissions,
+  type AccountGrant,
+  type AccountGrantInput,
   type ConnectionPermissions,
   type PermissionGrants,
 } from "../../../../../server/db/agent-permissions";
@@ -74,7 +76,7 @@ import { budgetAllowsCard } from "../../../../../domain/budget/budget";
 import { ruleSentence, type Rule } from "../../../../../domain/rules/rules";
 import { ruleDisplayLabelsFor } from "../../rules/rule-targets";
 import type { KeyWrapper } from "../../../../../server/crypto/key-wrapper";
-import type { PermissionsViewProps } from "../../../../../components/agents/permissions-view";
+import type { AccountAccess, PermissionsViewProps } from "../../../../../components/agents/permissions-view";
 import type { Db } from "../../../../../server/db/index";
 import type { Session } from "../../../../../server/auth/session";
 
@@ -86,10 +88,11 @@ const DEFAULT_CURRENCY = "A$";
 // twin access-key create flow caps it the same way.
 const MAX_CURRENCY_LENGTH = 8;
 
-// The connected services a save may name, capped as the consent screen caps its ticked
-// services, so an oversized list is rejected at the boundary before any write.
-const MAX_SERVICE_LENGTH = 200;
-const MAX_SERVICES = 100;
+// The connected accounts a save may name, capped so an oversized list is rejected at the
+// boundary before any write.
+const MAX_ACCOUNTS = 100;
+const MAX_TOOL_NAME = 300;
+const MAX_TOOLS = 1000;
 
 // A well-formed uuid: the only shape an agent id handle may take (agents.id is a uuid,
 // db/migrations/0020_agents.sql). A malformed value is rejected at the validation
@@ -139,31 +142,25 @@ const inputSchema = z.object({
     .max(1000)
     .optional(),
   resourceControls: z.object({ tasksWrite: z.boolean().optional(), recordsWrite: z.boolean().optional(), recordIds: z.array(z.uuid()).max(5000).nullable().optional() }).optional(),
-  connectorPolicies: z
-    .record(
-      z.string().max(MAX_SERVICE_LENGTH),
-      z.object({
-        allowedTools: z.array(z.string().min(1).max(300)).max(1000).nullable().optional(),
-        readTools: z.boolean().optional(),
-        changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
-      }),
-    )
-    .refine((p) => Object.keys(p).length <= MAX_SERVICES)
-    .optional(),
   highTier: z.boolean().optional(),
   memoryRead: z.boolean().optional(),
-  // Review fix W2.3 — the tasks and life-admin records grants (migration 0068) and the
-  // connected services the agent may use: the ids of the services TICKED on the screen,
-  // every one of the person's connected services being shown (an absent id is unticked).
+  // Review fix W2.3 — the tasks and life-admin records grants (migration 0068).
   tasks: z.boolean().optional(),
   records: z.boolean().optional(),
-  connectorAccounts: z
-    .record(z.string().min(1).max(MAX_SERVICE_LENGTH), z.uuid())
-    .refine((accounts) => Object.keys(accounts).length <= MAX_SERVICES)
-    .optional(),
-  connectors: z
-    .array(z.string().min(1).max(MAX_SERVICE_LENGTH))
-    .max(MAX_SERVICES)
+  // The connected accounts the screen showed (docs/adr/several-accounts-per-agent.md), one
+  // row each: whether the agent may use it and that account's own settings, each left out
+  // when it follows the agent's ("Same as this agent's setting", "All tools").
+  accounts: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        granted: z.boolean(),
+        readTools: z.boolean().optional(),
+        changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
+        allowedTools: z.array(z.string().min(1).max(MAX_TOOL_NAME)).max(MAX_TOOLS).optional(),
+      }),
+    )
+    .max(MAX_ACCOUNTS)
     .optional(),
 });
 
@@ -209,19 +206,32 @@ export interface PermissionsActions {
   ): Promise<SaveResult>;
 }
 
+// One of the person's connected accounts as the Connectors section lists it (before its tools
+// are known): its service named through the catalogue, and whether it needs reconnecting.
+type ShownAccount = Omit<AccountAccess, "grant" | "readTools" | "changeTools">;
+
+// This agent's own settings for one account, or null when it may not use it. A setting that
+// follows the agent's is left out, as it is stored.
+function grantSettings(grants: readonly AccountGrant[], accountId: string): AccountAccess["grant"] {
+  const grant = grants.find((g) => g.accountId === accountId);
+  if (!grant) return null;
+  return {
+    ...(grant.readTools !== undefined ? { readTools: grant.readTools } : {}),
+    ...(grant.changeTools !== undefined ? { changeTools: grant.changeTools } : {}),
+    ...(grant.allowedTools ? { allowedTools: [...grant.allowedTools] } : {}),
+  };
+}
+
 // Build the screen's props from the agent and its stored grants. The policy-relevant
 // state the person edits — card access + its budget, the identity/high-tier/memory/
-// sharing toggles, the tasks and records grants, which of the person's connected services
-// it may use and the request limit — is reflected from storage. The loader adds the
-// effective skill choices and inherited/individual rules.
+// sharing toggles, the tasks and records grants, which of the person's connected accounts
+// it may use (each with its own settings) and the request limit — is reflected from storage.
+// The loader adds the accounts' tools, the effective skill choices and inherited/individual
+// rules.
 function toViewProps(
   agentName: string,
   grants: ConnectionPermissions,
-  services: readonly {
-    id: string;
-    name: string;
-    accounts: { id: string; label: string }[];
-  }[],
+  accounts: readonly ShownAccount[],
   rules: readonly Rule[],
 ): PermissionsViewProps {
   return {
@@ -230,15 +240,9 @@ function toViewProps(
     changeTools: grants.changeTools,
     memoryWrite: grants.memoryWrite ?? grants.memoryRead,
     identityFields: grants.identityFields ?? null,
-    connectors: services.map((service) => ({
-      id: service.id,
-      name: service.name,
-      policy: grants.connectorPolicies?.[service.id],
-      accounts: service.accounts,
-      accountId:
-        grants.connectorAccounts?.[service.id] ??
-        (service.accounts.length === 1 ? service.accounts[0]!.id : ""),
-      granted: grants.grantedConnectors.includes(service.id),
+    accounts: accounts.map((account) => ({
+      ...account,
+      grant: grantSettings(grants.accounts, account.id),
       readTools: [],
       changeTools: [],
     })),
@@ -260,58 +264,49 @@ function toViewProps(
   };
 }
 
-// The connected services after an edit, and the tool classes that go with them. The screen
-// shows (and so edits) only the person's OWN connected services: a ticked id is granted only
-// when it is one of them (never trusting the form for this), an unticked one is revoked, and a
-// stored grant for a service the screen does not show (since disconnected) is kept. A granted
-// service gets what consent gives it: its read tools on and its changes "ask me first" unless
-// a less strict class is already stored. With nothing granted the classes are left as stored
-// (they gate connector tools only).
-function mergeConnectors(
-  stored: PermissionGrants,
-  ticked: readonly string[] | undefined,
-  connected: ReadonlySet<string>,
-): Pick<PermissionGrants, "grantedConnectors" | "readTools" | "changeTools"> {
-  if (ticked === undefined) {
-    return {
-      grantedConnectors: stored.grantedConnectors,
-      readTools: stored.readTools,
-      changeTools: stored.changeTools,
-    };
-  }
-  const kept = stored.grantedConnectors.filter((id) => !connected.has(id));
-  const granted = ticked.filter((id) => connected.has(id));
-  const grantedConnectors = [...new Set([...kept, ...granted])];
-  if (granted.length === 0) {
-    return {
-      grantedConnectors,
-      readTools: stored.readTools,
-      changeTools: stored.changeTools,
-    };
-  }
-  return {
-    grantedConnectors,
-    readTools: true,
-    changeTools:
-      stored.changeTools === "off" ? "ask_first" : stored.changeTools,
-  };
+// The accounts the agent may use after an edit. The screen shows (and so edits) every one of
+// the person's OWN connected accounts, one row each: a ticked row is granted with the settings
+// it carries, an unticked one is removed, and a stored grant for an account the form didn't
+// show (one connected since the page loaded) is kept as it was. The rows were already checked to
+// be the person's own accounts. Left out of the save, the stored accounts stay.
+function mergeAccounts(
+  stored: readonly AccountGrant[],
+  rows: PermissionsSaveInput["accounts"],
+): AccountGrantInput[] | undefined {
+  if (rows === undefined) return undefined;
+  const shown = new Set(rows.map((row) => row.id));
+  const kept: AccountGrantInput[] = stored
+    .filter((grant) => !shown.has(grant.accountId))
+    .map(({ connectorId: _service, ...grant }) => grant);
+  const granted: AccountGrantInput[] = rows
+    .filter((row) => row.granted)
+    .map((row) => ({
+      accountId: row.id,
+      ...(row.readTools !== undefined ? { readTools: row.readTools } : {}),
+      ...(row.changeTools !== undefined ? { changeTools: row.changeTools } : {}),
+      ...(row.allowedTools !== undefined ? { allowedTools: row.allowedTools } : {}),
+    }));
+  return [...kept, ...granted];
 }
 
-// The agent-wide reading and changes defaults after an edit. The Connectors section always
-// sends them as shown, and an agent connected with no services stores them off, so on the
-// FIRST grant (no connected service granted before, at least one now) a default the person
-// left as it was must not switch the new grant's tools off: it takes what consent gives
-// instead. A default the person changed in the same save, and every save once a service is
-// granted, keeps the submitted value.
+// The agent-wide reading and changes defaults after an edit. A ticked account gets what consent
+// gives it: reads on and changes "ask me first" unless a less strict class is already stored;
+// with nothing ticked the classes are left as stored (they gate connector tools only). The
+// Connectors section always sends the defaults as shown, and an agent connected with no
+// accounts stores them off, so on the FIRST grant (no account granted before, at least one now)
+// a default the person left as it was must not switch the new grant's tools off: it takes what
+// consent gives instead. A default the person changed in the same save, and every save once an
+// account is granted, keeps the submitted value.
 function mergeToolClasses(
   stored: ConnectionPermissions,
-  merged: Pick<PermissionGrants, "grantedConnectors" | "readTools" | "changeTools">,
+  accounts: readonly AccountGrantInput[] | undefined,
   input: PermissionsSaveInput,
-  connected: ReadonlySet<string>,
 ): Pick<PermissionGrants, "readTools" | "changeTools"> {
-  const firstGrant =
-    !stored.grantedConnectors.some((id) => connected.has(id)) &&
-    merged.grantedConnectors.some((id) => connected.has(id));
+  const ticked = input.accounts?.some((row) => row.granted) ?? false;
+  const merged: Pick<PermissionGrants, "readTools" | "changeTools"> = ticked
+    ? { readTools: true, changeTools: stored.changeTools === "off" ? "ask_first" : stored.changeTools }
+    : { readTools: stored.readTools, changeTools: stored.changeTools };
+  const firstGrant = stored.accounts.length === 0 && (accounts?.length ?? 0) > 0;
   const chosen = <T,>(submitted: T | undefined, before: T, after: T): T =>
     submitted === undefined || (firstGrant && submitted === before) ? after : submitted;
   return {
@@ -329,17 +324,15 @@ function mergeGrants(
   input: PermissionsSaveInput,
   userId: string,
   connectionId: string,
-  connected: ReadonlySet<string>,
 ): PermissionGrants {
-  const connectors = mergeConnectors(stored, input.connectors, connected);
+  const { accounts: _stored, grantedConnectors: _services, ...rest } = stored;
+  const accounts = mergeAccounts(stored.accounts, input.accounts);
   return {
-    ...stored,
-    ...connectors,
-    ...mergeToolClasses(stored, connectors, input, connected),
+    ...rest,
+    ...(accounts !== undefined ? { accounts } : {}),
+    ...mergeToolClasses(stored, accounts, input),
     userId,
     connectionId,
-    connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,
-    connectorPolicies: input.connectorPolicies ?? stored.connectorPolicies,
     resourceControls: input.resourceControls ? { ...stored.resourceControls, ...input.resourceControls } : stored.resourceControls,
     identityFields:
       input.identityFields !== undefined
@@ -371,6 +364,24 @@ function mergeGrants(
 // words (docs/adr/life-admin-profile.md), never the stored enum ("renewal_appointment").
 export function recordName(fields: Readonly<Record<string, unknown>>, kind: RecordKind, type: string | null = null, catalogue: Catalogue = BUILT_IN): string {
   return storedRecordName(catalogue.typeOfRecord(kind, type), fields, Boolean(type));
+}
+
+// Whether every account row a save names is one of the person's OWN connected accounts (the
+// session's, never trusting the form), named once, and every tool it ticks belongs to that
+// account's own service.
+function ownsAccounts(
+  connections: readonly Connection[],
+  rows: NonNullable<PermissionsSaveInput["accounts"]>,
+): boolean {
+  const service = new Map(connections.map((c) => [c.id, c.connectorId]));
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const connectorId = service.get(row.id);
+    if (connectorId === undefined || seen.has(row.id)) return false;
+    seen.add(row.id);
+    if (row.allowedTools?.some((tool) => !tool.startsWith(`${connectorId}__`))) return false;
+  }
+  return true;
 }
 
 export function createPermissionsActions(
@@ -416,20 +427,15 @@ export function createPermissionsActions(
       });
   }
 
-  // The person's OWN connected services (member-scoped by the session's user id), one per
-  // service however many accounts of it are connected, named through the catalogue.
-  async function connectedServices(userId: string) {
-    const connections = await listConnectionsForUser(db, userId);
-    const ids = [...new Set(connections.map((c) => c.connectorId))];
-    return ids.map((id) => ({
-      id,
-      name: nameOf?.(id) ?? id,
-      accounts: connections
-        .filter((c) => c.connectorId === id)
-        .map((c) => ({
-          id: c.id,
-          label: `${c.accountLabel}${c.status === "connected" ? "" : " (reconnect needed)"}`,
-        })),
+  // The person's OWN connected accounts (member-scoped by the session's user id), one each
+  // however many of a service are connected, with the service named through the catalogue.
+  function connectedAccounts(connections: readonly Connection[]): ShownAccount[] {
+    return connections.map((c) => ({
+      id: c.id,
+      connectorId: c.connectorId,
+      serviceName: nameOf?.(c.connectorId) ?? c.connectorId,
+      label: c.accountLabel,
+      connected: c.status === "connected",
     }));
   }
 
@@ -451,34 +457,41 @@ export function createPermissionsActions(
       agent.connectionId,
     );
     if (grants == null) return null;
+    const connections = await listConnectionsForUser(db, session.userId);
     const props = toViewProps(
       agent.displayName,
       grants,
-      await connectedServices(session.userId),
+      connectedAccounts(connections),
       await agentRules(session.userId, agent.connectionId, agent.displayName),
     );
     props.currency =
       grants.cardBudget?.currency ??
       (await getAccountCurrency(db, session.userId));
-    if (!keyWrapper) return props;
-    const user = await getUserById(db, session.userId);
-    if (!user) return null;
-    const dek = await keyWrapper.unwrap(user.wrappedDek);
-    const { catalogue } = await catalogueFor(db, session.userId, dek);
-    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind, record.type, catalogue), description: catalogue.typeOfRecord(record.kind, record.type).label, granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
+    const user = keyWrapper ? await getUserById(db, session.userId) : null;
+    if (keyWrapper && !user) return null;
+    const dek = keyWrapper && user ? await keyWrapper.unwrap(user.wrappedDek) : undefined;
 
+    // Each account's own tools, read and change tools apart: its service's curated tools, or
+    // for an account an outside provider runs (Notion), the tools that provider listed for it.
     if (deps.catalogue) {
-      const connections = await listConnectionsForUser(db, session.userId);
-      const providerTools = await readProviderToolsets(db, deps.catalogue, session.userId, connections, dek);
-      const inventory = connectorToolsetFor(connections, connections.map(c => c.connectorId), deps.catalogue, grants.connectorAccounts, providerTools);
-      props.connectors = props.connectors.map(service => {
-        const declarations = inventory[service.id] ?? [];
-        return { ...service,
-          readTools: declarations.filter(t => typeof t !== "string" && t.makesChange === false).map(t => `${service.id}__${typeof t === "string" ? t : t.name}`),
-          changeTools: declarations.filter(t => typeof t === "string" || t.makesChange !== false).map(t => `${service.id}__${typeof t === "string" ? t : t.name}`),
+      const providerTools = dek ? await readProviderToolsets(db, deps.catalogue, session.userId, connections, dek) : {};
+      const catalogue = deps.catalogue;
+      props.accounts = props.accounts.map((account) => {
+        const connection = connections.find((c) => c.id === account.id)!;
+        const tools = (accountToolsFor(connection, catalogue, providerTools) ?? []).map((tool) => ({
+          name: `${account.connectorId}__${tool.name}`,
+          reads: tool.makesChange === false,
+        }));
+        return {
+          ...account,
+          readTools: tools.filter((tool) => tool.reads).map((tool) => tool.name),
+          changeTools: tools.filter((tool) => !tool.reads).map((tool) => tool.name),
         };
       });
     }
+    if (!keyWrapper || !dek) return props;
+    const { catalogue } = await catalogueFor(db, session.userId, dek);
+    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind, record.type, catalogue), description: catalogue.typeOfRecord(record.kind, record.type).label, granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
 
     const skills = await pageSkillChoices(db, session.userId, agent.id, dek, {
       cursor: options.skillCursor,
@@ -537,22 +550,9 @@ export function createPermissionsActions(
         { lock: true },
       );
       if (!stored) return { ok: false, reason: "not_found" };
-      const connections = await listConnectionsForUser(tx, session.userId);
-      const connected = new Set(connections.map((c) => c.connectorId));
       if (
-        valid.connectorAccounts &&
-        Object.entries(valid.connectorAccounts).some(
-          ([service, account]) =>
-            !connections.some(
-              (c) => c.connectorId === service && c.id === account,
-            ),
-        )
-      ) {
-        return { ok: false, reason: "invalid_request" };
-      }
-      if (
-        valid.connectorPolicies &&
-        Object.keys(valid.connectorPolicies).some((id) => !connected.has(id))
+        valid.accounts &&
+        !ownsAccounts(await listConnectionsForUser(tx, session.userId), valid.accounts)
       )
         return { ok: false, reason: "invalid_request" };
       if (
@@ -564,7 +564,6 @@ export function createPermissionsActions(
         const owned = await tx.query("SELECT id FROM life_admin_records WHERE user_id = $1 AND id = ANY($2::uuid[])", [session.userId, valid.resourceControls.recordIds]);
         if (owned.rows.length !== new Set(valid.resourceControls.recordIds).size) return { ok: false, reason: "invalid_request" };
       }
-      if (valid.connectorPolicies && Object.entries(valid.connectorPolicies).some(([service, policy]) => policy.allowedTools?.some(tool => !tool.startsWith(`${service}__`)))) return { ok: false, reason: "invalid_request" };
       if (valid.memories) {
         const owned = await tx.query(
           "SELECT id FROM memories WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE",
@@ -579,7 +578,6 @@ export function createPermissionsActions(
         valid,
         session.userId,
         agent.connectionId,
-        connected,
       );
       if (
         next.cardAccess &&
@@ -600,7 +598,7 @@ export function createPermissionsActions(
           agent.id,
           valid.memories,
         );
-      await upsertPermissions(tx, next);
+      const saved = await upsertPermissions(tx, next);
       if (keyWrapper) {
         const user = await getUserById(tx, session.userId);
         if (!user) throw new Error("No account for permission change");
@@ -615,9 +613,11 @@ export function createPermissionsActions(
           kind: "permission_change",
           source: "warthog",
           outcome: "saved",
+          // The access before and after, in the same stored shape: each carries the
+          // accounts the agent may use with their own settings.
           payload: {
             before: stored,
-            after: next,
+            after: saved,
             skillChoices: valid.skills,
             memoryChoices: valid.memories,
           },

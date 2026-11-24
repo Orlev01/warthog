@@ -182,18 +182,3 @@
   .wh-timeline > li::before { border-color: CanvasText; }
 }
 
-/* Collapsible connector modules on an agent's Connectors section. */
-.wh-connector-module { min-width: 0; border: 1px solid var(--wh-line); border-radius: var(--wh-radius-panel); background: var(--wh-surface); box-shadow: var(--wh-panel-shadow, none); }
-.wh-connector-module[open] { border-color: color-mix(in srgb, var(--wh-tint) 35%, var(--wh-line)); }
-.wh-connector-module--off { background: color-mix(in srgb, var(--wh-surface) 70%, var(--wh-canvas, var(--wh-surface))); }
-.wh-connector-module--off .wh-brand-tile img { filter: grayscale(1); opacity: .7; }
-.wh-connector-summary { display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 14px 16px; cursor: pointer; list-style: none; border-radius: var(--wh-radius-panel); }
-.wh-connector-summary::-webkit-details-marker { display: none; }
-.wh-connector-summary:hover { background: color-mix(in srgb, var(--wh-tint) 4%, transparent); }
-.wh-connector-module[open] > .wh-connector-summary { border-bottom: 1px solid var(--wh-line); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.wh-connector-body { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
-.wh-tool-group { min-width: 0; margin: 0; padding: 10px 12px 4px; border: 1px solid var(--wh-line); border-radius: var(--wh-radius-inset); border-inline-start: 3px solid var(--wh-tone); background: color-mix(in srgb, var(--wh-tone-soft) 45%, var(--wh-surface)); }
-.wh-tool-group legend { padding-inline: 4px; }
-@media (forced-colors: active) {
-  .wh-connector-module, .wh-tool-group { border: 1px solid CanvasText; }
-}

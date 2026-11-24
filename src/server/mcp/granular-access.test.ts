@@ -17,6 +17,7 @@ import { createToolRegistry } from "./tools/registry";
 import { createListRecordsTool, createUpdateRecordTool } from "./tools/records";
 import { createCreateTaskTool } from "./tools/tasks";
 
+import { grantServices } from "../../test/grants";
 test("tool allowlists agree in discovery and execution; unknown API semantics cannot bypass an email prohibition", async () => {
  const db=await freshDb();
  try {
@@ -24,7 +25,9 @@ test("tool allowlists agree in discovery and execution; unknown API semantics ca
   const user=await createUser(db,{email:"granular@example.test",wrappedDek:await keyWrapper.wrap(dek)});
   const connectionId=randomUUID(), agent=await createAgent(db,{userId:user.id,connectionId,displayName:"Test",platform:"other"},clock);
   const connection={userId:user.id,agentId:agent.id,connectionId,active:true};
-  const grants=await upsertPermissions(db,{userId:user.id,connectionId,grantedConnectors:["google-gmail","resend"],readTools:true,changeTools:"allow",identityAccess:true,highTierAccess:false,cardAccess:false,cardBudget:null,skillsScope:[],memoryRead:true,sharing:false,rulesScope:[],rateLimit:120,connectorPolicies:{"google-gmail":{allowedTools:["google-gmail__search"]}}});
+  const grants=await grantServices(db,{userId:user.id,connectionId,grantedConnectors:["google-gmail","resend"],readTools:true,changeTools:"allow",identityAccess:true,highTierAccess:false,cardAccess:false,cardBudget:null,skillsScope:[],memoryRead:true,sharing:false,rulesScope:[],rateLimit:120,connectorPolicies:{"google-gmail":{allowedTools:["google-gmail__search"]}}});
+  // Compose binds each call to an account; this pipeline has no binding, so the calls arrive bound.
+  const gmail=grants.accounts.find(a=>a.connectorId==="google-gmail")!.accountId;
   let executed=0;
   const pipeline=createAgentCallPipeline({db,keyWrapper,clock,recorder:createDbRecorder({db,clock,dekFor:async()=>dek}),rateLimiter:createRateLimiter(clock),executeTool:async()=>{executed++;return {status:200};}});
   const registry=createToolRegistry({pipeline});
@@ -32,13 +35,13 @@ test("tool allowlists agree in discovery and execution; unknown API semantics ca
   const tools=registry.resolveTools(grants,toolset,{expanded:true});
   assert.ok(tools.some(t=>t.name==="google-gmail__search"));
   assert.ok(!tools.some(t=>t.name==="google-gmail__read"||t.name==="google-gmail__new_tool"));
-  assert.equal((await pipeline.handleAgentCall(connection,{connector:"google-gmail",tool:"google-gmail__read",makesChange:false})).status,"refused");
-  await upsertPermissions(db,{...grants,connectorPolicies:{"google-gmail":{allowedTools:["google-gmail__read","google-gmail__search"]}}});
-  const held = await pipeline.handleAgentCall(connection,{connector:"google-gmail",tool:"google-gmail__read",makesChange:false,requiresApproval:true});
+  assert.equal((await pipeline.handleAgentCall(connection,{connector:"google-gmail",tool:"google-gmail__read",makesChange:false,connectorAccountId:gmail})).status,"refused");
+  await grantServices(db,{...grants,connectorPolicies:{"google-gmail":{allowedTools:["google-gmail__read","google-gmail__search"]}}});
+  const held = await pipeline.handleAgentCall(connection,{connector:"google-gmail",tool:"google-gmail__read",makesChange:false,requiresApproval:true,connectorAccountId:gmail});
   assert.equal(held.status,"pending_approval");
   if (held.status === "pending_approval") {
     await decide(db,{userId:user.id,id:held.approval_id,decision:{status:"approved"}},dek,clock);
-    await upsertPermissions(db,grants);
+    await grantServices(db,grants);
     assert.equal((await pipeline.executeApprovedHold(user.id,held.approval_id)).status,"refused","a previous approval cannot override a revoked tool");
   }
   await createRule(db,{userId:user.id,kind:"never_allow",scope:{type:"any_agent"},action:{type:"send_message",channel:"email"}},dek);
@@ -47,12 +50,12 @@ test("tool allowlists agree in discovery and execution; unknown API semantics ca
   assert.equal(executed,0);
   const first=await createRecord(db,{userId:user.id,kind:"subscription",fields:{title:"Chosen"},status:"active",dueDate:null,source:{kind:"person"}},dek);
   const second=await createRecord(db,{userId:user.id,kind:"subscription",fields:{title:"Private"},status:"active",dueDate:null,source:{kind:"person"}},dek);
-  await upsertPermissions(db,{...grants,tasksAccess:true,recordsAccess:true,resourceControls:{tasksWrite:false,recordsWrite:false,recordIds:[first.id]}});
+  await grantServices(db,{...grants,tasksAccess:true,recordsAccess:true,resourceControls:{tasksWrite:false,recordsWrite:false,recordIds:[first.id]}});
   const list=await createListRecordsTool({db,keyWrapper}).handle({},connection);
   assert.equal(list.status,"ok"); if(list.status==="ok") assert.deepEqual(list.records.map(r=>r.id),[first.id]);
   assert.equal((await createUpdateRecordTool({db,keyWrapper}).handle({id:first.id,fields:{title:"Change"}},connection)).status,"refused");
   assert.equal((await createCreateTaskTool({db,keyWrapper}).handle({title:"Change"},connection)).status,"refused");
-  await upsertPermissions(db,{...grants,tasksAccess:true,recordsAccess:true,resourceControls:{recordsWrite:true,recordIds:[first.id]}});
+  await grantServices(db,{...grants,tasksAccess:true,recordsAccess:true,resourceControls:{recordsWrite:true,recordIds:[first.id]}});
   assert.equal((await createUpdateRecordTool({db,keyWrapper}).handle({id:second.id,fields:{title:"Forbidden"}},connection)).status,"refused");
  } finally {await db.close();}
 });

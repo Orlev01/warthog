@@ -170,7 +170,7 @@ function baselineGrants(
   return {
     userId,
     connectionId,
-    grantedConnectors: [],
+    accounts: [],
     readTools: false,
     changeTools: "off",
     identityAccess: true,
