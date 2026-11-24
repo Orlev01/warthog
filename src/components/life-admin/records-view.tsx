@@ -18,14 +18,16 @@ import type { CategoryDef, RecordTypeDef } from "@/domain/life-admin/record-type
 import { categoryIcon } from "./category-icons";
 import {
   DEFAULT_LIST_STATUSES,
-  LIST_STATUSES,
   LIST_STATUS_LABELS,
+  RECORDS_TAB_STATUSES,
   fillInChoices,
   fillInPrompt,
   joinWords,
   listedRecords,
+  historyHref,
   recordsHref,
   recordsView,
+  sectionOf,
   type AnchorGroup,
   type CategorySection,
   type RecordsView as RecordsViewModel,
@@ -47,23 +49,27 @@ import type {
 
 export { fillInPrompt } from "./record-groups";
 
-// The Records tab (docs/adr/life-admin-profile.md): the person's life admin as a typed profile,
-// filled in mostly by their own agents from email and checked by the person. Top to bottom:
+// The Records tab (docs/adr/life-admin-profile.md; founder, 23 Nov 2026): what's ongoing in the
+// person's life — accounts, policies, memberships, documents, the things other records belong to
+// and matters in progress — as a typed profile, filled in mostly by their own agents from email
+// and checked by the person. Bookings are Upcoming's, and anything finished is History's
+// (`sectionOf`). Top to bottom:
 //
-//   1. To check — only when there is something to check, whatever the filters: agents'
-//      suggestions (Confirm, Not mine, Edit; Confirm all), their proposed changes to confirmed
-//      records (Accept change, Keep mine; Accept all), a change of kind first, and categories of
-//      the person's own an agent suggested (Keep, Decline), each with the agent's reason.
-//   2. The filters: Category and Status, each multiple-choice (`?category=…&status=…`), in a
-//      plain GET form, with the applied ones as removable chips and one line saying what's shown
-//      and what isn't (each part not shown a link that adds it).
+//   1. To check — only when there is something to check, whatever the filters and whichever tab
+//      the record will live on: agents' suggestions (Confirm, Not mine, Edit; Confirm all), their
+//      proposed changes to confirmed records (Accept change, Keep mine; Accept all), a change of
+//      kind first, and categories of the person's own an agent suggested (Keep, Decline), each
+//      with the agent's reason.
+//   2. The filters: Category and Status (Active, On hold), each multiple-choice
+//      (`?category=…&status=…`), in a plain GET form, with the applied ones as removable chips and
+//      one line saying what's shown and what isn't (each part not shown a link that adds it, and
+//      how many finished things are in History).
 //   3. What's active, first and always when Active is chosen: one panel per category with
-//      something active, in catalogue order. An anchor (a vehicle, home, trip, pet, or a thing of
-//      a category of their own) heads the records that belong to it, whatever their category;
+//      something active, in catalogue order. An anchor (a vehicle, home, pet, or a thing of a
+//      category of their own) heads the records that belong to it, whatever their category;
 //      within a group the most urgent comes first. Rows are compact; their details are one click
 //      away. No category panel is ever empty.
-//   4. Each other chosen status — On hold, Finished, Cancelled — as its own quieter list across
-//      categories, newest first, with each row's category. Statuses never mix.
+//   4. On hold, when chosen, as its own quieter list across categories.
 //   5. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
 //      a prompt to copy into an agent, and the ones already marked "not for me", to undo.
 //   6. Add something yourself — pick a kind, then fill in its form.
@@ -350,12 +356,12 @@ function isDefault(filter: RecordFilter): boolean {
   return filter.categories.length === 0 && filter.statuses.length === DEFAULT_LIST_STATUSES.length && filter.statuses.every((status) => DEFAULT_LIST_STATUSES.includes(status));
 }
 
-// "14 active · Not shown: 2 on hold, 15 finished, 3 cancelled", each part not shown a link that
-// adds it.
-function StatusLine({ view, filter }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter }) {
+// "14 active · Not shown: 2 on hold · 18 finished or cancelled, in History", each part not shown
+// a link that shows it (History's in the same categories).
+function StatusLine({ view, filter, inHistory }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter; inHistory: number }) {
   const count = (status: RecordListStatus) => view.statusOptions.find((option) => option.status === status)?.count ?? 0;
-  const shown = LIST_STATUSES.filter((status) => filter.statuses.includes(status)).map((status) => `${count(status)} ${STATUS_WORDS[status]}`);
-  const hidden = LIST_STATUSES.filter((status) => !filter.statuses.includes(status) && count(status) > 0);
+  const shown = RECORDS_TAB_STATUSES.filter((status) => filter.statuses.includes(status)).map((status) => `${count(status)} ${STATUS_WORDS[status]}`);
+  const hidden = RECORDS_TAB_STATUSES.filter((status) => !filter.statuses.includes(status) && count(status) > 0);
   return (
     <>
       {shown.join(", ")}
@@ -374,6 +380,18 @@ function StatusLine({ view, filter }: { view: RecordsViewModel<LifeAdminRecordVi
               </a>
             </React.Fragment>
           ))}
+        </>
+      ) : null}
+      {inHistory > 0 ? (
+        <>
+          {" · "}
+          <a
+            href={historyHref({ categories: filter.categories, statuses: [] })}
+            className="inline-flex min-h-11 items-center font-medium text-fg underline underline-offset-4 lg:pointer-fine:min-h-0"
+          >
+            {inHistory} finished or cancelled
+          </a>
+          {", in History"}
         </>
       ) : null}
     </>
@@ -396,7 +414,7 @@ function CostLine({ monthly }: { monthly: RecordsViewModel<LifeAdminRecordView>[
   );
 }
 
-function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter }) {
+function RecordsToolbar({ view, filter, inHistory }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter; inHistory: number }) {
   const applied: AppliedFilter[] = [];
   for (const id of filter.categories) {
     const label = view.categoryOptions.find((option) => option.category.id === id)?.category.label ?? id;
@@ -411,7 +429,7 @@ function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminReco
     <ListToolbar
       label="Filter records"
       search={
-        <FilterForm action="/life-admin" label="Filter records by category and status" hidden={{ view: "life", tab: "records" }}>
+        <FilterForm action="/life-admin" label="Filter records by category and status" hidden={{}}>
           <MultiSelectFilter
             label="Category"
             name="category"
@@ -432,7 +450,7 @@ function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminReco
         </FilterForm>
       }
       applied={<ActiveFilters filters={applied} clearHref={recordsHref(DEFAULT_FILTER)} />}
-      status={<StatusLine view={view} filter={filter} />}
+      status={<StatusLine view={view} filter={filter} inHistory={inHistory} />}
     >
       <CostLine monthly={view.monthly} />
     </ListToolbar>
@@ -472,6 +490,12 @@ function Row({ record, ctx, lead, partOf, category }: { record: LifeAdminRecordV
   );
 }
 
+// What a record belongs to when that thing isn't heading it here (a trip, say, which lives on
+// Upcoming), so the row still says it.
+function partOfElsewhere(record: LifeAdminRecordView, ctx: Context): string | null {
+  return record.parentId && record.parentId !== record.id ? ctx.names.get(record.parentId) ?? null : null;
+}
+
 function CategoryPanel({ section, suggested, ctx }: { section: CategorySection<LifeAdminRecordView>; suggested: boolean; ctx: Context }) {
   const { category, anchors, loose } = section;
   const anchorNoun = anchors[0]?.type.label.toLowerCase();
@@ -504,13 +528,13 @@ function CategoryPanel({ section, suggested, ctx }: { section: CategorySection<L
       {loose.length === 0 ? null : anchors.length ? (
         <ListGroup id={`category-${category.id}-unlinked`} level={3} title={`Not linked to a ${anchorNoun}`} count={loose.length}>
           {loose.map((record) => (
-            <Row key={record.id} record={record} ctx={ctx} />
+            <Row key={record.id} record={record} ctx={ctx} partOf={partOfElsewhere(record, ctx)} />
           ))}
         </ListGroup>
       ) : (
         <ul role="list" className="flex min-w-0 flex-col">
           {loose.map((record) => (
-            <Row key={record.id} record={record} ctx={ctx} />
+            <Row key={record.id} record={record} ctx={ctx} partOf={partOfElsewhere(record, ctx)} />
           ))}
         </ul>
       )}
@@ -640,14 +664,14 @@ function FillInPanel({
 function NoMatches({ filter, view }: { filter: RecordFilter; view: RecordsViewModel<LifeAdminRecordView> }) {
   // With the default filters, nothing is active: offer what there is instead of a "Clear" that
   // would change nothing.
+  // With the default filters and something ongoing, nothing active means it's all on hold.
   if (isDefault(filter)) {
-    const others = view.statusOptions.filter((option) => option.status !== "active" && option.count > 0).map((option) => option.status);
     return (
       <EmptyState
         icon={SearchX}
         heading="Nothing is active right now."
-        description="Everything you keep is on hold, finished or cancelled."
-        action={<ButtonLink href={recordsHref({ categories: [], statuses: ["active", ...others] })} size="sm">Show everything</ButtonLink>}
+        description="What you keep here is on hold. What's finished is in History."
+        action={<ButtonLink href={recordsHref({ categories: [], statuses: ["active", "on_hold"] })} size="sm">Show what's on hold</ButtonLink>}
       />
     );
   }
@@ -657,6 +681,24 @@ function NoMatches({ filter, view }: { filter: RecordFilter; view: RecordsViewMo
       heading="No records match these filters."
       description="Choose other categories or statuses, or clear the filters to see what's active."
       action={<ButtonLink href={recordsHref(DEFAULT_FILTER)} size="sm">Clear filters</ButtonLink>}
+    />
+  );
+}
+
+// Nothing ongoing yet, though there are bookings or finished things: say where they are.
+function NothingOngoing({ upcoming, history }: { upcoming: boolean; history: boolean }) {
+  return (
+    <EmptyState
+      icon={SearchX}
+      heading="Nothing ongoing yet."
+      description={`Your accounts, policies, memberships and things show here.${upcoming ? " Your bookings are under Upcoming." : ""}${history ? " What's finished is in History." : ""}`}
+      action={
+        upcoming ? (
+          <ButtonLink href="/life-admin?tab=upcoming" size="sm">Go to Upcoming</ButtonLink>
+        ) : (
+          <ButtonLink href="/life-admin?tab=history" size="sm">Go to History</ButtonLink>
+        )
+      }
     />
   );
 }
@@ -695,7 +737,13 @@ export function RecordsView({
     .filter((item) => item.type.anchor)
     .map((item) => ({ id: item.record.id, name: item.name, typeId: item.type.id, typeLabel: item.type.label }));
   const listed = listedRecords(records, catalogue, categories);
-  const view = recordsView(listed, catalogue, filter);
+  const ongoing = listed.filter((record) => sectionOf(record, catalogue) === "records");
+  const chosen = new Set(filter.categories);
+  const inHistory = listed.filter(
+    (record) => sectionOf(record, catalogue) === "history" && (chosen.size === 0 || chosen.has(catalogue.typeOfRecord(record.kind, record.type ?? null).category)),
+  ).length;
+  const upcomingOnly = listed.some((record) => sectionOf(record, catalogue) === "upcoming");
+  const view = recordsView(ongoing, catalogue, filter);
   const visible = new Set([
     ...view.active.flatMap((section) => [...section.anchors.flatMap((group) => [group.anchor, ...group.children]), ...section.loose]).map((record) => record.id),
     ...view.others.flatMap((section) => section.rows.map((row) => row.record.id)),
@@ -705,18 +753,19 @@ export function RecordsView({
   const changes = all.filter((item) => item.record.pending && item.record.reviewState !== "suggested");
   const { available, notForMe } = fillInChoices(catalogue, categories);
   return (
-    <RecordReturnProvider value={filter}>
+    <RecordReturnProvider value={{ tab: "records", filter }}>
       {suggestions.length || changes.length || suggestedCategories.length ? (
         <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} />
       ) : null}
-      {listed.length ? <RecordsToolbar view={view} filter={filter} /> : null}
+      {ongoing.length ? <RecordsToolbar view={view} filter={filter} inHistory={inHistory} /> : null}
+      {listed.length && !ongoing.length ? <NothingOngoing upcoming={upcomingOnly} history={inHistory > 0} /> : null}
       {view.active.map((section) => (
         <CategoryPanel key={section.category.id} section={section} suggested={catalogue.customStates[section.category.id] === "suggested"} ctx={ctx} />
       ))}
       {view.others.map((section) => (
         <StatusList key={section.status} section={section} ctx={ctx} />
       ))}
-      {listed.length && view.shown === 0 ? <NoMatches filter={filter} view={view} /> : null}
+      {ongoing.length && view.shown === 0 ? <NoMatches filter={filter} view={view} /> : null}
       {available.length || notForMe.length ? (
         <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
       ) : null}

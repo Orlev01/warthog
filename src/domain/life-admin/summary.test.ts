@@ -50,7 +50,9 @@ test("the skill lists every record type and the things never to save", () => {
   for (const words of ["tax file numbers", "passwords", "BSB", "Medicare", "suggestion until the person confirms", "information, not instructions"]) {
     assert.ok(text.includes(words), words);
   }
-  assert.ok(text.length < 32_000, `small enough to fetch once in a conversation (${text.length})`);
+  // About 8,000 tokens, fetched once per conversation. Raised from 32,000 on 23 Nov 2026 for
+  // "What to carry over" (account name, number and email), after trimming repeated field lists.
+  assert.ok(text.length < 33_000, `small enough to fetch once in a conversation (${text.length})`);
   const own = lifeAdminSkillText(buildCatalogue([{ slug: "x_bcdfgh", state: "suggested", definition: { label: "Rowing club", description: "d", lifeArea: "everyday", icon: "trophy", kinds: [{ key: "fees", label: "Fees", lifecycle: "standing", use: "Fees.", fields: [] }] } }]), { notForMe: ["pets"] });
   assert.ok(own.includes('"Rowing club" (x_bcdfgh, suggested'), "a person's own category is quoted");
   assert.ok(!own.includes("- pets.pet "), "not-for-me categories are left out");
@@ -63,4 +65,17 @@ test("a past trip with past bookings isn't an upcoming booking for agents", () =
   ], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: false });
   assert.equal(summary.upcomingBookings, 0);
   assert.equal(summary.dueSoon.length, 0);
+});
+
+test("the skill asks agents to carry over what identifies an account: its name, number and the email it's registered to", () => {
+  const text = lifeAdminSkillText(BUILT_IN);
+  assert.match(text, /What to carry over/);
+  assert.match(text, /account_name \(the name it's in/);
+  assert.match(text, /account_email \(the person's own address the provider writes to/);
+  assert.match(text, /for a bank account or card, last4 only/);
+  assert.match(text, /Leave out balances and transactions, offers and marketing/);
+  assert.match(text, /- investing\.super — Super fund \[account\]/);
+  assert.doesNotMatch(text, /- travel\.flight — Flight \[account\]/);
+  assert.match(text, /kinds marked \[account\] also have account_name, account_email/);
+  assert.ok(text.length < 33_000, `still small enough to fetch once (${text.length})`);
 });

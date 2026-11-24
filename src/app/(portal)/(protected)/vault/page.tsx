@@ -82,8 +82,7 @@ async function reportRefusals(
 }
 
 // Save a NEW everyday detail for the session person (review fix G1 — the "Add a detail"
-// form). A postal address with a moving-on date also refreshes Life admin, whose loader
-// rebuilds the moving checklist from it.
+// form).
 async function saveLowTierField(
   input: SaveLowTierFieldInput,
 ): Promise<{ ok: boolean; reason?: string }> {
@@ -93,7 +92,6 @@ async function saveLowTierField(
   const result = await reportRefusals(() => request.actions.saveLowTierField(request.session, input));
   if (result.ok) {
     revalidatePath("/vault");
-    if (input.kind === "postal_address") revalidatePath("/life-admin");
   }
   return result;
 }
@@ -111,7 +109,6 @@ async function updateLowTierField(
   );
   if (result.ok) {
     revalidatePath("/vault");
-    if (input.movingOn !== undefined) revalidatePath("/life-admin");
   }
   return result;
 }

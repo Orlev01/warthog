@@ -3,22 +3,21 @@ import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 // thin `page.tsx` composes — the convention's `createXActions(deps)` factory, as
 // `skills/actions.ts`, `vault/actions.ts`, `connectors/actions.ts` and
 // `settings/security/actions.ts` do). A Next entry file may export only its framework
-// fields, so the Life Admin triad logic lives here and the entry stays thin (OBS-025).
+// fields, so the Life Admin logic lives here and the entry stays thin (OBS-025).
 //
-// The Life Admin triad is the "Life admin" / "Tasks and hand-offs" / "Moving-house
-// helper" surface (brief; design §4.1; CLAUDE.md). `load` reads the SESSION person's
-// records, moving checklist and tasks server-side — content DECRYPTED under their own
-// DEK, each task's assignee + note authors resolved to the agent's display name — and
-// shapes them into the props the already-render-tested <LifeAdminView/> (E14-S11) and
-// <TasksView/> (E14-S12) are mounted over. The actions save / edit records, attach a
-// receipt file (encrypted on the server), set reminders, tick off / hand off / rebuild
-// the moving checklist, and create / assign / annotate / complete tasks.
+// Life Admin is the "Life admin" / "Tasks and hand-offs" surface (brief;
+// design §4.1; CLAUDE.md). `load` reads the SESSION person's records and tasks
+// server-side — content DECRYPTED under their own DEK, each task's assignee + note
+// authors resolved to the agent's display name — and shapes them into the props the
+// already-render-tested <LifeAdminView/> (E14-S11) and <TasksView/> (E14-S12) are
+// mounted over. The actions save / edit records, attach a receipt file (encrypted on
+// the server), set reminders, and create / assign / annotate / complete tasks.
 //
 // Security (each a reviewer veto; CLAUDE.md + the safety invariants):
 //   • Every read/write is member-scoped by `session.userId` — the session's verified
 //     id, NEVER a userId smuggled in the input. `load` reads only the session person;
 //     every mutation is scoped `WHERE … AND user_id = $N` (or refused up front when the
-//     row/agent is not theirs), so another person's record / task / checklist is never
+//     row/agent is not theirs), so another person's record / task is never
 //     read, changed or removed by id (a safe refusal, never a silent write).
 //   • Input is validated at the boundary (INV-102): a malformed / oversized / unknown
 //     shape is refused with a 4xx `HttpError` BEFORE any query, so nothing is written. A
@@ -31,9 +30,6 @@ import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 //     === "number"`, NEVER `instanceof File` — OBS-052: instanceof fails across the
 //     undici/global realm split) and stores ONLY DEK-encrypted ciphertext through the
 //     receipt-file store (the plaintext bytes never land in the blob).
-//   • handChecklistItemToAgent creates a task (assigned to the named OWN agent, or
-//     'any') and LINKS it to the item; a foreign / nonexistent agent is refused and
-//     nothing is created or linked.
 //   • This module reads no `process.env` and holds no secret (INV-103): db, keyWrapper,
 //     clock and blob are INJECTED seams, so no ambient env value can surface in the
 //     loaded screen or a stored row.
@@ -111,20 +107,12 @@ import {
   type Task,
   type TaskActor,
 } from "@/server/db/tasks";
-import {
-  listForUser as listChecklistForUser,
-  toggleDone,
-  linkTask,
-  type ChecklistItem,
-} from "@/server/db/moving-checklist";
 import { saveReceiptFile, deleteRecordWithFiles, dismissRecordWithFiles } from "@/server/storage/receipt-files";
-import { buildMovingChecklist } from "@/server/moving/checklist";
 import { lifeAdminPageData, recordPhases } from "@/server/life-admin/page-data";
 import { formatAccountTime } from "@/domain/display-time";
 
 import type {
   LifeAdminRecordView,
-  ChecklistItemView,
   PendingChangeView,
   RecordActorView,
   RecordFoundInView,
@@ -151,9 +139,8 @@ import type {
 
 // The injected seams — no process.env, no secret (INV-103). `db` is the parameterizing
 // database seam; `keyWrapper` unwraps the session person's own DEK (users.wrapped_dek)
-// so content round-trips decrypted/encrypted; `clock` supplies `now` to the
-// moving-checklist builder (never SQL now()); `blob` is the private blob the
-// receipt-file store puts ciphertext into.
+// so content round-trips decrypted/encrypted; `clock` supplies `now` (never SQL now());
+// `blob` is the private blob the receipt-file store puts ciphertext into.
 export interface LifeAdminActionsDeps {
   readonly db: Db;
   readonly keyWrapper: KeyWrapper;
@@ -165,8 +152,8 @@ export interface LifeAdminActionsDeps {
 // values as strings, anything else summarised read-only; who added and changed each one
 // resolved to an agent's name; where each stands, and who is handling it with its next step),
 // their catalogue (built-in and their own categories, as plain data), each category's place on
-// the page, the categories agents suggested, the open next steps with a due date, the moving
-// checklist and tasks, plus the person's agents. `today` is the person's local date
+// the page, the categories agents suggested, the open next steps with a due date and the
+// tasks, plus the person's agents. `today` is the person's local date
 // (YYYY-MM-DD in their account time zone, from the injected clock), so the view never reads
 // the clock.
 export interface LifeAdminPageData {
@@ -177,7 +164,6 @@ export interface LifeAdminPageData {
   readonly suggestedCategories: SuggestedCategoryView[];
   readonly records: LifeAdminRecordView[];
   readonly nextSteps: NextStepView[];
-  readonly checklist: ChecklistItemView[];
   readonly tasks: TaskItemView[];
   readonly agents: AgentOption[];
 }
@@ -206,8 +192,8 @@ export type ActionResult =
 // ---- boundary validation (INV-102) -------------------------------------------------
 //
 // Field caps mirror the sibling MCP records/tasks tools so a grossly oversized value is
-// refused at the boundary before any db access. Ids are uuids (life_admin_records /
-// tasks / moving_checklist all gen_random_uuid()), shape-guarded so a non-uuid never
+// refused at the boundary before any db access. Ids are uuids (life_admin_records and
+// tasks both gen_random_uuid()), shape-guarded so a non-uuid never
 // reaches `WHERE id = $1` as a cast (OBS-049).
 const MAX_STATUS = 200;
 const MAX_FIELDS_CHARS = 100_000;
@@ -238,7 +224,6 @@ const idsSchema = z.object({ ids: z.array(uuid).min(1).max(MAX_IDS) });
 const setRemindersSchema = z.object({ id: uuid, reminderOffsets });
 const attachRecordSchema = z.object({ recordId: uuid });
 const idOnlySchema = z.object({ id: uuid });
-const handSchema = z.object({ id: uuid, agentId: uuid.optional() });
 // A title or note is trimmed before it is checked, so one made only of spaces is refused at
 // the boundary (a 4xx) instead of being saved as a blank task or note.
 const createTaskSchema = z.object({ title: z.string().trim().min(1).max(MAX_TITLE), assignee: assignee.optional() });
@@ -300,10 +285,6 @@ export interface SetRemindersInput {
 export interface IdInput {
   readonly id: string;
 }
-export interface HandToAgentInput {
-  readonly id: string;
-  readonly agentId?: string;
-}
 export interface CreateTaskInput {
   readonly title: string;
   readonly assignee?: string;
@@ -359,9 +340,6 @@ export interface LifeAdminActions {
   acceptAllPending(session: Session, input: IdsInput): Promise<ActionResult>;
   declinePending(session: Session, input: IdInput): Promise<ActionResult>;
   setRecordReminders(session: Session, input: SetRemindersInput): Promise<ActionResult>;
-  toggleChecklistItem(session: Session, input: IdInput): Promise<ActionResult>;
-  handChecklistItemToAgent(session: Session, input: HandToAgentInput): Promise<ActionResult>;
-  refreshMovingChecklist(session: Session): Promise<ActionResult>;
   createTask(session: Session, input: CreateTaskInput): Promise<ActionResult>;
   updateTask(session: Session, input: UpdateTaskInput): Promise<ActionResult>;
   completeTask(session: Session, input: IdInput): Promise<ActionResult>;
@@ -637,10 +615,6 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     };
   }
 
-  function toChecklistView(item: ChecklistItem): ChecklistItemView {
-    return { id: item.id, label: item.label, done: item.done, linkedTaskId: item.linkedTaskId };
-  }
-
   function toActorView(actor: TaskActor, agents: ReadonlyArray<{ id: string; displayName: string }>): TaskActorView {
     return actor.kind === "agent"
       ? { kind: "agent", agentId: actor.agentId, agentName: nameOf(agents, actor.agentId) }
@@ -694,7 +668,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return new Map(agents.map((agent) => [agent.id, cleanShortText(agent.displayName, 80)] as const));
   }
 
-  // Read ONLY the session person's records / checklist / tasks (member-scoped by
+  // Read ONLY the session person's records / tasks (member-scoped by
   // `session.userId`), decrypted under their own DEK, shaped into the two views' props. The
   // owner-scoped list-all read is `lifeAdminPageData`; the person's catalogue says what kind
   // each record is and which categories show; the one lifecycle module says where each record
@@ -765,7 +739,6 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
       records: page.records.map((r) =>
         toRecordView(r, r.hasAttachedFile, names, filesFor(r.id), phases.get(r.id), handlingView(r, summaries.get(r.id), savedBy, connected))),
       nextSteps,
-      checklist: page.checklist.map(toChecklistView),
       tasks: page.tasks.map((t) => toTaskView(t, agents, zone)),
       agents: agents.map((a) => ({ id: a.id, name: a.displayName })),
     };
@@ -1199,50 +1172,6 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return changed ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
-  // Flip an OWNED checklist item's done flag (member-scoped). A malformed id is a 4xx
-  // before any query; an item that is not this person's matches nothing and is refused.
-  async function toggleChecklistItem(session: Session, input: IdInput): Promise<ActionResult> {
-    const valid = parseParams(idOnlySchema, input);
-    const toggled = await toggleDone(db, { userId: session.userId, id: valid.id });
-    return toggled ? { ok: true } : { ok: false, reason: "not_found" };
-  }
-
-  // Hand an OWNED checklist item to an agent: create a task (assigned to the named own
-  // agent, or 'any') and LINK it to the item. Validate at the boundary first; refuse —
-  // creating and linking nothing — when the item is not this person's, or when a named
-  // agent is not one of this person's own.
-  async function handChecklistItemToAgent(session: Session, input: HandToAgentInput): Promise<ActionResult> {
-    const valid = parseParams(handSchema, input);
-    const dek = await dataKeyFor(session.userId);
-    const item = (await listChecklistForUser(db, session.userId, dek)).find((i) => i.id === valid.id);
-    if (!item) {
-      return { ok: false, reason: "not_found" };
-    }
-    let assignTo = "any";
-    if (valid.agentId !== undefined) {
-      if (!(await validTaskAssignee(db, session.userId, valid.agentId))) {
-        return { ok: false, reason: "unknown_agent" };
-      }
-      assignTo = valid.agentId;
-    }
-    const task = await createTaskRow(
-      db,
-      { userId: session.userId, title: item.label, assignee: assignTo, createdBy: { kind: "person" } },
-      dek,
-    );
-    const linked = await linkTask(db, { userId: session.userId, id: item.id, taskId: task.id });
-    return linked ? { ok: true } : { ok: false, reason: "not_found" };
-  }
-
-  // (Re)build the session person's moving checklist from a move on file (the builder
-  // reads the postal addresses + places that hold the old address and seeds idempotently
-  // through the store). With no move, nothing is seeded. Member-scoped by the session.
-  async function refreshMovingChecklist(session: Session): Promise<ActionResult> {
-    const dek = await dataKeyFor(session.userId);
-    await buildMovingChecklist({ db, clock, dek }, session);
-    return { ok: true };
-  }
-
   // Open a new task for the session person (title DEK-encrypted by the store). Validate
   // at the boundary first; a specific assignee must be one of the person's own agents
   // (refused otherwise); the owner is the session's id, so a smuggled userId is ignored.
@@ -1348,9 +1277,6 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     updateRecord,
     attachReceiptFile,
     setRecordReminders,
-    toggleChecklistItem,
-    handChecklistItemToAgent,
-    refreshMovingChecklist,
     createTask,
     updateTask,
     completeTask,

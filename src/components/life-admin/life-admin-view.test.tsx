@@ -1,16 +1,14 @@
-// E14-S11 — Life-admin records and checklist view component
-// (src/components/life-admin/life-admin-view.tsx), reshaped by the life-admin profile
-// (docs/adr/life-admin-profile.md).
+// E14-S11 — Life-admin records view component (src/components/life-admin/life-admin-view.tsx),
+// reshaped by the life-admin profile (docs/adr/life-admin-profile.md) and the founder's tabs
+// (23 Nov 2026: Records, Upcoming, History and Tasks; the moving checklist is gone).
 //
-// WHY this component exists (brief "Life admin" + "Moving-house helper"; design §4.1): the
-// Life Admin screen is where a person sees and maintains the records they and their agents
-// keep — now a typed "Records" profile (vehicles and their rego, home, utilities, health
-// insurance, super, ID expiry dates, subscriptions, pets, receipts …) — alongside the MOVING
-// CHECKLIST. Every record shows its (already-decrypted) fields with edit controls and a
-// per-record reminder-offset setting; a receipt also carries an attach-file control; each
-// checklist item carries a tick-off and a "hand to an agent" control. No control may ever
-// be dead — a control with nothing wired behind it renders DISABLED and says why
-// (constitution: "No dead controls").
+// WHY this component exists (brief "Life admin"; design §4.1): the Life Admin screen is where a
+// person sees and maintains the records they and their agents keep — a typed "Records" profile
+// (vehicles and their rego, home, utilities, health insurance, super, ID expiry dates,
+// subscriptions, pets, receipts …). Every record shows its (already-decrypted) fields with edit
+// controls and, when it has a date, its reminder setting; a receipt also carries an attach-file
+// control. No control may ever be dead — a control with nothing wired behind it renders
+// DISABLED and says why (constitution: "No dead controls").
 //
 // This is the pure, prop-driven VIEW: it renders FROM the props the loader hands it, with
 // fields already decrypted and server actions passed in (no clock / DB / session). These
@@ -20,14 +18,15 @@
 //
 // The organisation of the Records tab (category panels, assets, statuses, filters) is pinned in
 // record-organisation.test.tsx and record-status.test.ts; the To check panel and the forms in
-// records-review.test.tsx.
+// records-review.test.tsx; the tabs, Upcoming and History in life-admin-sections.test.tsx; the
+// reminder setting in record-reminders.test.tsx.
 
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { LifeAdminView, type ChecklistItemView, type LifeAdminRecordView, type LifeAdminViewProps } from "./life-admin-view";
+import { LifeAdminView, type LifeAdminRecordView, type LifeAdminViewProps } from "./life-admin-view";
 
 type LifeAdminAction = (formData: FormData) => void | Promise<void>;
 
@@ -35,8 +34,8 @@ type LifeAdminAction = (formData: FormData) => void | Promise<void>;
 //
 // Distinctive, recognisable values so every "renders this value" assertion is honest — the
 // string can only have come from the record under test. Field values deliberately avoid the
-// control vocabulary the tests match on (add / edit / remind / attach / upload / tick / done
-// / hand / agent), so a control assertion can never pass on an incidental word in a field.
+// control vocabulary the tests match on (add / edit / remind / attach / upload), so a control
+// assertion can never pass on an incidental word in a field.
 
 const SUB_A: LifeAdminRecordView = {
   id: "sub-a",
@@ -87,13 +86,7 @@ const PET_INS: LifeAdminRecordView = {
   reminderOffsets: [30],
 };
 
-const ITEM_OPEN: ChecklistItemView = { id: "item-open", label: "Update address with Energy Australia", done: false, linkedTaskId: null };
-const ITEM_DONE: ChecklistItemView = { id: "item-done", label: "Redirect mail at the post office", done: true, linkedTaskId: null };
-// Already handed to an agent: its "hand to an agent" control must render DISABLED.
-const ITEM_HANDED: ChecklistItemView = { id: "item-handed", label: "Transfer the internet connection", done: false, linkedTaskId: "task-99" };
-
 const RECORDS = [SUB_A, REC_A, REN_A, PET_INS];
-const CHECKLIST = [ITEM_OPEN, ITEM_DONE, ITEM_HANDED];
 
 const noop: LifeAdminAction = () => {};
 
@@ -102,7 +95,6 @@ function base(overrides: Partial<LifeAdminViewProps> = {}): LifeAdminViewProps {
   return {
     today: "2026-11-23",
     records: RECORDS,
-    checklist: CHECKLIST,
     addRecordAction: noop,
     editRecordAction: noop,
     attachFileAction: noop,
@@ -112,8 +104,6 @@ function base(overrides: Partial<LifeAdminViewProps> = {}): LifeAdminViewProps {
     dismissRecordAction: noop,
     acceptPendingAction: noop,
     declinePendingAction: noop,
-    tickOffAction: noop,
-    handToAgentAction: noop,
     ...overrides,
   };
 }
@@ -122,18 +112,14 @@ function render(props: LifeAdminViewProps): string {
   return renderToStaticMarkup(<LifeAdminView {...props} />);
 }
 
-// One record (or none) on Records, with no checklist, so a control assertion can only
-// be satisfied by that record.
+// One record (or none) on Records, so a control assertion can only be satisfied by that record.
 function renderThings(records: ReadonlyArray<LifeAdminRecordView>, overrides: Partial<LifeAdminViewProps> = {}): string {
-  return render(base({ records, checklist: [], ...overrides }));
-}
-function renderChecklist(checklist: ReadonlyArray<ChecklistItemView>, overrides: Partial<LifeAdminViewProps> = {}): string {
-  return render(base({ initialTab: "checklist", records: [], checklist, addRecordAction: undefined, ...overrides }));
+  return render(base({ records, ...overrides }));
 }
 
-// The markup inside the records' tab panel or the checklist's, so a checklist assertion
-// never meets the Add form and vice versa.
-function tabPanel(markup: string, index: 0 | 1 | 2 | 3): string {
+// The markup inside one tab panel (0 Records, 1 Upcoming, 2 History), so an assertion about one
+// tab never meets another's content.
+function tabPanel(markup: string, index: 0 | 1 | 2): string {
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
 }
@@ -282,50 +268,17 @@ function namedControls(markup: string): NamedControl[] {
   return out;
 }
 
-// The "say-why" surface of a render: visible text PLUS every title / aria-label. A
-// disabled control that states its reason carries MORE of this than the same control
-// live — the measure the sibling inbox / connectors / activity tests use.
-function reasonSurface(markup: string): string {
-  const parts = [visibleText(markup)];
-  for (const m of markup.matchAll(/(?:title|aria-label)="([^"]*)"/gi)) parts.push(decode(m[1]));
-  return parts.join(" ").replace(/\s+/g, " ").trim();
-}
-
 // --- control vocabularies (accessible-name matchers; generous over plain wordings) --
 
-const RECORDS_TAB_RE = /^records\b/i;
-const CHECKLIST_TAB_RE = /checklist|moving/i;
+const RECORDS_TAB_RE = /^records$/i;
+const UPCOMING_TAB_RE = /^upcoming$/i;
+const HISTORY_TAB_RE = /^history$/i;
 
 const ADD_RE = /\badd\b/i;
 const EDIT_RE = /\bedit\b|\bchange\b|\bupdate\b/i;
 const REMINDER_RE = /remind/i;
 // The attach-file control; deliberately NOT matching "add a receipt" (the Add control).
 const ATTACH_RE = /attach|upload|choose (a )?file|add (a |the )?(file|photo|scan|document|pdf)/i;
-// The tick-off control: a checkbox is one unconditionally; a button reads as marking done.
-const TICK_RE = /tick|mark (it |as )?(done|complete)|mark done|mark complete|\bdone\b|complete|cross off|check off/i;
-// The "hand to an agent" control.
-const HAND_RE = /\bhand\b|hand (it|this|off|over)|give (it |this )?to (an )?agent|assign (it |this )?to (an )?agent|send to (an )?agent/i;
-
-// Tick-off controls in a render: every checkbox (a checklist tick is a checkbox), plus
-// any button whose face reads as marking an item done. Returns each control's disabled
-// state.
-function tickControls(markup: string): El[] {
-  const out: El[] = [];
-  for (const m of markup.matchAll(/<input\b([^>]*?)\/?>/gi)) {
-    const a = m[1];
-    if ((attr(a, "type") ?? "").toLowerCase() === "checkbox") out.push({ attrs: a, inner: "" });
-  }
-  for (const b of findAll(markup, "button")) {
-    if (TICK_RE.test(controlFace(b))) out.push(b);
-  }
-  return out;
-}
-
-// "Hand to an agent" controls in a render: buttons / disclosure summaries whose face
-// reads as handing the item to an agent.
-function handControls(markup: string): El[] {
-  return [...findAll(markup, "button"), ...findAll(markup, "summary")].filter((c) => HAND_RE.test(controlFace(c)));
-}
 
 // Attach-file controls in a render: every <input type=file>, plus any button whose face
 // reads as attaching/uploading a file.
@@ -342,18 +295,20 @@ function attachControls(markup: string): El[] {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// The two tabs — Records and the Moving checklist — are named and navigable.
+// The tabs — Records, Upcoming and History — are named and navigable.
 // ════════════════════════════════════════════════════════════════════════════════
 
-test("names both tabs — Records and Moving checklist — as navigable controls, Records first", () => {
+test("names the tabs — Records, Upcoming and History — as navigable controls, Records first, with no counts", () => {
   const markup = render(base());
   assert.ok(hasTab(markup, RECORDS_TAB_RE), "the Records tab must be a navigable control");
-  assert.ok(hasTab(markup, CHECKLIST_TAB_RE), "the Moving checklist tab must be a navigable control");
-  assert.doesNotMatch(visibleText(markup), /Your things/, "the tab's old name is gone");
+  assert.ok(hasTab(markup, UPCOMING_TAB_RE), "the Upcoming tab must be a navigable control");
+  assert.ok(hasTab(markup, HISTORY_TAB_RE), "the History tab must be a navigable control");
+  assert.doesNotMatch(visibleText(markup), /Your things|Moving checklist/, "the old names are gone");
   const selected = /<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(markup)!;
-  assert.match(visibleText(selected[1]!), /^Records \(4\)$/, "Records opens first and counts what's active");
+  assert.match(visibleText(selected[1]!), /^Records$/, "Records opens first, with no count in its name");
   const finished = render(base({ records: [...RECORDS, { ...SUB_A, id: "sub-done", status: "cancelled", phase: { phase: "ended", bucket: "finished", live: false, label: "Ended", comingUp: false } }] }));
-  assert.match(visibleText(/<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(finished)![1]!), /^Records \(4\)$/, "a cancelled record isn't counted");
+  assert.doesNotMatch(tabPanel(finished, 0), /id="record-sub-done"/, "a cancelled record isn't on Records");
+  assert.match(tabPanel(finished, 2), /id="record-sub-done"/, "it's in History");
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -412,7 +367,7 @@ test("every record offers a live Edit control", () => {
   assert.match(visibleText(dead), /Editing isn't available just now\./);
 });
 
-test("every record renders a live, labelled reminder-offset setting reflecting its own offsets", () => {
+test("every record with a date renders a live, labelled reminder setting reflecting its own offsets", () => {
   for (const record of RECORDS) {
     const reminders = namedControls(renderThings([record])).filter((c) => REMINDER_RE.test(c.name));
     assert.ok(reminders.some((c) => !c.disabled), `${record.id} must render a live reminder-offset control`);
@@ -440,54 +395,6 @@ test("a receipt's attach-file control is DISABLED with a reason when no attach a
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
-// AC2 — the moving checklist: a tick-off and a 'hand to an agent' control per item.
-// ════════════════════════════════════════════════════════════════════════════════
-
-test("the Moving checklist renders each item's label with a tick-off and a 'hand to an agent' control", () => {
-  for (const item of CHECKLIST) {
-    const markup = tabPanel(renderChecklist([item]), 3);
-    assert.ok(visibleText(markup).includes(item.label), `the checklist item "${item.label}" must render`);
-    assert.ok(tickControls(markup).length >= 1, `the item "${item.label}" must render a tick-off control`);
-    assert.ok(handControls(markup).length >= 1, `the item "${item.label}" must render a 'hand to an agent' control`);
-  }
-  assert.match(visibleText(tabPanel(renderChecklist(CHECKLIST), 3)), /1 of 3 done\./, "the panel says how far along it is");
-});
-
-test("renders checklist items from the props given, and an empty checklist says how it starts", () => {
-  const onlyA = visibleText(renderChecklist([{ ...ITEM_OPEN, id: "c1", label: "Cancel the gardening service" }]));
-  assert.ok(onlyA.includes("Cancel the gardening service") && !onlyA.includes("Move the piano upstairs"));
-  assert.match(visibleText(renderChecklist([])), /No moving checklist yet\./);
-});
-
-test("a ticked-off (done) checklist item reflects its done state", () => {
-  const markup = tabPanel(renderChecklist([ITEM_DONE]), 3);
-  const checkedCheckbox = [...markup.matchAll(/<input\b([^>]*?)\/?>/gi)].some(
-    (m) => (attr(m[1], "type") ?? "").toLowerCase() === "checkbox" && hasBoolAttr(m[1], "checked"),
-  );
-  assert.ok(checkedCheckbox, "a done item shows a checked box");
-});
-
-// ════════════════════════════════════════════════════════════════════════════════
-// AC2 — no dead controls: an unavailable control renders DISABLED and states why.
-// ════════════════════════════════════════════════════════════════════════════════
-
-test("a tick-off control with no tick action is DISABLED with a reason (no dead controls)", () => {
-  const live = tabPanel(renderChecklist([ITEM_OPEN]), 3);
-  const dead = tabPanel(renderChecklist([ITEM_OPEN], { tickOffAction: undefined }), 3);
-  assert.ok(tickControls(dead).length >= 1 && tickControls(dead).every(isDisabled));
-  assert.ok(tickControls(live).some((c) => !isDisabled(c)));
-  assert.ok(reasonSurface(dead).length > reasonSurface(live).length, "the disabled tick-off says WHY");
-});
-
-test("an item already handed to an agent renders its 'hand to an agent' control DISABLED with a reason", () => {
-  const handed = tabPanel(renderChecklist([ITEM_HANDED]), 3);
-  const open = tabPanel(renderChecklist([ITEM_OPEN]), 3);
-  assert.ok(handControls(handed).length >= 1 && handControls(handed).every(isDisabled));
-  assert.ok(handControls(open).some((c) => !isDisabled(c)));
-  assert.ok(reasonSurface(handed).length > reasonSurface(open).length, "the disabled hand-off says WHY");
-});
-
-// ════════════════════════════════════════════════════════════════════════════════
 // AC3 — design system: colour comes from tokens, never a raw hex literal.
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -495,8 +402,9 @@ test("the life-admin view uses design tokens, never a raw hex colour", () => {
   for (const markup of [
     render(base()),
     renderThings(RECORDS, { addType: "vehicles.registration" }),
-    renderChecklist(CHECKLIST, { tickOffAction: undefined }),
-    renderThings([REC_A], { attachFileAction: undefined }),
+    render(base({ initialTab: "upcoming" })),
+    render(base({ initialTab: "history" })),
+    renderThings([REC_A], { attachFileAction: undefined, editRecordAction: undefined }),
   ]) {
     assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(markup), "no raw hex colour may appear in the markup");
   }

@@ -83,7 +83,15 @@ test("the heading names the item, its kind and category, and where it stands in 
   const heading = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(markup)![1]!;
   assert.match(text(heading), /^Life admin Ester Restaurant · Going out Completed Back to Life admin$/);
   assert.match(heading, /<svg[^>]*aria-hidden="true"[\s\S]*?<\/svg>Completed/);
-  assert.match(heading, new RegExp(`href="/life-admin\\?view=life&amp;tab=records&amp;status=active&amp;status=finished#record-${ID}"`), "back to its row, with its status shown");
+  assert.match(heading, new RegExp(`href="/life-admin\\?tab=history#record-${ID}"`), "back to its row in History, where what's finished is");
+  const backOf = (data: LifeAdminItemData) => /<header class="wh-page-heading">[\s\S]*?<a\b[^>]*href="([^"]*)"[^>]*>(?:(?!<\/a>)[\s\S])*Back to Life admin/.exec(render(data))![1]!.replace(/&amp;/g, "&");
+  const ahead = { ...DATA, record: { ...DATA.record, phase: { phase: "upcoming" as const, bucket: "live" as const, live: true, label: "Upcoming", comingUp: true, inDays: 2 } } };
+  assert.equal(backOf(ahead), "/life-admin?tab=upcoming", "a booking ahead is in Upcoming");
+  const membership = BUILT_IN.type("subscriptions.membership")!;
+  const gym = { ...DATA, type: membership, lifecycle: membership.lifecycle, record: { ...DATA.record, type: membership.id, state: null, phase: { phase: "current" as const, bucket: "live" as const, live: true, label: "Current", comingUp: false } } };
+  assert.equal(backOf(gym), `/life-admin#record-${ID}`, "a record on Records: back to its row");
+  const paused = { ...gym, record: { ...gym.record, status: "paused", phase: { phase: "paused" as const, bucket: "on_hold" as const, live: false, label: "Paused", comingUp: false } } };
+  assert.equal(backOf(paused), `/life-admin?status=active&status=on_hold#record-${ID}`, "with On hold shown when it's paused");
 });
 
 test("Where it stands is the agents' one-line summary, with the item's facts, provenance and the anchor it belongs to", () => {
@@ -177,7 +185,7 @@ test("an item that isn't the person's (or no longer exists) says so, with a way 
   const markup = text(render(null));
   assert.match(markup, /Item not found/);
   assert.match(markup, /This item isn't in your Life admin\. It may have been deleted or marked as not yours\./);
-  assert.match(render(null), /href="\/life-admin\?view=life&amp;tab=records"[^>]*>Back to Life admin/);
+  assert.match(render(null), /href="\/life-admin"[^>]*>Back to Life admin/);
 });
 
 test("the item page uses tokens, never raw hex", () => {

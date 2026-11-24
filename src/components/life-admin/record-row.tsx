@@ -5,15 +5,15 @@ import { Bell, BellOff, ChevronDown, CircleDashed, GitCompare, Link2, Trash2, Us
 
 import { LIST_ROW } from "@/components/ui/list-group";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
-import { Field, Label } from "@/components/ui/field";
+import { Label } from "@/components/ui/field";
 import { CONTROL_TEXT } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { shortDate } from "@/domain/life-admin/journal";
-import type { RecordTypeDef } from "@/domain/life-admin/record-types";
+import type { DueMeans, RecordTypeDef } from "@/domain/life-admin/record-types";
 import { receiptUploadError } from "@/lib/receipt-upload";
 import { phaseOfView, reminderSummary } from "./record-groups";
-import { provenanceLine, recordName, rowSummary, typedFacts, whenLine } from "./record-format";
+import { formatCalendarDate, provenanceLine, recordName, rowSummary, typedFacts, whenLine } from "./record-format";
 import { DisabledControl, EditRecordForm, HINT_CLASS, ReturnFields, parentOptions, summaryClass } from "./record-forms";
 import { PhaseBadge } from "./phase-badge";
 import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions, RecordHandlingView } from "./record-view-types";
@@ -24,9 +24,9 @@ import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions, 
 // its kind, when it's due, renews or starts in the kind's words, its cost and cycle, and its
 // provider ("Expires 14 Dec 2026 · AUD 412.50 a year · Transport for NSW") — and who is handling
 // it with its next step. Everything else is one click away in its "Details" disclosure: its facts
-// labelled and formatted the kind's way, its reminder setting in words, who added it (and where an
-// agent says it found it), its downloads (receipts), and its controls (reminders, attach, edit,
-// delete). Every value is text: nothing an agent read from email, or wrote in a journal, ever
+// labelled and formatted the kind's way, when Warthog will remind the person about its date (and
+// a choice of days to change that; nothing at all when it has no date), who added it (and where
+// an agent says it found it), its downloads (receipts), and its controls (attach, edit, delete). Every value is text: nothing an agent read from email, or wrote in a journal, ever
 // becomes a link.
 //
 // The row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
@@ -39,45 +39,82 @@ export const itemHref = (id: string) => `/life-admin/items/${encodeURIComponent(
 // button as a quiet pill.
 const FILE_INPUT_CLASS = `min-h-11 min-w-0 w-full max-w-full text-fg file:me-3 file:min-h-9 file:cursor-pointer file:rounded-full file:border file:border-line file:bg-surface file:px-3 file:text-sm file:font-medium file:text-fg ${CONTROL_TEXT}`;
 
-// The per-record reminder-offset setting, prefilled with the record's OWN offsets (days
-// before due). Adjusting it is an edit, so it is bound to editRecordAction; DISABLED with a
-// reason when that is not supplied.
-function ReminderSetting({ record, editRecordAction }: { record: LifeAdminRecordView; editRecordAction?: LifeAdminAction }) {
-  const fieldId = React.useId();
-  const value = record.reminderOffsets.join(", ");
-  if (!editRecordAction) {
-    return (
-      <Field
-        label="Remind me (days before)"
-        id={fieldId}
-        name="reminderOffsets"
-        defaultValue={value}
-        disabled
-        hint="Changing reminders isn't available just now."
-        width="short"
-      />
-    );
-  }
+// The days before a record's date its reminders can go out: the usual choices, plus any other day
+// the record already has, so nothing set before is lost. Latest first.
+export const REMINDER_CHOICES: readonly number[] = [30, 14, 7, 1, 0];
+export function reminderChoices(current: readonly number[]): number[] {
+  return [...new Set([...REMINDER_CHOICES, ...current])].sort((a, b) => b - a);
+}
+const choiceLabel = (days: number) => (days === 0 ? "On the day" : `${days} ${days === 1 ? "day" : "days"} before`);
+
+// The record's date in words, the way its kind says it ("Expires 14 Dec 2026", "Starts 3 Dec 2026").
+export function dateWords(type: RecordTypeDef, dueDate: string): string {
+  return `${type.due?.label ?? "Due"} ${formatCalendarDate(dueDate)}`;
+}
+
+// What the date is, for "Remind me before …".
+const BEFORE: Readonly<Record<DueMeans, string>> = {
+  expires: "it expires",
+  renews: "it renews",
+  due: "it's due",
+  ends: "it ends",
+  return_by: "the return-by date",
+  starts: "it starts",
+};
+
+// When Warthog reminds the person about this record's date, as a choice of days (ticked: the
+// record's own). Changing it is an edit, so it is bound to editRecordAction; the boxes are
+// DISABLED with a reason when that is not supplied. Unticking every box turns reminders off.
+function ReminderSetting({ record, type, dueDate, editRecordAction }: { record: LifeAdminRecordView; type: RecordTypeDef; dueDate: string; editRecordAction?: LifeAdminAction }) {
+  const hintId = React.useId();
+  const choices = reminderChoices(record.reminderOffsets);
+  const before = type.due ? BEFORE[type.due.means] : "the date";
+  const boxes = (
+    <fieldset className="flex min-w-0 flex-col gap-1" aria-describedby={hintId} disabled={!editRecordAction}>
+      <legend className="text-sm font-medium text-fg">
+        Remind me before {before} ({formatCalendarDate(dueDate)})
+      </legend>
+      <p id={hintId} className={HINT_CLASS}>
+        {editRecordAction
+          ? "Warthog sends a notification to the devices where you've turned notifications on. Untick them all for no reminders."
+          : "Changing reminders isn't available just now."}
+      </p>
+      <ul role="list" className="grid min-w-0 grid-cols-1 gap-x-4 sm:grid-cols-2">
+        {choices.map((days) => (
+          <li key={days} className="min-w-0">
+            <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
+              <input type="checkbox" name="reminderOffsets" value={String(days)} defaultChecked={record.reminderOffsets.includes(days)} className="size-4" />
+              {choiceLabel(days)}
+            </label>
+          </li>
+        ))}
+      </ul>
+    </fieldset>
+  );
   return (
-    <ActionForm action={editRecordAction} className="flex flex-col gap-3">
-      <PendingFormFields>
-        <input type="hidden" name="recordId" value={record.id} />
-        <ReturnFields />
-        <input type="hidden" name="setting" value="reminder" />
-        <Field
-          label="Remind me (days before)"
-          id={fieldId}
-          name="reminderOffsets"
-          defaultValue={value}
-          inputMode="numeric"
-          hint="Whole days from 0 to 36500, separated by commas (for example, 14, 1). Leave it empty to turn reminders off."
-          width="short"
-        />
-      </PendingFormFields>
-      <div>
-        <FormSubmit variant="secondary" pendingLabel="Saving…">Save reminder</FormSubmit>
+    <details className="group/reminders min-w-0">
+      <summary className={`${summaryClass("ghost", "sm")} -ms-3`}>
+        Change reminders
+        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/reminders:rotate-180" />
+      </summary>
+      <div className="mt-2 flex min-w-0 flex-col gap-3 rounded-card bg-surface-muted p-4">
+        {editRecordAction ? (
+          <ActionForm action={editRecordAction} className="flex flex-col gap-3">
+            <PendingFormFields>
+              <input type="hidden" name="recordId" value={record.id} />
+              <ReturnFields />
+              <input type="hidden" name="setting" value="reminder" />
+              {boxes}
+            </PendingFormFields>
+            <div>
+              <FormSubmit variant="secondary" pendingLabel="Saving…">Save reminders</FormSubmit>
+            </div>
+          </ActionForm>
+        ) : (
+          boxes
+        )}
       </div>
-    </ActionForm>
+    </details>
   );
 }
 
@@ -183,7 +220,7 @@ function DeleteControl({ record, name, deleteRecordAction }: { record: LifeAdmin
   );
 }
 
-// The row's controls, after its facts in Details: reminders, attach (a receipt), edit and delete.
+// The row's controls, after its facts in Details: attach (a receipt), edit and delete.
 function ManageControls({
   record,
   type,
@@ -201,7 +238,6 @@ function ManageControls({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-5 border-t border-line pt-4">
-      <ReminderSetting record={record} editRecordAction={actions.editRecordAction} />
       {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={actions.attachFileAction} /> : null}
       <div className="flex min-w-0 flex-wrap items-start gap-2">
         <EditControl record={record} type={type} name={name} parents={parents} zone={zone} editRecordAction={actions.editRecordAction} />
@@ -296,6 +332,8 @@ export function RecordRow({
   lead,
   partOf,
   category,
+  note,
+  anchor = true,
   assets,
   zone = "UTC",
   currentYear,
@@ -309,22 +347,29 @@ export function RecordRow({
   lead?: string;
   // The anchor it belongs to, when the row isn't listed under it.
   partOf?: string | null;
-  // Its category, when the list runs across categories (Finished, Cancelled).
+  // Its category, when the list runs across categories (On hold, History).
   category?: string;
+  // Added to the line under its name ("in 12 days", on Upcoming).
+  note?: string | null;
+  // False where the record also shows on another tab that carries its `record-<id>` anchor
+  // (a renewal on Upcoming that lives on Records), so the page has one anchor per record.
+  anchor?: boolean;
   assets: readonly AssetOption[];
   zone?: string;
   currentYear?: string;
   actions: RecordActions;
 }) {
   const { name, key: titleKey } = recordName(type, record.fields, Boolean(record.type));
-  const reminders = reminderSummary(record.dueDate, record.reminderOffsets);
-  const ReminderIcon = reminders.on ? Bell : BellOff;
-  const suggested = record.reviewState === "suggested";
   const phase = phaseOfView(record);
+  // Reminders only ever go out for something live with a date.
+  const when = record.dueDate && phase.bucket === "live" ? dateWords(type, record.dueDate) : null;
+  const reminders = when ? reminderSummary(record.dueDate, record.reminderOffsets, when) : null;
+  const ReminderIcon = reminders?.on ? Bell : BellOff;
+  const suggested = record.reviewState === "suggested";
   const handling = handlingText(record.handling, zone);
-  const summary = rowSummary(type, record, { name, titleKey, lead: Boolean(lead), category, zone, currentYear });
+  const summary = [rowSummary(type, record, { name, titleKey, lead: Boolean(lead), category, zone, currentYear }), note].filter(Boolean).join(" · ");
   return (
-    <li id={`record-${record.id}`} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
+    <li {...(anchor ? { id: `record-${record.id}`, tabIndex: -1 } : {})} className={`${LIST_ROW} scroll-mt-32`}>
       <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-[1_1_16rem] flex-col gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -368,10 +413,15 @@ export function RecordRow({
           <div className="mt-2 flex min-w-0 flex-col gap-3 border-s-2 border-line ps-4">
             <RecordFacts record={record} type={type} titleKey={lead ? null : titleKey} zone={zone} currentYear={currentYear} />
 
-            <p className="inline-flex items-center gap-1.5 text-sm text-fg-muted">
-              <ReminderIcon aria-hidden={true} className="h-4 w-4 shrink-0" />
-              {reminders.text}
-            </p>
+            {reminders && when ? (
+              <div className="flex min-w-0 flex-col gap-1">
+                <p className="inline-flex items-start gap-1.5 text-sm text-fg-muted [overflow-wrap:anywhere]">
+                  <ReminderIcon aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0" />
+                  {reminders.text}
+                </p>
+                <ReminderSetting record={record} type={type} dueDate={record.dueDate!} editRecordAction={actions.editRecordAction} />
+              </div>
+            ) : null}
 
             <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{recordProvenance(record)}</p>
 

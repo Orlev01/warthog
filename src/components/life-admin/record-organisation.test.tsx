@@ -1,13 +1,15 @@
-// Life admin records, organised (docs/adr/life-admin-profile.md): the Records tab shows what's
-// active first, one panel per category with something active in it, in the catalogue's order,
-// with an anchor (a vehicle, home, trip, pet) heading the records that belong to it and unlinked
-// records after, most urgent first; never an empty panel. A toolbar filters by category and by
-// status (several of each), says what's shown and what isn't, and each other chosen status (On
-// hold, Finished, Cancelled) follows as its own quieter list across categories. Each row is
-// compact: its name (linking to the item's page), where it stands in words and an icon, one
-// muted line (kind, when, cost, provider) and who is handling it; its facts, reminders, who
-// added it and its controls sit behind ONE "Details" disclosure. "Upcoming" lists what is
-// happening now, overdue, this week and later, and the next steps with a date.
+// Life admin records, organised (docs/adr/life-admin-profile.md; founder, 23 Nov 2026): the
+// Records tab shows what's ongoing — never a booking (Upcoming's) and never anything finished
+// (History's) — what's active first, one panel per category with something active in it, in the
+// catalogue's order, with an anchor (a vehicle, home, pet) heading the records that belong to it
+// and unlinked records after, most urgent first; never an empty panel. A toolbar filters by
+// category and by status (Active and On hold, either or both), says what's shown, what isn't and
+// how much is in History, and On hold, when chosen, follows as its own quieter list across
+// categories. Each row is compact: its name (linking to the item's page), where it stands in
+// words and an icon, one muted line (kind, when, cost, provider) and who is handling it; its
+// facts, reminders, who added it and its controls sit behind ONE "Details" disclosure.
+// "Upcoming" lists what is happening now, overdue, this week and later, every booking further
+// ahead or without a date, and the next steps with a date.
 //
 // The loader hands the view each record's phase (from the one lifecycle module) and the
 // person's local date; the view never reads the clock, so these tests work the phases out at a
@@ -56,7 +58,6 @@ function render(over: Partial<LifeAdminViewProps> = {}): string {
       today={TODAY}
       zone={ZONE}
       records={ALL}
-      checklist={[]}
       addRecordAction={noop}
       editRecordAction={noop}
       attachFileAction={noop}
@@ -81,7 +82,7 @@ function headings(markup: string, level: number): string[] {
   return [...markup.matchAll(new RegExp(`<h${level}\\b[^>]*>([\\s\\S]*?)</h${level}>`, "g"))].map((m) => text(m[1]!));
 }
 
-// The markup of one tab panel (0 Records, 1 Upcoming, 2 Bookings, 3 Moving checklist).
+// The markup of one tab panel (0 Records, 1 Upcoming, 2 History).
 function tabPanel(markup: string, index: number): string {
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
@@ -116,11 +117,11 @@ test("addDays crosses month and year ends on calendar dates", () => {
 });
 
 test("reminderSummary states the reminder setting in one plain line", () => {
-  assert.deepEqual(reminderSummary("2026-12-01", [14, 1]), { on: true, text: "Reminds you 14 days before and 1 day before" });
-  assert.deepEqual(reminderSummary("2026-12-01", [1, 30, 7, 7]), { on: true, text: "Reminds you 30 days before, 7 days before and 1 day before" });
-  assert.deepEqual(reminderSummary("2026-12-01", [0]), { on: true, text: "Reminds you on the due date" });
-  assert.deepEqual(reminderSummary("2026-12-01", []), { on: false, text: "Reminders off" });
-  assert.deepEqual(reminderSummary(null, [14]), { on: false, text: "Reminders start once it has a due date" });
+  assert.deepEqual(reminderSummary("2026-12-01", [14, 1]), { on: true, text: "Reminds you 14 days and 1 day before" });
+  assert.deepEqual(reminderSummary("2026-12-01", [1, 30, 7, 7]), { on: true, text: "Reminds you 30 days, 7 days and 1 day before" }, "soonest last, each day once");
+  assert.deepEqual(reminderSummary("2026-12-01", [0]), { on: true, text: "Reminds you on the day" });
+  assert.deepEqual(reminderSummary("2026-12-01", []), { on: false, text: "No reminders" });
+  assert.equal(reminderSummary(null, [14]), null, "nothing to say without a date");
 });
 
 test("organiseByCategory: catalogue order, anchors with their records (whatever their category), unlinked after, finished set aside", () => {
@@ -180,7 +181,7 @@ function toolbarOf(markup: string): string {
 test("one panel per category with something active, in catalogue order, with its label", () => {
   const titles = headings(tabPanel(render(), 0), 2);
   const categories = titles.filter((title) => BUILT_IN.categories.some((category) => category.label === title));
-  assert.deepEqual(categories, ["Home", "Vehicles", "Health", "ID and residency", "Subscriptions and memberships", "Going out"]);
+  assert.deepEqual(categories, ["Home", "Vehicles", "Health", "ID and residency", "Subscriptions and memberships"], "no Going out: the dinner booked is Upcoming's, the one that's over History's");
   assert.doesNotMatch(text(panelOf(render(), "Vehicles")), /Cars, motorcycles, caravans and boats/, "no boilerplate description: the rows are what matters");
 });
 
@@ -218,33 +219,33 @@ test("an anchor heads the records that belong to it, most urgent first; unlinked
   assert.ok(order.indexOf('id="record-late"') < order.indexOf('id="record-soon"') && order.indexOf('id="record-soon"') < order.indexOf('id="record-ins"'), "overdue, due soon, then by date");
 });
 
-test("by default what isn't active is left out, and one line says so, each part a link that adds it", () => {
-  const markup = render();
-  assert.ok(!markup.includes('id="record-gym"') && !markup.includes('id="record-lastdinner"'), "the cancelled membership and the dinner that's over aren't listed");
-  assert.doesNotMatch(markup, /<details\b[^>]*>\s*<summary[^>]*wh-list-group-header/, "no collapsed Finished group in any panel");
+test("by default what isn't active is left out, and one line says so: what's on hold a link that adds it, what's finished a link to History", () => {
+  const paused = rec("paused", "subscriptions.membership", { provider: "Anytime Fitness" }, { status: "paused", dueDate: "2027-01-01" });
+  const markup = render({ records: [...ALL, paused] });
+  const records = tabPanel(markup, 0);
+  assert.ok(!records.includes('id="record-paused"'), "what's on hold isn't listed");
+  assert.ok(!records.includes('id="record-gym"') && !records.includes('id="record-lastdinner"'), "the cancelled membership and the dinner that's over aren't on Records");
+  assert.doesNotMatch(records, /<details\b[^>]*>\s*<summary[^>]*wh-list-group-header/, "no collapsed Finished group in any panel");
   const toolbar = toolbarOf(markup);
   const status = /<p role="status"[^>]*>([\s\S]*?)<\/p>/.exec(toolbar)!;
-  assert.match(text(status[1]!), /^9 active · Not shown: 1 finished : show them\s?, 1 cancelled : show them$/);
+  assert.match(text(status[1]!), /^8 active · Not shown: 1 on hold : show them · 2 finished or cancelled\s?, in History$/);
   const links = [...status[1]!.matchAll(/<a href="([^"]+)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
-  assert.deepEqual(links, [
-    "/life-admin?view=life&tab=records&status=active&status=finished",
-    "/life-admin?view=life&tab=records&status=active&status=cancelled",
-  ]);
+  assert.deepEqual(links, ["/life-admin?status=active&status=on_hold", "/life-admin?tab=history"]);
 });
 
 test("the toolbar: Category and Status, multiple-choice, in a plain GET form, summarising the choice", () => {
   const toolbar = toolbarOf(render());
   const form = /<form\b([^>]*)>([\s\S]*?)<\/form>/.exec(toolbar)!;
   assert.match(form[1]!, /action="\/life-admin"/);
-  assert.match(form[2]!, /<input type="hidden" name="view" value="life"\/><input type="hidden" name="tab" value="records"\/>/);
+  assert.doesNotMatch(form[2]!, /type="hidden"/, "Records is the default tab: the form needs no tab of its own");
   const summaries = [...form[2]!.matchAll(/<summary\b[^>]*>([\s\S]*?)<\/summary>/g)].map((m) => text(m[1]!));
   assert.deepEqual(summaries, ["Category: All", "Status: Active"]);
   const boxes = (name: string) => [...form[2]!.matchAll(new RegExp(`<label\\b[^>]*>(<input type="checkbox"[^>]*name="${name}"[^>]*>)([\\s\\S]*?)</label>`, "g"))].map((m) => [text(m[2]!), /\bchecked=""/.test(m[1]!)]);
   assert.deepEqual(boxes("category"), [
     ["Home 1 1 record", false], ["Utilities 1 1 record", false], ["Vehicles 3 3 records", false], ["Health 1 1 record", false],
-    ["ID and residency 1 1 record", false], ["Subscriptions and memberships 1 1 record", false], ["Going out 1 1 record", false],
-  ], "every category with a record, in catalogue order, each counting its own records among what's shown");
-  assert.deepEqual(boxes("status"), [["Active 9 9 records", true], ["On hold 0 0 records", false], ["Finished 1 1 record", false], ["Cancelled 1 1 record", false]]);
+    ["ID and residency 1 1 record", false], ["Subscriptions and memberships 1 1 record", false],
+  ], "every category with a record on Records, in catalogue order, each counting its own records among what's shown");
+  assert.deepEqual(boxes("status"), [["Active 8 8 records", true], ["On hold 0 0 records", false]], "Finished and Cancelled are History's");
   assert.match(form[2]!, /type="submit"[^>]*>Apply</, "Apply, for when there's no JavaScript");
   assert.doesNotMatch(toolbar, /Clear all filters/, "nothing applied, nothing to clear");
 });
@@ -257,39 +258,39 @@ test("two categories: only their panels, chips to remove each, and the summary n
   assert.equal(text(/<summary\b[^>]*>([\s\S]*?)<\/summary>/.exec(toolbar)![1]!), "Category: Vehicles +1");
   const chips = [...toolbar.matchAll(/<a href="([^"]+)"[^>]*>(?:(?!<\/a>)[\s\S])*?Remove filter (?:<\/span>)?([^<]+)/g)].map((m) => [text(m[2]!), m[1]!.replace(/&amp;/g, "&")]);
   assert.deepEqual(chips, [
-    ["Category: Vehicles", "/life-admin?view=life&tab=records&category=health"],
-    ["Category: Health", "/life-admin?view=life&tab=records&category=vehicles"],
+    ["Category: Vehicles", "/life-admin?category=health"],
+    ["Category: Health", "/life-admin?category=vehicles"],
   ]);
-  assert.match(toolbar, /href="\/life-admin\?view=life&amp;tab=records"[^>]*>Clear all filters/);
+  assert.match(toolbar, /href="\/life-admin"[^>]*>Clear all filters/);
   assert.match(text(/<p role="status"[^>]*>([\s\S]*?)<\/p>/.exec(toolbar)![1]!), /^4 active$/, "nothing else in these categories");
 });
 
-test("Active and Finished: what's active first by category, then Finished as its own quieter list, newest first, each row with its category", () => {
-  const older = rec("oldpass", "id.passport", { country: "Australia" }, { dueDate: "2016-03-01", status: "expired" });
-  const markup = render({ records: [...ALL, older], recordFilter: { categories: [], statuses: ["active", "finished"] } });
+test("Active and On hold: what's active first by category, then On hold as its own quieter list, newest first, each row with its category", () => {
+  const paused = rec("paused", "subscriptions.membership", { provider: "Anytime Fitness" }, { status: "paused", dueDate: "2027-01-01" });
+  const pausedEarlier = rec("pausedins", "vehicles.insurance", { provider: "Youi" }, { status: "paused", dueDate: "2026-06-01" });
+  const markup = render({ records: [...ALL, paused, pausedEarlier], recordFilter: { categories: [], statuses: ["active", "on_hold"] } });
   const panel = tabPanel(markup, 0);
-  const finishedAt = panel.search(/<section aria-labelledby="records-finished-heading"/);
-  assert.ok(finishedAt > 0, "a Finished list");
-  assert.ok(panel.indexOf(">Going out") < finishedAt, "after every Active panel");
-  const finished = panel.slice(finishedAt, panel.indexOf("</section>", finishedAt));
-  assert.match(finished, /<h2 id="records-finished-heading"><span class="text-fg-muted">Finished<\/span><\/h2>/, "a quieter heading");
-  assert.match(text(finished), /^Finished 2 Ended, completed or resolved, newest first\./);
-  assert.ok(finished.indexOf('id="record-lastdinner"') < finished.indexOf('id="record-oldpass"'), "newest first");
-  assert.match(text(rowOf(finished, "lastdinner")), /Ester Completed Going out · Restaurant · Starts Fri 2 Oct, 7:00 pm AEST/, "the category leads its line");
-  assert.ok(!finished.includes('id="record-gym"'), "a cancelled record isn't finished");
-  assert.ok(!panel.slice(0, finishedAt).includes('id="record-lastdinner"'), "statuses never mix: the finished dinner isn't in the Going out panel");
+  const onHoldAt = panel.search(/<section aria-labelledby="records-on_hold-heading"/);
+  assert.ok(onHoldAt > 0, "an On hold list");
+  assert.ok(panel.indexOf(">Subscriptions and memberships") < onHoldAt, "after every Active panel");
+  const onHold = panel.slice(onHoldAt, panel.indexOf("</section>", onHoldAt));
+  assert.match(onHold, /<h2 id="records-on_hold-heading"><span class="text-fg-muted">On hold<\/span><\/h2>/, "a quieter heading");
+  assert.match(text(onHold), /^On hold 2 Paused for now, newest first\./);
+  assert.ok(onHold.indexOf('id="record-paused"') < onHold.indexOf('id="record-pausedins"'), "newest first");
+  assert.match(text(rowOf(onHold, "paused")), /^.*Anytime Fitness Paused Subscriptions and memberships · Membership/, "the category leads its line");
+  assert.ok(!panel.slice(0, onHoldAt).includes('id="record-paused"'), "statuses never mix: the paused membership isn't in the Subscriptions panel");
   const toolbar = toolbarOf(markup);
-  assert.match(text(/<p role="status"[^>]*>([\s\S]*?)<\/p>/.exec(toolbar)![1]!), /^9 active, 2 finished · Not shown: 1 cancelled/);
-  assert.deepEqual([...toolbar.matchAll(/Remove filter <\/span>([^<]+)/g)].map((m) => m[1]), ["Status: Active", "Status: Finished"]);
+  assert.match(text(/<p role="status"[^>]*>([\s\S]*?)<\/p>/.exec(toolbar)![1]!), /^8 active, 2 on hold · 2 finished or cancelled\s?, in History$/);
+  assert.deepEqual([...toolbar.matchAll(/Remove filter <\/span>([^<]+)/g)].map((m) => m[1]), ["Status: Active", "Status: On hold"]);
 });
 
-test("each other status is its own list, in the order On hold, Finished, Cancelled, never an empty one", () => {
+test("Records never lists what's finished or cancelled, and a chosen status with nothing in it has no list", () => {
   const paused = rec("paused", "subscriptions.membership", { provider: "Anytime Fitness" }, { status: "paused", dueDate: "2027-01-01" });
-  const markup = render({ records: [...ALL, paused], recordFilter: { categories: [], statuses: ["cancelled", "on_hold", "active"] } });
-  const lists = [...markup.matchAll(/<section aria-labelledby="records-([a-z_]+)-heading"/g)].map((m) => m[1]);
-  assert.deepEqual(lists, ["on_hold", "cancelled"]);
-  const onlyFinished = render({ records: [HEALTH], recordFilter: { categories: [], statuses: ["active", "finished"] } });
-  assert.doesNotMatch(onlyFinished, /records-finished-heading/, "a chosen status with nothing in it has no list");
+  const panel = tabPanel(render({ records: [...ALL, paused], recordFilter: { categories: [], statuses: ["on_hold", "active"] } }), 0);
+  const lists = [...panel.matchAll(/<section aria-labelledby="records-([a-z_]+)-heading"/g)].map((m) => m[1]);
+  assert.deepEqual(lists, ["on_hold"]);
+  const nothingOnHold = tabPanel(render({ records: [HEALTH], recordFilter: { categories: [], statuses: ["active", "on_hold"] } }), 0);
+  assert.doesNotMatch(nothingOnHold, /records-on_hold-heading/, "a chosen status with nothing in it has no list");
 });
 
 test("a filter that matches nothing shows one empty state with Clear filters, and no panels", () => {
@@ -297,11 +298,16 @@ test("a filter that matches nothing shows one empty state with Clear filters, an
   const panel = tabPanel(markup, 0);
   assert.match(text(panel), /No records match these filters\. Choose other categories or statuses, or clear the filters to see what's active\. Clear filters/);
   assert.equal((panel.match(/No records match these filters/g) ?? []).length, 1, "one empty state");
-  assert.match(panel, /href="\/life-admin\?view=life&amp;tab=records"[^>]*>Clear filters/);
+  assert.match(panel, /href="\/life-admin"[^>]*>Clear filters/);
   assert.ok(!headings(panel, 2).some((title) => BUILT_IN.categories.some((category) => title.startsWith(category.label))), "no category panel");
-  const nothingActive = tabPanel(render({ records: [CANCELLED, LAST_DINNER] }), 0);
-  assert.match(text(nothingActive), /Nothing is active right now\. Everything you keep is on hold, finished or cancelled\. Show everything/);
-  assert.match(nothingActive, /href="\/life-admin\?view=life&amp;tab=records&amp;status=active&amp;status=finished&amp;status=cancelled"[^>]*>Show everything/);
+  const paused = rec("paused", "subscriptions.membership", { provider: "Anytime Fitness" }, { status: "paused", dueDate: "2027-01-01" });
+  const nothingActive = tabPanel(render({ records: [paused, CANCELLED, LAST_DINNER] }), 0);
+  assert.match(text(nothingActive), /Nothing is active right now\. What you keep here is on hold\. What's finished is in History\. Show what's on hold/);
+  assert.match(nothingActive, /href="\/life-admin\?status=active&amp;status=on_hold"[^>]*>Show what&#x27;s on hold/);
+  const allFinished = tabPanel(render({ records: [CANCELLED, LAST_DINNER] }), 0);
+  assert.match(text(allFinished), /Nothing ongoing yet\. Your accounts, policies, memberships and things show here\. What's finished is in History\. Go to History/);
+  assert.doesNotMatch(allFinished, /Filter records/, "nothing ongoing: nothing to filter");
+  assert.match(allFinished, /href="\/life-admin\?tab=history"[^>]*>Go to History/);
 });
 
 test("with no records at all there is nothing to filter: no toolbar and no empty state, just how to fill it in", () => {
@@ -323,7 +329,7 @@ test("each row is compact: its name linking to its page, where it stands, one mu
   assert.match(text(before), /> Registration · BX12AB Due soon Expires 14 Dec 2026 · Transport for NSW Handled by Instinct · Next: Book the roadworthy, due 28 Nov$/);
   assert.doesNotMatch(before, /<form\b/, "no form sits outside Details");
   assert.match(text(inside), /Registration authority Transport for NSW Number plate BX12AB/, "the facts, with the kind's labels");
-  assert.match(text(inside), /Reminds you 14 days before and 1 day before/);
+  assert.match(text(inside), /Reminds you 14 days and 1 day before · Expires 14 Dec 2026/);
   assert.match(text(inside), /Added by you\./);
   assert.match(inside, /name="setting" value="reminder"/);
   assert.match(inside, /name="recordFormVersion" value="2"/, "the Edit form");
@@ -331,10 +337,15 @@ test("each row is compact: its name linking to its page, where it stands, one mu
 });
 
 test("a booking reads its start in its own zone, and a phase is words and an icon, never colour alone", () => {
-  const row = rowOf(render(), "dinner");
-  assert.match(text(row), /Sixpenny Upcoming Restaurant · Starts Wed 25 Nov, 7:30 pm AEDT Details/);
-  assert.match(text(row), /How many 4 people/);
-  assert.match(row, /class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Upcoming/);
+  const pastLunch = rec("lunch", "outings.restaurant", { provider: "Bennelong", starts_at: "2026-09-12T12:30+10:00[Australia/Sydney]", party_size: "4" }, { dueDate: "2026-09-12" });
+  const markup = render({ records: [...ALL, pastLunch] });
+  const upcoming = tabPanel(markup, 1);
+  assert.match(text(upcoming), /Sixpenny Upcoming Restaurant · Starts Wed 25 Nov, 7:30 pm AEDT · in 2 days/, "one ahead, in Upcoming");
+  assert.match(upcoming.slice(upcoming.indexOf('href="/life-admin/items/dinner"')), /^[^]*?class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Upcoming/);
+  const past = rowOf(tabPanel(markup, 2), "lunch");
+  assert.match(text(past), /Bennelong Completed Going out · Restaurant · Starts Sat 12 Sept, 12:30 pm AEST Details/, "one that's over, in History, in the zone of its own date");
+  assert.match(text(past), /How many 4 people/);
+  assert.match(past, /class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Completed/);
 });
 
 test("a legacy record reads through its kind's type: a subscription renews, its cost is on its line", () => {
@@ -358,13 +369,14 @@ test("Upcoming: happening now, overdue, this week and later, each line linking t
   ]);
   assert.match(text(upcoming), /Medibank Overdue Health insurance · Renews or extras reset 2 Nov 2026 · 21 days ago/);
   assert.match(text(upcoming), /Book the roadworthy Due 28 Nov, in 5 days · Registration · BX12AB/);
-  assert.match(upcoming, /text-warning/, "an overdue line carries the warning icon as well as its words");
+  assert.match(upcoming, /wh-tone-warning/, "an overdue line carries the warning badge as well as its words");
 });
 
-test("Upcoming says so when nothing is due", () => {
-  const upcoming = text(tabPanel(render({ records: [PASSPORT] }), 1));
-  assert.match(upcoming, /Nothing due in the next 60 days\./);
-  assert.match(upcoming, /No next steps with a date\./);
+test("Upcoming says so when nothing is due or booked, with a way to add a booking", () => {
+  const upcoming = tabPanel(render({ records: [PASSPORT] }), 1);
+  assert.match(text(upcoming), /Nothing coming up\. Bookings, and renewals and expiry dates in the next 60 days, show here\. Past ones move to History\./);
+  assert.match(upcoming, /href="\/life-admin#new-record"[^>]*>Add a booking/);
+  assert.match(text(upcoming), /No next steps with a date\./);
 });
 
 test("a receipt's downloads and its attach control are in its Details", () => {

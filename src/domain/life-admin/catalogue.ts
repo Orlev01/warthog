@@ -33,12 +33,13 @@ export interface CustomKindDef {
   readonly lifecycle: Lifecycle;
   readonly use: string;
   readonly anchor?: boolean;
+  // An account, policy or membership the person holds (standing): it gets the account fields.
+  readonly account?: boolean;
   // Built-in kind ids, "self.<key>" for a kind of this same category, or "any".
   readonly belongsTo?: readonly string[];
   readonly due?: { readonly means: DueMeans; readonly label: string };
   readonly fields: readonly FieldDef[];
   readonly identity?: readonly string[];
-  readonly holdsAddress?: boolean;
 }
 
 export interface CustomCategoryDefinition {
@@ -91,11 +92,11 @@ export function customKind(slug: string, kind: CustomKindDef): RecordTypeDef {
       use: kind.use,
       lifecycle: kind.lifecycle,
       ...(kind.anchor ? { anchor: true as const } : {}),
+      ...(kind.account ? { account: true as const } : {}),
       ...(belongsTo && belongsTo.length > 0 ? { belongsTo } : {}),
       ...(kind.due ? { due: kind.due } : {}),
       fields: kind.fields,
       ...(kind.identity && kind.identity.length > 0 ? { identity: [kind.identity] } : {}),
-      ...(kind.holdsAddress ? { holdsAddress: true as const } : {}),
     },
     "custom",
   );

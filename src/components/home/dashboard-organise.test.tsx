@@ -66,33 +66,33 @@ test("Home shows the soonest five reminders and a way to the rest in Life admin'
   const shown = text(html);
   assert.ok(shown.includes("Reminder 4"));
   assert.ok(!shown.includes("Reminder 5"));
-  assert.match(html, /href="\/life-admin\?view=life&amp;tab=upcoming"[^>]*>View all 7 in Upcoming/);
-  assert.match(renderToStaticMarkup(<DashboardView {...base} reminders={reminders.slice(0, 2)} />), /href="\/life-admin\?view=life&amp;tab=upcoming"[^>]*>See what&#x27;s coming up/);
+  assert.match(html, /href="\/life-admin\?tab=upcoming"[^>]*>View all 7 in Upcoming/);
+  assert.match(renderToStaticMarkup(<DashboardView {...base} reminders={reminders.slice(0, 2)} />), /href="\/life-admin\?tab=upcoming"[^>]*>See what&#x27;s coming up/);
 });
 
-// Life admin's typed records (docs/adr/life-admin-profile.md): each reminder opens its record
-// in Life admin, says what its date means ("Expires"), says plainly when it has passed (words
+// Life admin's typed records (docs/adr/life-admin-profile.md): each reminder opens its record's
+// own page in Life admin, says what its date means ("Expires"), says plainly when it has passed (words
 // and an icon), and Home says how many things agents found are waiting to be checked.
 test("each reminder links to its record, reads its date the type's way, and an overdue one says so", () => {
   const html = renderToStaticMarkup(
     <DashboardView
       {...base}
       reminders={[
-        { id: "r1", title: "Medibank", due: "2 Nov 2026", dueLabel: "Renews", overdue: true, href: "/life-admin?view=life&tab=records#record-r1" },
-        { id: "r2", title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: "/life-admin?view=life&tab=records#record-r2" },
+        { id: "r1", title: "Medibank", due: "2 Nov 2026", dueLabel: "Renews", overdue: true, href: "/life-admin/items/r1" },
+        { id: "r2", title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: "/life-admin/items/r2" },
         { id: "r3", title: "Dentist", due: "1 Jan 2027" },
       ]}
     />,
   );
-  assert.match(html, /href="\/life-admin\?view=life&amp;tab=records#record-r1"[^>]*>[\s\S]*?Medibank[\s\S]*?Overdue since 2 Nov 2026/);
-  assert.match(html, /href="\/life-admin\?view=life&amp;tab=records#record-r2"[^>]*>[\s\S]*?Transport for NSW[\s\S]*?Expires 14 Dec 2026/);
+  assert.match(html, /href="\/life-admin\/items\/r1"[^>]*>[\s\S]*?Medibank[\s\S]*?Overdue since 2 Nov 2026/);
+  assert.match(html, /href="\/life-admin\/items\/r2"[^>]*>[\s\S]*?Transport for NSW[\s\S]*?Expires 14 Dec 2026/);
   assert.match(text(html), /Dentist Due 1 Jan 2027/, "a reminder without a type's wording says Due");
   assert.match(html, /text-warning/, "an overdue reminder carries the warning icon as well as its words");
 });
 
 test("Home says how many things wait to be checked in Life admin, even with no reminders", () => {
-  const html = renderToStaticMarkup(<DashboardView {...base} toCheck={{ count: 3, href: "/life-admin?view=life&tab=records" }} />);
-  assert.match(html, /href="\/life-admin\?view=life&amp;tab=records"[^>]*>[\s\S]*?3 things to check/);
+  const html = renderToStaticMarkup(<DashboardView {...base} toCheck={{ count: 3, href: "/life-admin" }} />);
+  assert.match(html, /href="\/life-admin"[^>]*>[\s\S]*?3 things to check/);
   assert.match(text(html), /No reminders coming up/, "the reminders panel still says there are none");
   assert.match(text(renderToStaticMarkup(<DashboardView {...base} toCheck={{ count: 1, href: "/life-admin" }} />)), /1 thing to check/);
   assert.doesNotMatch(text(renderToStaticMarkup(<DashboardView {...base} />)), /to check/, "nothing waiting, no line");

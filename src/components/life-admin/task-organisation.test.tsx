@@ -149,10 +149,10 @@ test("a done task offers no Mark done (it is already done) but keeps its notes a
 test("assignee filter links come from the person's agents, with counts; All is current with no filter", () => {
   const nav = filterNav(render());
   assert.deepEqual(links(nav), [
-    { href: "/life-admin?view=tasks", current: true, text: "All 4" },
-    { href: "/life-admin?assignee=any&view=tasks", current: false, text: "Anyone 1" },
-    { href: `/life-admin?assignee=${ZEPHYR.id}&view=tasks`, current: false, text: "Zephyr Assistant 2" },
-    { href: `/life-admin?assignee=${BRAVO.id}&view=tasks`, current: false, text: "Bravo Scheduler 1" },
+    { href: "/life-admin?tab=tasks", current: true, text: "All 4" },
+    { href: "/life-admin?assignee=any&tab=tasks", current: false, text: "Anyone 1" },
+    { href: `/life-admin?assignee=${ZEPHYR.id}&tab=tasks`, current: false, text: "Zephyr Assistant 2" },
+    { href: `/life-admin?assignee=${BRAVO.id}&tab=tasks`, current: false, text: "Bravo Scheduler 1" },
   ]);
 });
 
@@ -174,8 +174,8 @@ test("filtering to one assignee shows only their tasks, marks the link current a
   assert.ok(links(filterNav(markup)).some((l) => l.current && l.text === "Zephyr Assistant 2"));
   const chips = /<ul\b[^>]*aria-label="Applied filters"[^>]*>([\s\S]*?)<\/ul>/.exec(markup);
   assert.ok(chips, "the applied filter is listed");
-  assert.deepEqual(links(chips![1]!), [{ href: "/life-admin?view=tasks", current: false, text: "Remove filter Assigned to: Zephyr Assistant" }]);
-  assert.ok(links(markup).some((l) => l.text === "Clear all filters" && l.href === "/life-admin?view=tasks"));
+  assert.deepEqual(links(chips![1]!), [{ href: "/life-admin?tab=tasks", current: false, text: "Remove filter Assigned to: Zephyr Assistant" }]);
+  assert.ok(links(markup).some((l) => l.text === "Clear all filters" && l.href === "/life-admin?tab=tasks"));
 });
 
 test("while filtered, each task form returns to the same filter", () => {
@@ -197,7 +197,7 @@ test("a filter that matches nothing says so and links back to every task", () =>
   const idle = { id: "0b4c6c7e-1c1a-4b55-9a49-5e2f0d6d1a03", name: "Idle Helper" };
   const markup = render({ agents: [...AGENTS, idle], assignee: idle.id });
   assert.match(text(markup), /No tasks for Idle Helper/);
-  assert.ok(links(markup).some((l) => l.text === "Show all tasks" && l.href === "/life-admin?view=tasks"));
+  assert.ok(links(markup).some((l) => l.text === "Show all tasks" && l.href === "/life-admin?tab=tasks"));
   assert.deepEqual(groupHeadings(markup), []);
 });
 

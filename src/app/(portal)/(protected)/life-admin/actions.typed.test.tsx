@@ -216,7 +216,7 @@ test("updateRecord changes only what the person changed and keeps a list or obje
     assert.deepEqual(view.heldFields, { extras: "Towel: yes; Locker: 12", tags: "fitness, weekly" });
     assert.ok(!("extras" in view.fields) && !("tags" in view.fields));
     assert.doesNotMatch(JSON.stringify(data), /\[object Object\]/);
-    assert.doesNotMatch(renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={[]} />), /\[object Object\]/);
+    assert.doesNotMatch(renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} />), /\[object Object\]/);
   });
 });
 
@@ -261,7 +261,7 @@ test("the loader shows who added a record, where the agent says it found it, and
     assert.equal(view.reviewState, "suggested");
     assert.deepEqual(view.addedBy, { kind: "agent", agentId: chatgpt.agentId, name: "ChatGPT" });
     assert.deepEqual(view.foundIn, { service: "google-gmail", sender: "service.nsw.gov.au", date: "2026-10-02", seenByWarthog: true });
-    const markup = renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={[]} />);
+    const markup = renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} />);
     assert.match(markup, /Found by ChatGPT in an email from service\.nsw\.gov\.au \(2 Oct 2026\)\. ChatGPT read it through Warthog\./);
     assert.match(markup, /Added by an agent called “You”\./);
     assert.doesNotMatch(markup, /Added by You\./);

@@ -6,48 +6,27 @@ import { AlertTriangle, CalendarCheck, CalendarClock, ListTodo } from "lucide-re
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { EmptyState } from "@/components/ui/empty";
+import { ButtonLink } from "@/components/ui/button-link";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { shortDate } from "@/domain/life-admin/journal";
-import { phaseOfView, upcomingSections } from "./record-groups";
-import { daysText, formatCalendarDate, recordName, whenLine, whenText } from "./record-format";
-import { PhaseBadge, phaseIcon } from "./phase-badge";
-import { NotCheckedTag, handlingText, itemHref } from "./record-row";
-import type { LifeAdminRecordView, NextStepView } from "./record-view-types";
+import { phaseOfView, sectionOf, upcomingSections } from "./record-groups";
+import { daysText, formatCalendarDate, recordName, whenText } from "./record-format";
+import { RecordReturnProvider } from "./record-forms";
+import { RecordRow, itemHref } from "./record-row";
+import type { AssetOption, LifeAdminRecordView, NextStepView, RecordActions } from "./record-view-types";
 
-// Upcoming (docs/adr/life-admin-profile.md): what needs the person soon, across every
-// category, built-in or their own — happening now, overdue (recently), this week, later (to
-// 60 days) — and the next steps anyone recorded with a due date. Where each record stands comes
-// from the one lifecycle module, via the loader; every line links to the item's own page.
+// Upcoming (docs/adr/life-admin-profile.md; founder, 23 Nov 2026): what needs the person or is
+// booked, across every category, built-in or their own — happening now, overdue (recently), this
+// week, later (to 60 days) — then every other booking ahead (the old Bookings tab, folded in):
+// further ahead, and those with no date yet; and the next steps anyone recorded with a due date.
+// A renewal or expiry is here while it's coming up and stays on Records too; a booking lives
+// here until it's over, then moves to History. Where each record stands comes from the one
+// lifecycle module, via the loader. Each is the same row as on Records — how soon, what it
+// belongs to, who is handling it, and its details, reminders, Edit and Delete one click away — so
+// a booking is managed here; an action on it comes back here. A record that lives on Records
+// keeps its `#record-<id>` anchor there.
 
 export { itemHref };
-
-function UpcomingRow({ record, catalogue, today, zone }: { record: LifeAdminRecordView; catalogue: Catalogue; today: string; zone: string }) {
-  const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
-  const { name } = recordName(type, record.fields, Boolean(record.type));
-  const phase = phaseOfView(record);
-  const Icon = phaseIcon(phase.phase);
-  const when = whenLine(type, record, zone, today.slice(0, 4));
-  const relative = phase.inDays !== undefined && phase.phase !== "in_progress" ? daysText(phase.inDays) : null;
-  const handling = handlingText(record.handling, zone);
-  return (
-    <li className={`${LIST_ROW} flex-row items-start gap-3`}>
-      <Icon aria-hidden={true} className={`mt-3 h-4 w-4 shrink-0 ${phase.phase === "overdue" ? "text-warning" : "text-fg-muted"}`} />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <a href={itemHref(record.id)} className="inline-flex min-h-11 min-w-0 items-center text-sm font-medium text-fg underline-offset-4 hover:underline [overflow-wrap:anywhere]">
-            {name}
-          </a>
-          <PhaseBadge phase={phase.phase} label={phase.label} />
-          {record.reviewState === "suggested" ? <NotCheckedTag /> : null}
-        </div>
-        <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">
-          {[type.label, when, relative].filter(Boolean).join(" · ")}
-        </p>
-        {handling ? <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{handling}</p> : null}
-      </div>
-    </li>
-  );
-}
 
 export function UpcomingView({
   records,
@@ -55,12 +34,14 @@ export function UpcomingView({
   nextSteps,
   today,
   zone = "UTC",
+  actions = {},
 }: {
   records: readonly LifeAdminRecordView[];
   catalogue: Catalogue;
   nextSteps: readonly NextStepView[];
   today: string;
   zone?: string;
+  actions?: RecordActions;
 }) {
   const sections = upcomingSections(records);
   const groups = [
@@ -68,17 +49,53 @@ export function UpcomingView({
     { key: "overdue", title: "Overdue", rows: sections.overdue },
     { key: "week", title: "This week", rows: sections.week },
     { key: "later", title: "Later (next 60 days)", rows: sections.later },
+    { key: "ahead", title: "Further ahead", rows: sections.ahead },
+    { key: "undated", title: "Date to be confirmed", rows: sections.undated },
   ].filter((group) => group.rows.length > 0);
+  const byId = new Map(records.map((record) => [record.id, record] as const));
+  const nameOf = (record: LifeAdminRecordView) => recordName(catalogue.typeOfRecord(record.kind, record.type ?? null), record.fields, Boolean(record.type)).name;
+  const partOf = (record: LifeAdminRecordView) => {
+    const parent = record.parentId && record.parentId !== record.id ? byId.get(record.parentId) : undefined;
+    return parent ? nameOf(parent) : null;
+  };
+  const assets: AssetOption[] = records
+    .map((record) => ({ record, type: catalogue.typeOfRecord(record.kind, record.type ?? null) }))
+    .filter(({ type }) => type.anchor)
+    .map(({ record, type }) => ({ id: record.id, name: nameOf(record), typeId: type.id, typeLabel: type.label }));
+  const currentYear = today.slice(0, 4);
+  // How soon, in words ("in 12 days", "3 days ago"); nothing while it's happening.
+  const soon = (record: LifeAdminRecordView) => {
+    const phase = phaseOfView(record);
+    return phase.inDays !== undefined && phase.phase !== "in_progress" ? daysText(phase.inDays) : null;
+  };
   return (
-    <>
-      <WorkspacePanel title="Coming up" description="What's happening now, overdue, and due or booked in the next 60 days, across all your records." icon={CalendarClock}>
+    <RecordReturnProvider value={{ tab: "upcoming", filter: { categories: [], statuses: [] } }}>
+      <WorkspacePanel title="Coming up" description="Renewals, expiry dates and anything else due in the next 60 days, and every booking ahead: flights, stays, restaurants and appointments." icon={CalendarClock}>
         {groups.length === 0 ? (
-          <EmptyState variant="inline" icon={CalendarCheck} heading="Nothing due in the next 60 days." description="Renewals, expiry dates and bookings show here as they come up." />
+          <EmptyState
+            variant="inline"
+            icon={CalendarCheck}
+            heading="Nothing coming up."
+            description="Bookings, and renewals and expiry dates in the next 60 days, show here. Past ones move to History."
+            action={<ButtonLink href="/life-admin#new-record" size="sm">Add a booking</ButtonLink>}
+          />
         ) : (
           groups.map((group) => (
             <ListGroup key={group.key} id={`upcoming-${group.key}`} level={3} title={group.title} count={group.rows.length}>
               {group.rows.map((record) => (
-                <UpcomingRow key={record.id} record={record} catalogue={catalogue} today={today} zone={zone} />
+                <RecordRow
+                  key={record.id}
+                  record={record}
+                  type={catalogue.typeOfRecord(record.kind, record.type ?? null)}
+                  catalogue={catalogue}
+                  partOf={partOf(record)}
+                  note={soon(record)}
+                  anchor={sectionOf(record, catalogue) === "upcoming"}
+                  assets={assets}
+                  zone={zone}
+                  currentYear={currentYear}
+                  actions={actions}
+                />
               ))}
             </ListGroup>
           ))
@@ -114,6 +131,6 @@ export function UpcomingView({
           </ul>
         )}
       </WorkspacePanel>
-    </>
+    </RecordReturnProvider>
   );
 }

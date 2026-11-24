@@ -19,6 +19,7 @@ import { fieldKey } from "./normalise";
 import {
   BUILT_IN_TYPES,
   CATEGORY_ICONS,
+  ACCOUNT_FIELDS,
   COMMON_LEADING,
   COMMON_TRAILING,
   BOOKING_FIELDS,
@@ -76,11 +77,11 @@ export const customKindSchema = z.object({
   lifecycle: z.enum(["standing", "booking", "case"]),
   use: plainText(140),
   anchor: z.boolean().optional(),
+  account: z.boolean().optional(),
   belongsTo: z.array(z.string().max(80)).max(6).optional(),
   due: z.object({ means: z.enum(DUE_MEANS as [DueMeans, ...DueMeans[]]), label: plainText(24) }).optional(),
   fields: z.array(customFieldSchema).max(MAX_OWN_FIELDS).default([]),
   identity: z.array(key(32)).min(1).max(3).optional(),
-  holdsAddress: z.boolean().optional(),
 });
 
 // Field names a kind may not use: Warthog's own bookkeeping.
@@ -129,7 +130,7 @@ export function builtInFor(label: string): string | null {
   return BUILT_IN_SYNONYMS[phrase] ?? BUILT_IN_SYNONYMS[phrase.replace(/s$/, "")] ?? null;
 }
 
-const COMMON_KINDS = new Map([...COMMON_LEADING, ...COMMON_TRAILING, ...BOOKING_FIELDS, ...CASE_FIELDS].map((field) => [field.key, field.kind]));
+const COMMON_KINDS = new Map([...COMMON_LEADING, ...ACCOUNT_FIELDS, ...COMMON_TRAILING, ...BOOKING_FIELDS, ...CASE_FIELDS].map((field) => [field.key, field.kind]));
 const BUILT_IN_ANCHORS = new Set(BUILT_IN_TYPES.filter((type) => type.anchor).map((type) => type.id));
 
 type Draft = z.infer<typeof customKindSchema>;
@@ -221,11 +222,11 @@ export function definitionOf(draft: NewCategory): CustomCategoryDefinition & { r
       lifecycle: kind.lifecycle,
       use: kind.use,
       ...(kind.anchor ? { anchor: true } : {}),
+      ...(kind.account && kind.lifecycle === "standing" && !kind.anchor ? { account: true } : {}),
       ...(kind.belongsTo && kind.belongsTo.length > 0 ? { belongsTo: kind.belongsTo } : {}),
       ...(kind.due ? { due: kind.due } : {}),
       fields: kind.fields.map((field) => ({ key: field.key, label: field.label, kind: field.kind, ...(field.unit ? { unit: field.unit } : {}), ...(field.choices ? { choices: field.choices } : {}), ...(field.hint ? { hint: field.hint } : {}) })),
       ...(kind.identity ? { identity: kind.identity } : {}),
-      ...(kind.holdsAddress ? { holdsAddress: true } : {}),
     })),
   };
 }

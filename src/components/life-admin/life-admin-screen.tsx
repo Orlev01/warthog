@@ -2,63 +2,37 @@
 
 import * as React from "react";
 
-import { ViewPanels } from "@/components/ui/view-tabs";
 import { LifeAdminView, type LifeAdminViewProps } from "./life-admin-view";
 import { TasksView, type TasksViewProps } from "./tasks-view";
+import type { LifeAdminTab } from "./record-view-types";
 
 // The Life admin page body (UI/UX pass: containment-02/18/19, desktop-07, interaction-19,
-// newcomer-23). One heading band holds the title, the page's purpose and the two views —
-// Records & reminders | Tasks — as in-page tabs (`?view=life|tasks`, validated, Back and
-// Forward restore them). Both views stay mounted, so switching between them keeps a
-// half-typed record or task instead of reloading the page and dropping it. The outcome of
-// the last action (`notice`) is the first thing under the band, inside the view it came
-// from. The records view's own tabs (Records | Upcoming | Bookings | Moving checklist) are a
-// bounded strip of their own above its panels (./life-admin-view.tsx).
-
-export type LifeAdminScreenView = "life" | "tasks";
+// newcomer-23; founder, 23 Nov 2026). One heading band holds the title, the page's purpose and
+// one row of tabs — Records | Upcoming | History | Tasks (`?tab=`, validated, Back and Forward
+// restore them). Every tab stays mounted, so switching keeps a half-typed record or task instead
+// of reloading the page and dropping it. The outcome of the last action (`notice`) is the first
+// thing in the tab it came from.
 
 export type LifeAdminScreenProps = {
-  // The view the request asked for (`?view=`); the records view when absent.
-  initialView: LifeAdminScreenView;
-  // The page's outcome notice (a PageNotice), shown under the heading band.
+  // The tab the request asked for (`?tab=`, older addresses mapped by the page); Records when absent.
+  initialTab: LifeAdminTab;
+  // The page's outcome notice (a PageNotice), shown at the top of the tab first shown.
   notice?: React.ReactNode;
-  records: LifeAdminViewProps;
+  records: Omit<LifeAdminViewProps, "initialTab" | "heading" | "notice" | "tasks">;
   tasks: TasksViewProps;
 };
 
-export function LifeAdminScreen({ initialView, notice, records, tasks }: LifeAdminScreenProps) {
+export function LifeAdminScreen({ initialTab, notice, records, tasks }: LifeAdminScreenProps) {
   return (
-    <ViewPanels
-      label="Life admin views"
-      parameter="view"
-      defaultTab="life"
-      initialTab={initialView}
+    <LifeAdminView
+      {...records}
+      initialTab={initialTab}
+      notice={notice}
       heading={{
         title: "Life admin",
-        description: "Your vehicles, home, bills, insurance, bookings, ID expiry dates and subscriptions, what's coming up, and tasks, kept up to date by you and your agents.",
+        description: "Records are the accounts, policies and things you have now. Upcoming is what needs you or is booked. History is what's finished. Tasks are jobs for you or your agents. You and your agents keep it up to date.",
       }}
-      tabs={[
-        {
-          key: "life",
-          label: "Records & reminders",
-          content: (
-            <>
-              {initialView === "life" ? notice : null}
-              <LifeAdminView {...records} />
-            </>
-          ),
-        },
-        {
-          key: "tasks",
-          label: "Tasks",
-          content: (
-            <>
-              {initialView === "tasks" ? notice : null}
-              <TasksView {...tasks} />
-            </>
-          ),
-        },
-      ]}
+      tasks={<TasksView {...tasks} />}
     />
   );
 }

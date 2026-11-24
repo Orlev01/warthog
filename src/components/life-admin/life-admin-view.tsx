@@ -1,25 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { ListChecks } from "lucide-react";
 
-import { ViewPanels } from "@/components/ui/view-tabs";
-import { LIST_ROW } from "@/components/ui/list-group";
-import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
-import { ButtonLink } from "@/components/ui/button-link";
-import { EmptyState } from "@/components/ui/empty";
-import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { ViewPanels, type ViewPanelsHeading } from "@/components/ui/view-tabs";
 import { BUILT_IN, catalogueFromData, type CatalogueData } from "@/domain/life-admin/catalogue";
-import { DisabledControl, HINT_CLASS } from "./record-forms";
-import { DEFAULT_LIST_STATUSES, bookingsView, listStatusOf, listedRecords, upcomingSections } from "./record-groups";
+import { DEFAULT_LIST_STATUSES, listedRecords } from "./record-groups";
 import { RecordsView } from "./records-view";
 import { UpcomingView } from "./upcoming-view";
-import { BookingsView } from "./bookings-view";
+import { HistoryView } from "./history-view";
+import { currentLifeAdminSearch } from "./tab-address";
 import type {
-  BookingFilters,
   CategoryStateView,
-  ChecklistItemView,
-  LifeAdminAction,
+  HistoryFilter,
   LifeAdminRecordView,
   LifeAdminTab,
   NextStepView,
@@ -30,9 +22,8 @@ import type {
 
 export type {
   AssetOption,
-  BookingFilters,
   CategoryStateView,
-  ChecklistItemView,
+  HistoryFilter,
   NextStepView,
   SuggestedCategoryView,
   LifeAdminAction,
@@ -47,32 +38,30 @@ export type {
   RecordListStatus,
 } from "./record-view-types";
 
-// E14-S11 — Life-admin records and checklist view component
-// (src/components/life-admin/life-admin-view.tsx), reshaped by the life-admin profile
-// (docs/adr/life-admin-profile.md).
-//
-// The records half of Life admin has four in-page tabs (`?tab=`): "Records", the person's typed
-// life admin — what's active by category (their own catalogue, built-in and their own
-// categories), then whatever other statuses they choose, filtered by category and status — that
-// they and their agents keep (./records-view.tsx); "Upcoming", what needs them soon across every
-// category (./upcoming-view.tsx); "Bookings", every booking live and past (./bookings-view.tsx);
-// and the MOVING CHECKLIST. Agents fill most of it in from email; what they save arrives as a
-// suggestion the person confirms, and their change to a confirmed record waits for the person.
-// The tab's old name ("things") and the older tab values (subscriptions, receipts, renewals) are
-// mapped to "Records" by the page, and each record keeps its `#record-<id>` anchor, so reminder
-// links still land on the record: one the filters don't show (finished, say, or in a category
-// the person hid) goes to the item's own page.
+// Life admin's tabs (src/components/life-admin/life-admin-view.tsx; docs/adr/life-admin-profile.md;
+// founder, 23 Nov 2026): one row of tabs (`?tab=`), no counts in their names —
+//   • "Records": what's ongoing in the person's life — accounts, policies, memberships,
+//     documents, the things other records belong to, matters in progress — what's active first,
+//     by category (their own catalogue, built-in and their own categories), then what's on hold,
+//     filtered by category and status (./records-view.tsx);
+//   • "Upcoming": what needs them or is booked — renewals and expiry dates coming up, every
+//     booking ahead, and next steps due (./upcoming-view.tsx);
+//   • "History": everything finished, strictly apart, newest first, filtered by category and
+//     status (./history-view.tsx);
+//   • "Tasks", when the page passes it (LifeAdminScreen does).
+// Agents fill most of it in from email; what they save arrives as a suggestion the person
+// confirms, and their change to a confirmed record waits for the person. Each record keeps its
+// `#record-<id>` anchor, so reminder links still land on it: one this page doesn't show as a row
+// (a booking, something finished, or in a category the person hid) goes to the item's own page.
 //
 // This is the pure, prop-driven VIEW (a Client Component in the app): it renders FROM the
 // props the Life Admin loader hands it, with fields already decrypted, agent names resolved
 // and server actions passed in — no clock, DB or session in the view. The loader passes the
-// person's local date as `today`. The page heading and the Records | Tasks views live in
-// LifeAdminScreen (./life-admin-screen.tsx).
+// person's local date as `today`.
 //
 // No control may ever be dead (constitution: "No dead controls"): a control whose server
-// action is not supplied — or that cannot act because of its own state (a checklist item
-// already handed to an agent) — renders DISABLED with a one-line reason tied to it. Colour
-// comes from the design tokens and shared components, never a raw hex.
+// action is not supplied renders DISABLED with a one-line reason tied to it. Colour comes from
+// the design tokens and shared components, never a raw hex.
 
 export type LifeAdminViewProps = RecordActions & {
   // The person's local date (YYYY-MM-DD, in their account time zone), from the loader. What
@@ -90,189 +79,35 @@ export type LifeAdminViewProps = RecordActions & {
   // The Records tab's category and status filters, validated by the page. Absent ⇒ what's
   // active, in every category.
   recordFilter?: RecordFilter;
-  // The Bookings tab's filters and page, validated by the page.
-  bookingFilters?: BookingFilters;
+  // History's category and status filters and page, validated by the page. Absent ⇒ everything.
+  historyFilter?: HistoryFilter;
   // Every live record the person has (dismissed ones are never loaded).
   records: ReadonlyArray<LifeAdminRecordView>;
-  checklist: ReadonlyArray<ChecklistItemView>;
-  // Which tab a render shows first; both are always navigable.
+  // Which tab a render shows first; every tab is always navigable.
   initialTab?: LifeAdminTab;
   // The type picked in the Add panel's first step (`?add=`), already validated by the page.
   addType?: string | null;
-  tickOffAction?: LifeAdminAction;
-  handToAgentAction?: LifeAdminAction;
+  // The page heading over the tabs, the outcome of the last action (shown in the tab first
+  // shown), and the Tasks tab's content.
+  heading?: ViewPanelsHeading;
+  notice?: React.ReactNode;
+  tasks?: React.ReactNode;
 };
-
-// ─── the moving checklist ────────────────────────────────────────────────────────────
-
-// The tick-off control: a checkbox reflecting whether the item is done, named for its item.
-// LIVE (ticking submits the page's tickOffAction) when supplied; otherwise DISABLED with a
-// reason.
-function TickControl({
-  item,
-  tickOffAction,
-}: {
-  item: ChecklistItemView;
-  tickOffAction?: LifeAdminAction;
-}) {
-  const reasonId = React.useId();
-  if (!tickOffAction) {
-    return (
-      <div className="flex flex-col gap-1">
-        <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
-          <input
-            type="checkbox"
-            className="size-4"
-            defaultChecked={item.done}
-            disabled
-            aria-describedby={reasonId}
-          />
-          Done<span className="sr-only">: {item.label}</span>
-        </label>
-        <p id={reasonId} className={HINT_CLASS}>
-          Ticking items off isn't available just now.
-        </p>
-      </div>
-    );
-  }
-  return (
-    <ActionForm action={tickOffAction}>
-      <PendingFormFields pendingLabel="Saving checklist…">
-        <input type="hidden" name="itemId" value={item.id} />
-        <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
-          <input
-            type="checkbox"
-            name="done"
-            className="size-4"
-            defaultChecked={item.done}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              event.currentTarget.form?.requestSubmit()
-            }
-          />
-          Done<span className="sr-only">: {item.label}</span>
-        </label>
-      </PendingFormFields>
-    </ActionForm>
-  );
-}
-
-// The "hand to an agent" control. DISABLED with a reason when the item is already linked
-// to a task (you cannot hand it off twice) or when no handToAgentAction is supplied;
-// otherwise LIVE (a form bound to handToAgentAction, carrying this item's id).
-function HandControl({
-  item,
-  handToAgentAction,
-}: {
-  item: ChecklistItemView;
-  handToAgentAction?: LifeAdminAction;
-}) {
-  if (item.linkedTaskId !== null) {
-    return (
-      <DisabledControl
-        label="Hand to an agent"
-        reason="Already handed to an agent, so you can't hand it off again."
-      />
-    );
-  }
-  if (!handToAgentAction) {
-    return (
-      <DisabledControl
-        label="Hand to an agent"
-        reason="Handing items to an agent isn't available just now."
-      />
-    );
-  }
-  return (
-    <ActionForm action={handToAgentAction}>
-      <input type="hidden" name="itemId" value={item.id} />
-      <FormSubmit variant="secondary" size="sm" pendingLabel="Handing over…">
-        Hand to an agent<span className="sr-only">: {item.label}</span>
-      </FormSubmit>
-    </ActionForm>
-  );
-}
-
-function ChecklistItem({
-  item,
-  tickOffAction,
-  handToAgentAction,
-}: {
-  item: ChecklistItemView;
-  tickOffAction?: LifeAdminAction;
-  handToAgentAction?: LifeAdminAction;
-}) {
-  return (
-    <li className={LIST_ROW}>
-      <p className="text-fg">{item.label}</p>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <TickControl item={item} tickOffAction={tickOffAction} />
-        <HandControl item={item} handToAgentAction={handToAgentAction} />
-      </div>
-    </li>
-  );
-}
-
-function ChecklistPanel({
-  checklist,
-  tickOffAction,
-  handToAgentAction,
-}: {
-  checklist: ReadonlyArray<ChecklistItemView>;
-  tickOffAction?: LifeAdminAction;
-  handToAgentAction?: LifeAdminAction;
-}) {
-  const done = checklist.filter((item) => item.done).length;
-  return (
-    <WorkspacePanel
-      title="Moving checklist"
-      description={
-        checklist.length === 0
-          ? "The places that still have your old address, once you're moving."
-          : `${done} of ${checklist.length} done. Tick items off, or hand one to an agent to do for you.`
-      }
-      icon={ListChecks}
-    >
-      {checklist.length === 0 ? (
-        <EmptyState
-          variant="inline"
-          icon={ListChecks}
-          heading="No moving checklist yet."
-          description="It appears when you add an upcoming address in About you, listing the places that still have your old one."
-          action={<ButtonLink href="/vault" size="sm">Go to About you</ButtonLink>}
-        />
-      ) : (
-        <ul role="list" className="flex min-w-0 flex-col">
-          {checklist.map((item) => (
-            <ChecklistItem
-              key={item.id}
-              item={item}
-              tickOffAction={tickOffAction}
-              handToAgentAction={handToAgentAction}
-            />
-          ))}
-        </ul>
-      )}
-    </WorkspacePanel>
-  );
-}
 
 // ─── the view ────────────────────────────────────────────────────────────────────────
 
 export { nextTabIndex } from "@/components/ui/view-tabs";
 
-// A tab label with its count, e.g. "Records (3)".
-function counted(label: string, count: number): string {
-  return `${label} (${count})`;
-}
-
-// A `#record-<id>` link (reminder emails, Home, older bookmarks) lands on its row: a row inside a
-// closed disclosure is opened first, and one the page doesn't show (the filters leave it out, or
-// its category is hidden) goes to the item's own page instead.
+// A `#record-<id>` link (reminder notifications, older bookmarks) lands on its row in the tab
+// shown: a row inside a closed disclosure is opened first, and one that tab doesn't show (a
+// booking, something finished, the filters leave it out, or its category is hidden) goes to the
+// item's own page instead.
 function useRecordAnchor() {
   React.useEffect(() => {
     const match = /^#record-([0-9a-f-]{36})$/i.exec(window.location.hash);
     if (!match) return;
-    const row = document.getElementById(`record-${match[1]}`);
+    const found = document.getElementById(`record-${match[1]}`);
+    const row = found && !found.closest('[role="tabpanel"][hidden]') ? found : null;
     if (!row) {
       const item = `/life-admin/items/${match[1]!.toLowerCase()}`;
       // Not when the person just came back from that item's page: it would send them straight back.
@@ -293,9 +128,18 @@ function useRecordAnchor() {
   }, []);
 }
 
-// The records half of Life admin: a bounded tab strip ("Records" | "Upcoming" | "Bookings" |
-// "Moving checklist"), then the selected tab's panels. Every tab stays mounted, so a half-typed
-// record survives a switch. The Records count is what's active.
+// An older address (`?view=…`, an older tab name) is replaced by today's, keeping the
+// `#record-<id>`, before the tabs read it: the page already opened the tab it meant. A layout
+// effect, so it runs before the tabs' own (passive) effect reads the address.
+function useCurrentAddress() {
+  React.useLayoutEffect(() => {
+    const current = currentLifeAdminSearch(window.location.search);
+    if (current) window.history.replaceState(window.history.state, "", `${current}${window.location.hash}`);
+  }, []);
+}
+
+// Life admin's tabs: Records | Upcoming | History (| Tasks), then the selected tab's panels.
+// Every tab stays mounted, so a half-typed record or task survives a switch.
 export function LifeAdminView({
   today,
   zone = "UTC",
@@ -304,15 +148,16 @@ export function LifeAdminView({
   suggestedCategories = [],
   nextSteps = [],
   recordFilter = { categories: [], statuses: DEFAULT_LIST_STATUSES },
-  bookingFilters = {},
+  historyFilter = { categories: [], statuses: [] },
   records,
-  checklist,
   initialTab,
   addType,
-  tickOffAction,
-  handToAgentAction,
+  heading,
+  notice,
+  tasks,
   ...actions
 }: LifeAdminViewProps) {
+  useCurrentAddress();
   useRecordAnchor();
   const catalogue = React.useMemo(() => (catalogueData ? catalogueFromData(catalogueData) : BUILT_IN), [catalogueData]);
   const states = React.useMemo<CategoryStateView[]>(
@@ -325,21 +170,29 @@ export function LifeAdminView({
           }),
     [categories, catalogue, records],
   );
-  const active = listedRecords(records, catalogue, states).filter((record) => listStatusOf(record) === "active").length;
-  const upcoming = upcomingSections(records);
-  const upcomingCount = upcoming.now.length + upcoming.overdue.length + upcoming.week.length + upcoming.later.length;
-  const liveBookings = bookingsView(records, catalogue, {}, zone).live.length;
+  // A category the person said is not for them is hidden on every tab (its records are kept;
+  // Records lists it under "Not for me", to undo).
+  const listed = React.useMemo(() => listedRecords(records, catalogue, states), [records, catalogue, states]);
+  const shown = initialTab ?? "records";
+  const withNotice = (key: LifeAdminTab, content: React.ReactNode) => (
+    <>
+      {shown === key ? notice : null}
+      {content}
+    </>
+  );
   return (
     <ViewPanels
-      label="Life admin sections"
+      label="Life admin"
       parameter="tab"
       defaultTab="records"
       initialTab={initialTab}
+      heading={heading}
       tabs={[
         {
           key: "records",
-          label: counted("Records", active),
-          content: (
+          label: "Records",
+          content: withNotice(
+            "records",
             <RecordsView
               records={records}
               catalogue={catalogue}
@@ -350,24 +203,20 @@ export function LifeAdminView({
               addType={addType}
               filter={recordFilter}
               actions={actions}
-            />
+            />,
           ),
         },
         {
           key: "upcoming",
-          label: counted("Upcoming", upcomingCount),
-          content: <UpcomingView records={records} catalogue={catalogue} nextSteps={nextSteps} today={today} zone={zone} />,
+          label: "Upcoming",
+          content: withNotice("upcoming", <UpcomingView records={listed} catalogue={catalogue} nextSteps={nextSteps} today={today} zone={zone} actions={actions} />),
         },
         {
-          key: "bookings",
-          label: counted("Bookings", liveBookings),
-          content: <BookingsView records={records} catalogue={catalogue} filters={bookingFilters} today={today} zone={zone} />,
+          key: "history",
+          label: "History",
+          content: withNotice("history", <HistoryView records={listed} catalogue={catalogue} filter={historyFilter} today={today} zone={zone} actions={actions} />),
         },
-        {
-          key: "checklist",
-          label: counted("Moving checklist", checklist.length),
-          content: <ChecklistPanel checklist={checklist} tickOffAction={tickOffAction} handToAgentAction={handToAgentAction} />,
-        },
+        ...(tasks ? [{ key: "tasks", label: "Tasks", content: withNotice("tasks", tasks) }] : []),
       ]}
     />
   );

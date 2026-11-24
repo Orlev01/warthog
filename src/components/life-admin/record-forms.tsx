@@ -39,23 +39,26 @@ export function summaryClass(variant: ButtonVariant, size: "sm" | "md" = "md"): 
   return buttonClasses({ variant, size, className: "w-fit list-none [&::-webkit-details-marker]:hidden" });
 }
 
-// Where a record action lands afterwards: the Records tab, under the filters it was shown with.
-// The Records view provides its filters; every record form posts them back as hidden values
-// (`returnTab`, `returnCategory`, `returnStatus`) and the page's actions redirect there.
-const RecordReturnContext = React.createContext<RecordFilter>({ categories: [], statuses: [] });
+// Where a record action lands afterwards: the tab it was taken on (Records, Upcoming or History),
+// under the filters it was shown with. Each tab provides its own; every record form posts them back as
+// hidden values (`returnTab`, `returnCategory`, `returnStatus`, `returnPage`) and the page's
+// actions redirect there.
+export type RecordReturn = { tab: "records" | "upcoming" | "history"; filter: RecordFilter & { page?: number } };
+const RecordReturnContext = React.createContext<RecordReturn>({ tab: "records", filter: { categories: [], statuses: [] } });
 export const RecordReturnProvider = RecordReturnContext.Provider;
 
 export function ReturnFields() {
-  const filter = React.useContext(RecordReturnContext);
+  const { tab, filter } = React.useContext(RecordReturnContext);
   return (
     <>
-      <input type="hidden" name="returnTab" value="records" />
+      <input type="hidden" name="returnTab" value={tab} />
       {filter.categories.map((category) => (
         <input key={`c-${category}`} type="hidden" name="returnCategory" value={category} />
       ))}
       {filter.statuses.map((status) => (
         <input key={`s-${status}`} type="hidden" name="returnStatus" value={status} />
       ))}
+      {filter.page && filter.page > 1 ? <input type="hidden" name="returnPage" value={String(filter.page)} /> : null}
     </>
   );
 }
@@ -467,8 +470,6 @@ export function AddRecordPanel({
       >
         <div className="flex min-w-0 flex-col gap-4">
           <form method="get" action={`/life-admin#${ADD_ANCHOR}`} className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
-            <input type="hidden" name="view" value="life" />
-            <input type="hidden" name="tab" value="records" />
             <SelectField label="What are you adding?" id={pickerId} name="add" defaultValue={type?.id ?? ""} required width="text">
               <option value="" disabled>
                 Choose a type
@@ -532,7 +533,7 @@ function AddForm({
       </PendingFormFields>
       <div className="flex flex-wrap items-center gap-2">
         <FormSubmit variant="primary" pendingLabel="Adding…">Add to Life admin</FormSubmit>
-        <ButtonLink variant="ghost" href={`/life-admin?view=life&tab=records#${ADD_ANCHOR}`}>
+        <ButtonLink variant="ghost" href={`/life-admin#${ADD_ANCHOR}`}>
           Cancel
         </ButtonLink>
       </div>

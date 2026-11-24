@@ -67,9 +67,10 @@ redirects to those flows.
     between agents, and export.
   - **Life admin** (its own section, in the controls layout with a static example of the
     Records list): filled in by the person's own agent from email, active first with
-    reminders, a log any agent can continue, and the moving checklist. The scope note says
-    Warthog doesn't read email itself. The example uses made-up items, says "Example", and
-    has no controls or links.
+    reminders, and a log any agent can continue. The scope note says Warthog doesn't read
+    email itself. The example uses made-up items, says "Example", and has no controls or
+    links. The moving checklist was removed at the founder's request (23 Nov 2026), so the
+    page never promises one.
   - **A phone question** in Using Warthog: install from the browser, notifications, and an
     email if one isn't opened. Text-message fallback is switched off in production, so the
     page never mentions it.

@@ -135,8 +135,10 @@ list.
 - **Shown to other agents as data.** Agents see these labels quoted as data.
 
 **Everything goes through the person's catalogue.** `./catalogue.ts` merges the built-ins with the
-person's own categories, and every reader goes through it: validation, the page, the skill, import,
-the moving checklist. Nothing looks a kind up statically.
+person's own categories, and every reader goes through it: validation, the page, the skill and
+import. Nothing looks a kind up statically. (The moving checklist, which also read it to find the
+kinds that hold the person's address, was removed at the founder's request on 23 Nov 2026, along
+with that "holds the address" flag.)
 
 **How types are stored.** Every kind beyond the original three is stored under the plaintext kind
 `item`, with its kind encrypted in `meta`, so no plaintext column says what someone has. A
@@ -248,6 +250,93 @@ name, filters by category and by status (both multiple-choice), and what's activ
   schema's removed `type` and `source` fields; it needs the waiting change to carry the new kind.
 - **Fill in the rest** offers up to six empty built-in categories the person hasn't said are not
   for them, with "Not for me" only, and the prompt to copy.
+
+## Four tabs, account details and plain reminders (amended 23 November 2026, later)
+
+The founder looked again and asked for Life admin to be easier to make sense of:
+
+- **Tabs.** "Can we remove 'Records (20) Upcoming (2) Bookings (0) Moving checklist (0)' and instead
+  just have 'Records' and 'Upcoming' and 'History' and 'Tasks'."
+- **Bookings.** "Bookings should be folded into Upcoming."
+- **What each tab is for.** Records is "a list of all current services, applications, things that
+  are just active and ongoing in my life". Upcoming is "attention and actions some records expect of
+  me". History holds "events that have passed", kept "strictly separate as they are more a log".
+- **The moving checklist.** "Please remove it completely."
+- **Data.** "What is my account name, what is my account number, what email address is it
+  associated with … meaningful data should be carried over and stored."
+- **Reminders.** "What is 'Remind me (days before)'? Remind me for what?"
+
+**One row of tabs: Records | Upcoming | History | Tasks** (`?tab=records|upcoming|history|tasks`;
+Records has no parameter). There are no counts in the names, and no "Records & reminders" level
+above them. Where each record lives is one rule, `sectionOf` in
+`src/components/life-admin/record-groups.ts`, worked out from the phase and never stored:
+
+- **History:** anything finished, of every kind: a past or cancelled booking, something ended or
+  cancelled, a resolved case.
+- **Upcoming:** a live booking, or a trip (the anchor bookings belong to).
+- **Records:** everything else, which is accounts, policies, memberships, documents, the things
+  other records belong to, and matters in progress.
+
+Records' Status filter offers Active and On hold only. Its status line says how many finished
+things are in History, with a link. History has its own multiple-choice Category and Status
+(Finished, Cancelled) filters (`?history_category=…&history_status=…&history_page=…`). It lists
+newest first, by the month each thing happened (its start, else its date, else when it was bought
+or opened; the undated last), 30 to a page. Each row is the same row as on Records, and an action on
+it comes back to History. Upcoming keeps happening now, overdue, this week and later (60 days), then
+adds every other live booking: further ahead, and those with no date yet. A renewal coming up shows
+on both Records and Upcoming. To check stays at the top of Records for every suggestion, whichever
+tab the record will live on.
+
+**Older addresses are redirected, after sign-in** (`currentLifeAdminHref` in
+`life-admin/form-inputs.ts`), keeping the rest of their query:
+
+- `?view=tasks` goes to Tasks.
+- `?view=life&tab=bookings` goes to Upcoming. The Bookings tab's own `for_whom`, `state` and `page`
+  filters are dropped.
+- The checklist and the older tab names go to Records.
+
+Reminder notifications keep their `?view=life&tab=renewals#record-…` links, because installed
+service workers only let those through. The fragment survives the redirect. A `#record-` that isn't
+a row on the tab shown (a booking, something finished) opens the item's page.
+
+**The moving checklist is gone:**
+
+- The tab, the builder, the store and their tests are removed.
+- Migration 0121 drops `moving_checklist`. Its items were worked out from addresses and records, so
+  nothing the person wrote is lost.
+- The catalogue's `holdsAddress` flag is removed, and so is the landing card.
+- An address's moving date stays in About you, and agents still get the upcoming address until the
+  day.
+
+**Account details.** Kinds the person holds an account, policy or membership with are marked
+`account` (31 built-in kinds; a person's own standing kind can take `account: true`). Each gets two
+fields beside its number, `ACCOUNT_FIELDS` in `record-types.ts`:
+
+- `account_name`: the name the account is in, as the provider shows it.
+- `account_email`: the email address it's registered to. This is the person's own address only;
+  someone else's is their personal detail.
+
+Their fields lead in that order: name, provider, account name, number, account email. The number
+stays `reference`, named by the kind ("Member number", "Policy number", "Account number"). Things,
+ID documents, bookings, cases, government records, scripts and receipts aren't accounts. A bank
+account or card still keeps only its last 4 digits.
+
+The skill gains "What to carry over":
+
+- these three details, then the plan, cost and cycle, and the date;
+- only what someone needs to act later;
+- no balances, transactions or marketing;
+- notes in the agent's own words;
+- `update_record` with `set` to fill them in on records saved without them.
+
+The skill's size guard moved from 32,000 to 33,000 characters, after trimming its repeated field
+lists.
+
+**Reminders say what they're for.** A record with no date shows nothing about reminders. One with a
+date says when, against the date ("Reminds you 14 days and 1 day before · Expires 14 Dec 2026"). A
+"Change reminders" choice of days sits under that line: 30, 14, 7 and 1 days before, on the day, and
+any other day the record already has. Unticking them all turns reminders off. The typed "days
+before" list is gone, and a form left open with it still saves.
 
 ## Agents
 

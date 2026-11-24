@@ -1,7 +1,7 @@
-// Review fix G10 — the Life admin section switcher is a real tab list (now four tabs: Records,
-// Upcoming, Bookings and the Moving checklist, docs/adr/life-admin-profile.md).
+// Review fix G10 — the Life admin section switcher is a real tab list (now one row of four tabs:
+// Records, Upcoming, History and Tasks, no counts in their names; docs/adr/life-admin-profile.md).
 //
-// The four section buttons carried aria-selected on plain role=button elements (which
+// The section buttons carried aria-selected on plain role=button elements (which
 // assistive technology does not announce), with no tablist/tabpanel relationship, and the
 // selected one was told apart only by a 1.05:1 fill change. They are now role=tab inside
 // a labelled role=tablist, controlling a role=tabpanel labelled by the selected tab, with
@@ -16,8 +16,9 @@ import { readFileSync } from "node:fs";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
-function render(initialTab?: "records" | "upcoming" | "bookings" | "checklist"): string {
-  return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} checklist={[]} initialTab={initialTab} />);
+// Tasks is a tab when the page passes its content (LifeAdminScreen does).
+function render(initialTab?: "records" | "upcoming" | "history" | "tasks"): string {
+  return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} initialTab={initialTab} tasks={<p>No tasks yet.</p>} />);
 }
 
 function attr(attrs: string, name: string): string | null {
@@ -25,7 +26,7 @@ function attr(attrs: string, name: string): string | null {
 }
 
 test("the section buttons are tabs in a labelled tablist, exactly one selected, controlling a labelled tabpanel", () => {
-  const markup = render("checklist");
+  const markup = render("tasks");
   const tablist = /<div\b([^>]*role="tablist"[^>]*)>/.exec(markup);
   assert.ok(tablist, "a tablist is rendered");
   assert.ok(attr(tablist![1]!, "aria-label"), "the tablist is labelled");
@@ -41,13 +42,13 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Records (0)", "Upcoming (0)", "Bookings (0)", "Moving checklist (0)"],
+    ["Records", "Upcoming", "History", "Tasks"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
   );
   assert.equal(selected.length, 1);
-  assert.equal(selected[0]!.text, "Moving checklist (0)");
+  assert.equal(selected[0]!.text, "Tasks");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
     3,
@@ -93,7 +94,7 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
 });
 
 test("every panel stays mounted with only the selected panel visible; Records opens by default", () => {
-  for (const [initialTab, shownIndex] of [[undefined, 0], ["records", 0], ["upcoming", 1], ["bookings", 2], ["checklist", 3]] as const) {
+  for (const [initialTab, shownIndex] of [[undefined, 0], ["records", 0], ["upcoming", 1], ["history", 2], ["tasks", 3]] as const) {
     const panels = [
       ...render(initialTab).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
     ].map((match) => match[1]!);

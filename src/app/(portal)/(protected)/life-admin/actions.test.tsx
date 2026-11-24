@@ -26,42 +26,35 @@
 // mutation CHANGES in the database; what each one REFUSES) against an isolated in-memory
 // PGlite with the REAL migrations (src/test/db) and the REAL already-built seams the
 // actions compose — the life-admin records store (`db/life-admin-records`, E14-S08), the
-// tasks store (`db/tasks`, E14-S04/07), the moving-checklist store (`db/moving-checklist`,
-// E14-S05), the encrypted receipt-file store (`storage/receipt-files`, E14-S03), the
-// moving-checklist builder (`moving/checklist`, E14-S06), the agents store (`db/agents`)
-// and the two render-tested views. No test asserts on the source text of any module, so a
+// tasks store (`db/tasks`, E14-S04/07), the encrypted receipt-file store
+// (`storage/receipt-files`, E14-S03), the agents store (`db/agents`) and the two
+// render-tested views. No test asserts on the source text of any module, so a
 // later behaviour-preserving refactor (a rename, a moved import) stays green.
 //
-// WHY this exists (task E14-S13; brief "Life admin" / "Tasks and hand-offs" /
-// "Moving-house helper"; design §4.1; CLAUDE.md). The Life Admin triad reads the person's
-// records, moving checklist and tasks server-side and mounts the record, checklist and
-// task controls; this is where a receipt file is attached (encrypted on the server), the
-// moving checklist is (re)built, and a checklist item is handed to an agent as a task.
+// WHY this exists (task E14-S13; brief "Life admin" / "Tasks and hand-offs"; design §4.1;
+// CLAUDE.md). Life Admin reads the person's records and tasks server-side and mounts the
+// record and task controls; this is where a receipt file is attached (encrypted on the
+// server).
 //
 // ─── The contract this task defines (the builder implements exactly this) ───────────
 //
 //   createLifeAdminActions(deps: {
 //     db: Db;                 // the parameterizing database seam
 //     keyWrapper: KeyWrapper; // unwraps the session person's own DEK (users.wrapped_dek)
-//     clock: Clock;           // supplies `now` to the moving-checklist builder (never SQL now())
+//     clock: Clock;           // supplies `now` (never SQL now())
 //     blob: BlobStore;        // the private blob seam the receipt-file store puts ciphertext into
 //   }): {
-//     // ALL of the session person's records (grouped by kind, fields DECRYPTED), moving
-//     // checklist items and tasks (titles/notes decrypted, assignee + note authors resolved
-//     // to agent display names), plus the person's agents — shaped into the props
-//     // <LifeAdminView/> and <TasksView/> are mounted over. Member-scoped by session.userId.
-//     load(session): Promise<{ subscriptions; receipts; renewals; checklist; tasks; agents }>
+//     // ALL of the session person's records (grouped by kind, fields DECRYPTED) and tasks
+//     // (titles/notes decrypted, assignee + note authors resolved to agent display names),
+//     // plus the person's agents — shaped into the props <LifeAdminView/> and <TasksView/>
+//     // are mounted over. Member-scoped by session.userId.
+//     load(session): Promise<{ subscriptions; receipts; renewals; tasks; agents }>
 //
 //     // records
 //     saveRecord(session, { kind; fields; dueDate?; status?; reminderOffsets? }): Promise<Result>
 //     updateRecord(session, { id; fields; dueDate?; status?; reminderOffsets? }): Promise<Result>
 //     attachReceiptFile(session, { recordId; file }): Promise<Result>  // DUCK-TYPES the upload
 //     setRecordReminders(session, { id; reminderOffsets }): Promise<Result>
-//
-//     // moving checklist
-//     toggleChecklistItem(session, { id }): Promise<Result>
-//     handChecklistItemToAgent(session, { id; agentId? }): Promise<Result>  // creates+links a task
-//     refreshMovingChecklist(session): Promise<Result>
 //
 //     // tasks
 //     createTask(session, { title; assignee? }): Promise<Result>
@@ -74,13 +67,11 @@
 //   Result = { ok: true } | { ok: false; reason: string }   // never a silent success
 //
 //   • every read/write is member-scoped by session.userId (the project rule + INV-102):
-//     another person's records / tasks / checklist are never read, changed or removed by id.
+//     another person's records / tasks are never read, changed or removed by id.
 //   • attachReceiptFile DUCK-TYPES the upload (`typeof name === "string" && typeof size ===
 //     "number"`, NEVER `instanceof File` — OBS-052: instanceof fails across server realms)
 //     and stores ONLY DEK-encrypted ciphertext via the receipt-file store (the plaintext
 //     bytes never land in the blob).
-//   • handChecklistItemToAgent creates a task (assigned to the named own agent, or 'any')
-//     and LINKS it to the item (the item's linkedTaskId points at the new task).
 //   • input is validated at the boundary (zod → a 4xx HttpError) BEFORE anything is written,
 //     so malformed / oversized input writes nothing (INV-102). A malformed id is rejected
 //     as a 4xx BEFORE it can reach `WHERE id = $1` as a cast (OBS-049). Every value reaches
@@ -90,10 +81,9 @@
 //     and blob are INJECTED seams, so no ambient env value lands in any output.
 //
 // ─── NOTE on the acceptance-criterion wording vs. this codebase ──────────────────────
-// AC says "a record, task or checklist id that is not a positive INTEGER is rejected with
-// a 4xx". That phrasing is generic obligation boilerplate (serial catalogue ids); in
-// Warthog these ids are `uuid`s (life_admin_records / tasks / moving_checklist all
-// `gen_random_uuid()`), and the sibling stores/actions validate ids with `z.uuid()`. The
+// AC says "a record or task id that is not a positive INTEGER is rejected with a 4xx".
+// That phrasing is generic obligation boilerplate (serial catalogue ids); in Warthog these
+// ids are `uuid`s (life_admin_records / tasks both `gen_random_uuid()`), and the sibling stores/actions validate ids with `z.uuid()`. The
 // obligation is OBS-049 / validate-and-parameterize-input: a MALFORMED id is rejected at
 // the boundary with a 4xx before it can reach `WHERE id = $1` as a cast. We honour it
 // using the ACTUAL id shape — and the malformed probes below include a bare integer, a
@@ -101,13 +91,12 @@
 // true as a special case of "not a well-formed uuid is rejected".
 //
 // ─── Acceptance criteria → tests ────────────────────────────────────────────────────
-//   AC1  the loader reads ONLY the session user's records/checklist/tasks and mounts
+//   AC1  the loader reads ONLY the session user's records/tasks and mounts
 //        LifeAdminView + TasksView over them, with every action wired.
 //   AC2  attachReceiptFile duck-types the upload (never instanceof File) and stores only
-//        DEK-encrypted ciphertext; handChecklistItemToAgent creates a task assigned to
-//        that agent and links it to the item.
+//        DEK-encrypted ciphertext.
 //   AC3  a non-positive-integer (malformed) id is a 4xx (not a raw cast), and a signed-in
-//        user cannot read or change another user's records/tasks/checklist by id.
+//        user cannot read or change another user's records/tasks by id.
 //   AC4  a handler rejects malformed / oversized input with a 4xx, and a SQL-injection
 //        probe in an input field cannot alter a query.  [validate-and-parameterize-input]
 //   AC5  no secret value lands in source / client bundle / build context; config from env.
@@ -141,13 +130,7 @@ import {
   addNote as seedNote,
   listTasksForUser,
 } from "@/server/db/tasks";
-import {
-  addOwnItem as seedChecklistItem,
-  listForUser as listChecklist,
-} from "@/server/db/moving-checklist";
-import { saveIdentityField } from "@/server/db/identity-fields";
 import { savePreferences } from "@/server/db/preferences";
-import { createConnection } from "@/server/db/connections";
 import { getReceiptFile } from "@/server/storage/receipt-files";
 import { createInMemoryBlobStore, type BlobStore } from "@/server/storage/blob";
 import { HttpError } from "@/server/http/validate";
@@ -162,10 +145,8 @@ import type { Session } from "@/server/auth/session";
 const DEK_BYTES = 32; // a 256-bit per-person data key
 const KEK_BYTES = 32; // a 256-bit key-encryption key for the local AES wrapper
 
-// A frozen "now" for the moving-checklist resolution; the move date below is AFTER it, so
-// a move set up with MOVE_DATE is unambiguously still ahead (now < movingDate).
+// A frozen "now" for the actions' injected clock.
 const NOW = new Date("2026-11-07T00:00:00.000Z");
-const MOVE_DATE = "2027-03-01";
 
 // A real local KeyWrapper (dev/test), exactly the one a non-production composition root
 // selects — so wrap/unwrap is genuine, not a stub.
@@ -220,7 +201,7 @@ function sessionFor(userId: string): Session {
 
 // Build the life-admin actions under test with the real db + keyWrapper + clock + blob
 // seams. The blob defaults to a FRESH in-memory store (so the attach test can inspect the
-// stored ciphertext); the clock is frozen at NOW for the moving-checklist builder.
+// stored ciphertext); the clock is frozen at NOW.
 function makeActions(
   db: Db,
   keyWrapper: KeyWrapper,
@@ -327,36 +308,19 @@ async function assertRejected(label: string, fn: () => Promise<ActionResult>): P
   );
 }
 
-// Set up a move for `userId`: a settled postal address (no moving-on date) and an upcoming
-// one carrying MOVE_DATE — the "new address with a moving date" the brief describes. Seeded
-// under the SAME dek the actions will unwrap, so the builder can decrypt and resolve it.
-async function setUpMove(db: Db, userId: string, dek: Uint8Array): Promise<void> {
-  await saveIdentityField(
-    db,
-    { userId, kind: "postal_address", value: JSON.stringify({ line1: "12 Old St" }), movingOn: null },
-    dek,
-  );
-  await saveIdentityField(
-    db,
-    { userId, kind: "postal_address", value: JSON.stringify({ line1: "99 New Rd" }), movingOn: MOVE_DATE },
-    dek,
-  );
-}
-
 // =====================================================================================
-// AC1 — the loader reads ONLY the session user's records/checklist/tasks and mounts
+// AC1 — the loader reads ONLY the session user's records/tasks and mounts
 // LifeAdminView + TasksView over them.
 // =====================================================================================
 
-test("the loader returns the session user's records, checklist and tasks and mounts both views", async () => {
+test("the loader returns the session user's records and tasks and mounts both views", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();
   try {
     const { userId, dek } = await makeUserWithDek(db, keyWrapper, "loader-ok");
     const agent = await makeAgent(db, userId, "My Claude");
 
-    // One record per kind (fields DEK-encrypted by the store), a checklist item, and a
-    // task assigned to the person's own agent carrying an agent-authored note.
+    // One record per kind (fields DEK-encrypted by the store) and a task assigned to the person's own agent carrying an agent-authored note.
     await seedRecord(
       db,
       { userId, kind: "subscription", fields: { service: "Netflix" }, dueDate: "2027-01-01", status: "active", source: { kind: "person" } },
@@ -372,7 +336,6 @@ test("the loader returns the session user's records, checklist and tasks and mou
       { userId, kind: "renewal_appointment", fields: { what: "Passport renewal" }, dueDate: "2027-02-01", status: "scheduled", source: { kind: "person" } },
       dek,
     );
-    await seedChecklistItem(db, { userId, label: "Tell the bank" }, dek);
     const task = await seedTask(
       db,
       { userId, title: "Cancel the gym", assignee: agent.agentId, createdBy: { kind: "person" } },
@@ -392,22 +355,15 @@ test("the loader returns the session user's records, checklist and tasks and mou
       `the loader returns the owner's agents; got ${JSON.stringify(data.agents)}`,
     );
 
-    // "mounts LifeAdminView": feeding the loader's records + checklist straight into the
+    // "mounts LifeAdminView": feeding the loader's records straight into the
     // already-render-tested view renders the owner's screen: every kind on Records.
     assert.equal(data.records.length, 3, "every record kind is loaded");
     const thingsText = strip(
-      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={data.checklist} />),
+      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} />),
     );
     for (const value of ["Netflix", "JB Hi-Fi", "Passport renewal"]) {
       assert.ok(thingsText.includes(value), `mounting LifeAdminView renders the owner's ${value}`);
     }
-
-    const checklistText = strip(
-      renderToStaticMarkup(
-        <LifeAdminView today={data.today} records={data.records} checklist={data.checklist} initialTab="checklist" />,
-      ),
-    );
-    assert.ok(checklistText.includes("Tell the bank"), "the owner's checklist item renders on the checklist tab");
 
     // "mounts TasksView": the loader resolves the assignee + note author to the agent's
     // display name, which the view renders as "Assigned to <name>" / "Reported by <name>".
@@ -431,12 +387,11 @@ test("the loader returns empty collections for a person who has saved nothing; t
     const data = await makeActions(db, keyWrapper).load(sessionFor(userId));
 
     assert.deepEqual(data.records, [], "no records");
-    assert.deepEqual(data.checklist, [], "no checklist items");
     assert.deepEqual(data.tasks, [], "no tasks");
 
     // The screens still render (the Add / Create controls, the empty states) with no data.
     const lifeText = strip(
-      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={data.checklist} />),
+      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} />),
     );
     assert.ok(lifeText.length > 0, "the empty Life Admin screen still renders");
     const tasksText = strip(renderToStaticMarkup(<TasksView tasks={data.tasks} agents={data.agents} />));
@@ -609,182 +564,6 @@ test("updateTask changes a task's title, assignee and status together", async ()
 });
 
 // =====================================================================================
-// Moving checklist — toggle, hand-to-agent (creates + links a task), refresh (builds).
-// =====================================================================================
-
-test("toggleChecklistItem flips an owned item's done flag", async () => {
-  const db = await freshDb();
-  const keyWrapper = makeKeyWrapper();
-  try {
-    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "checklist-toggle");
-    const actions = makeActions(db, keyWrapper);
-    const session = sessionFor(userId);
-
-    const item = await seedChecklistItem(db, { userId, label: "Redirect mail" }, dek);
-    assert.equal(item.done, false, "precondition: a fresh item is not done");
-
-    const on = await actions.toggleChecklistItem(session, as<"toggleChecklistItem">({ id: item.id }));
-    assert.equal(okOf(on), true, "toggling succeeds");
-    assert.equal(
-      (await listChecklist(db, userId, dek)).find((i) => i.id === item.id)!.done,
-      true,
-      "the item is now done",
-    );
-
-    const off = await actions.toggleChecklistItem(session, as<"toggleChecklistItem">({ id: item.id }));
-    assert.equal(okOf(off), true, "toggling back succeeds");
-    assert.equal(
-      (await listChecklist(db, userId, dek)).find((i) => i.id === item.id)!.done,
-      false,
-      "the item is not done again",
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-test("handChecklistItemToAgent creates a task assigned to that agent and links it to the item (AC2)", async () => {
-  const db = await freshDb();
-  const keyWrapper = makeKeyWrapper();
-  try {
-    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "hand-own");
-    const agent = await makeAgent(db, userId, "My Claude");
-    const actions = makeActions(db, keyWrapper);
-    const session = sessionFor(userId);
-
-    const item = await seedChecklistItem(db, { userId, label: "Tell the insurer" }, dek);
-
-    const handed = await actions.handChecklistItemToAgent(
-      session,
-      as<"handChecklistItemToAgent">({ id: item.id, agentId: agent.agentId }),
-    );
-    assert.equal(okOf(handed), true, "the hand-off succeeds for the person's own agent");
-
-    // The item is now linked to a task…
-    const linkedItem = (await listChecklist(db, userId, dek)).find((i) => i.id === item.id);
-    assert.ok(linkedItem != null, "the item still exists");
-    assert.ok(linkedItem!.linkedTaskId != null, "the item is now linked to a task");
-
-    // …and that task exists, assigned to THAT agent.
-    const linkedTask = (await listTasksForUser(db, userId, dek)).find((t) => t.id === linkedItem!.linkedTaskId);
-    assert.ok(linkedTask != null, "the linked task exists");
-    assert.equal(linkedTask!.assignee, agent.agentId, "the created task is assigned to that agent");
-  } finally {
-    await db.close();
-  }
-});
-
-test("handChecklistItemToAgent with no named agent hands it to any agent and still links a task (the view's hand-off path)", async () => {
-  const db = await freshDb();
-  const keyWrapper = makeKeyWrapper();
-  try {
-    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "hand-any");
-    const actions = makeActions(db, keyWrapper);
-    const session = sessionFor(userId);
-
-    const item = await seedChecklistItem(db, { userId, label: "Update the council" }, dek);
-
-    const handed = await actions.handChecklistItemToAgent(
-      session,
-      as<"handChecklistItemToAgent">({ id: item.id }),
-    );
-    assert.equal(okOf(handed), true, "the hand-off succeeds with no named agent");
-
-    const linkedItem = (await listChecklist(db, userId, dek)).find((i) => i.id === item.id);
-    assert.ok(linkedItem!.linkedTaskId != null, "the item is linked to a task");
-    const linkedTask = (await listTasksForUser(db, userId, dek)).find((t) => t.id === linkedItem!.linkedTaskId);
-    assert.ok(linkedTask != null, "the linked task exists");
-    assert.equal(linkedTask!.assignee, "any", "with no named agent the task is for any agent");
-  } finally {
-    await db.close();
-  }
-});
-
-test("handChecklistItemToAgent refuses a foreign or nonexistent agent and links nothing", async () => {
-  const db = await freshDb();
-  const keyWrapper = makeKeyWrapper();
-  try {
-    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "hand-foreign");
-    const other = await makeUserWithDek(db, keyWrapper, "hand-other");
-    const othersAgent = await makeAgent(db, other.userId, "Not mine");
-    const actions = makeActions(db, keyWrapper);
-    const session = sessionFor(userId);
-
-    const item = await seedChecklistItem(db, { userId, label: "Tell the vet" }, dek);
-
-    // Another person's real agent id — well-formed, but NOT the session user's.
-    await assertRejected("handChecklistItemToAgent(→ another person's agent)", () =>
-      actions.handChecklistItemToAgent(session, as<"handChecklistItemToAgent">({ id: item.id, agentId: othersAgent.agentId })),
-    );
-    // A syntactically valid uuid that is nobody's agent.
-    await assertRejected("handChecklistItemToAgent(→ nonexistent agent)", () =>
-      actions.handChecklistItemToAgent(session, as<"handChecklistItemToAgent">({ id: item.id, agentId: randomUUID() })),
-    );
-
-    // The item was never linked, and no task was created for the session user.
-    assert.equal(
-      (await listChecklist(db, userId, dek)).find((i) => i.id === item.id)!.linkedTaskId,
-      null,
-      "the item is still unlinked after a refused hand-off",
-    );
-    assert.deepEqual(await listTasksForUser(db, userId, dek), [], "no task was created by a refused hand-off");
-  } finally {
-    await db.close();
-  }
-});
-
-test("refreshMovingChecklist builds a checklist from a move; with no move it seeds nothing", async () => {
-  const db = await freshDb();
-  const keyWrapper = makeKeyWrapper();
-  try {
-    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "refresh-move");
-    const actions = makeActions(db, keyWrapper, { clock: fixedClock(NOW) });
-    const session = sessionFor(userId);
-
-    // A move on file plus a subscription record and a connected service (places that
-    // hold the old address), all under the same dek the actions will unwrap.
-    await setUpMove(db, userId, dek);
-    await seedRecord(
-      db,
-      { userId, kind: "subscription", fields: { name: "Netflix" }, status: "active", source: { kind: "person" } },
-      dek,
-    );
-    await createConnection(
-      db,
-      { userId, connectorId: "gmail", accountLabel: "me@example.com", credentials: { token: "t" } },
-      dek,
-      fixedClock(NOW),
-    );
-
-    const built = await actions.refreshMovingChecklist(session);
-    assert.equal(okOf(built), true, "refreshMovingChecklist succeeds when a move is on file");
-
-    const checklist = await listChecklist(db, userId, dek);
-    assert.ok(checklist.length >= 2, `the move seeded checklist items; got ${checklist.length}`);
-    assert.ok(
-      checklist.some((i) => i.sourceKind === "subscription"),
-      "a subscription on file was seeded as a checklist item",
-    );
-    assert.ok(
-      checklist.some((i) => i.sourceKind === "connection"),
-      "a connected service was seeded as a checklist item",
-    );
-
-    // A second person with no move set seeds nothing.
-    const noMove = await makeUserWithDek(db, keyWrapper, "refresh-nomove");
-    const built2 = await actions.refreshMovingChecklist(sessionFor(noMove.userId));
-    assert.equal(okOf(built2), true, "refreshMovingChecklist succeeds even with no move");
-    assert.deepEqual(
-      await listChecklist(db, noMove.userId, noMove.dek),
-      [],
-      "with no move on file, nothing is seeded",
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-// =====================================================================================
 // AC2 — attachReceiptFile duck-types the upload (never instanceof File) and stores ONLY
 // DEK-encrypted ciphertext.
 // =====================================================================================
@@ -885,10 +664,10 @@ test("attachReceiptFile rejects a non-file / malformed upload with a 4xx and sto
 
 // =====================================================================================
 // AC3 — a malformed id is a 4xx (not a raw cast); a signed-in user cannot read or change
-// another user's records/tasks/checklist by id.
+// another user's records/tasks by id.
 // =====================================================================================
 
-test("a malformed record / task / checklist id is rejected with a 4xx before any query (OBS-049)", async () => {
+test("a malformed record / task id is rejected with a 4xx before any query (OBS-049)", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();
   try {
@@ -908,12 +687,6 @@ test("a malformed record / task / checklist id is rejected with a 4xx before any
       );
       await assertRejects4xx(`setRecordReminders(id=${JSON.stringify(badId)})`, () =>
         actions.setRecordReminders(session, as<"setRecordReminders">({ id: badId, reminderOffsets: [1] })),
-      );
-      await assertRejects4xx(`toggleChecklistItem(id=${JSON.stringify(badId)})`, () =>
-        actions.toggleChecklistItem(session, as<"toggleChecklistItem">({ id: badId })),
-      );
-      await assertRejects4xx(`handChecklistItemToAgent(id=${JSON.stringify(badId)})`, () =>
-        actions.handChecklistItemToAgent(session, as<"handChecklistItemToAgent">({ id: badId })),
       );
       await assertRejects4xx(`updateTask(id=${JSON.stringify(badId)})`, () =>
         actions.updateTask(session, as<"updateTask">({ id: badId, title: "x", assignee: "any", status: "open" })),
@@ -935,13 +708,12 @@ test("a malformed record / task / checklist id is rejected with a 4xx before any
     // The tables are intact — no SQL-shaped id was ever executed.
     assert.equal(await tableExists(db, "tasks"), true, "the tasks table survives a SQL-shaped id");
     assert.equal(await tableExists(db, "life_admin_records"), true, "the records table survives");
-    assert.equal(await tableExists(db, "moving_checklist"), true, "the checklist table survives");
   } finally {
     await db.close();
   }
 });
 
-test("the loader reads ONLY the session user's data — another person's records / tasks / checklist never appear", async () => {
+test("the loader reads ONLY the session user's data — another person's records / tasks never appear", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();
   try {
@@ -955,7 +727,6 @@ test("the loader reads ONLY the session user's data — another person's records
       alice.dek,
     );
     await seedTask(db, { userId: alice.userId, title: "Alice only task", assignee: "any", createdBy: { kind: "person" } }, alice.dek);
-    await seedChecklistItem(db, { userId: alice.userId, label: "Alice only checklist" }, alice.dek);
 
     await seedRecord(
       db,
@@ -969,13 +740,12 @@ test("the loader reads ONLY the session user's data — another person's records
     assert.ok(whole.includes("Bob own subscription"), "Bob sees his own record");
     assert.ok(!whole.includes("Alice only subscription"), "Alice's record never appears on Bob's screen");
     assert.ok(!whole.includes("Alice only task"), "Alice's task never appears on Bob's screen");
-    assert.ok(!whole.includes("Alice only checklist"), "Alice's checklist never appears on Bob's screen");
   } finally {
     await db.close();
   }
 });
 
-test("a signed-in user cannot change another person's record, task or checklist by id — they are untouched and nothing is created", async () => {
+test("a signed-in user cannot change another person's record or task by id — they are untouched and nothing is created", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();
   try {
@@ -994,7 +764,6 @@ test("a signed-in user cannot change another person's record, task or checklist 
       { userId: alice.userId, title: "Alice secret task", assignee: "any", createdBy: { kind: "person" } },
       alice.dek,
     );
-    const alicesItem = await seedChecklistItem(db, { userId: alice.userId, label: "Alice secret item" }, alice.dek);
 
     // Bob, holding Alice's real ids, tries every mutation. Each is refused (member-scoped
     // by Bob's session id) — never an uncontrolled 500.
@@ -1019,12 +788,6 @@ test("a signed-in user cannot change another person's record, task or checklist 
     await assertRejected("completeTask(bob → alice's task)", () =>
       actions.completeTask(bobSession, as<"completeTask">({ id: alicesTask.id })),
     );
-    await assertRejected("toggleChecklistItem(bob → alice's item)", () =>
-      actions.toggleChecklistItem(bobSession, as<"toggleChecklistItem">({ id: alicesItem.id })),
-    );
-    await assertRejected("handChecklistItemToAgent(bob → alice's item)", () =>
-      actions.handChecklistItemToAgent(bobSession, as<"handChecklistItemToAgent">({ id: alicesItem.id })),
-    );
 
     // Alice's data is unchanged.
     const alicesRecordAfter = (await listRecordsForUser(db, alice.userId, alice.dek)).find((r) => r.id === alicesRecord.id);
@@ -1032,14 +795,11 @@ test("a signed-in user cannot change another person's record, task or checklist 
     const alicesTaskAfter = (await listTasksForUser(db, alice.userId, alice.dek)).find((t) => t.id === alicesTask.id);
     assert.equal(alicesTaskAfter!.title, "Alice secret task", "Alice's task title is unchanged");
     assert.equal(alicesTaskAfter!.status, "open", "Alice's task was not completed by Bob");
-    const alicesItemAfter = (await listChecklist(db, alice.userId, alice.dek)).find((i) => i.id === alicesItem.id);
-    assert.equal(alicesItemAfter!.done, false, "Alice's checklist item was not ticked off by Bob");
-    assert.equal(alicesItemAfter!.linkedTaskId, null, "Alice's checklist item was not handed off by Bob");
 
     // Bob gained nothing from the borrowed ids: no receipt file, no task.
     const bobFiles = await db.query("SELECT id FROM receipt_files WHERE user_id = $1", [bob.userId]);
     assert.equal(bobFiles.rows.length, 0, "Bob's refused attach created no receipt file");
-    assert.deepEqual(await listTasksForUser(db, bob.userId, bob.dek), [], "Bob's refused hand-off created no task for him");
+    assert.deepEqual(await listTasksForUser(db, bob.userId, bob.dek), [], "Bob's refused changes created no task for him");
   } finally {
     await db.close();
   }
