@@ -43,9 +43,14 @@ export function createResetExecutor(db: Db): ResetExecutor {
     // salted the lost passkeys) and the recovery verifier (of the lost code) — so the
     // person's first protected save after the reset sets up a wholly fresh vault (new
     // vault key, new salt, new recovery phrase) with nothing stale left behind.
+    //
+    // The person's card-only billing addresses go with their cards: one exists only while a
+    // card uses it (docs/adr/card-billing-addresses.md). They are deleted after the cards, in
+    // the same transaction; About you postal addresses are identity fields and are kept.
     async eraseVaultData(userId: string, outer?: Db): Promise<void> {
       await inTransaction(outer, async (tx) => {
         await tx.query("DELETE FROM cards WHERE user_id = $1", [userId]);
+        await tx.query("DELETE FROM card_billing_addresses WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM high_tier_fields WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_unlock_methods WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_passkey_envelopes WHERE user_id = $1", [userId]);

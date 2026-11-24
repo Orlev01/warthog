@@ -28,6 +28,7 @@ import type { Clock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
 import { exportProtectedVault } from "@/server/export/protected";
 import { listIdentityFields } from "@/server/db/identity-fields";
+import { listCardBillingAddresses } from "@/server/db/card-billing-addresses";
 import { getUserById } from "@/server/db/users";
 import { createDataActions } from "../actions";
 
@@ -102,9 +103,20 @@ export function createExportHandler(deps: ExportHandlerDeps): (request: Request)
       const user = await getUserById(db, session.userId);
       if (!user) return failure(401, "unauthenticated");
       const dek = await keyWrapper.unwrap(user.wrappedDek);
-      let fields;
-      try { fields = await listIdentityFields(db, session.userId, dek); } finally { dek.fill(0); }
-      const document = { ...outcome.document, profile: { ...outcome.document.profile, fields: fields.map(({ id, kind, value, movingOn }) => ({ id, kind, value, movingOn })) } };
+      // The device export carries each field's id, and each card-only billing address with its
+      // id (docs/adr/card-billing-addresses.md), so the cards' billing references can be re-linked
+      // when the file is imported.
+      let fields, billing;
+      try {
+        fields = await listIdentityFields(db, session.userId, dek);
+        billing = await listCardBillingAddresses(db, session.userId, dek);
+      } finally { dek.fill(0); }
+      const { cardBillingAddresses: _valuesOnly, ...profile } = outcome.document.profile;
+      const document = { ...outcome.document, profile: {
+        ...profile,
+        fields: fields.map(({ id, kind, value, movingOn }) => ({ id, kind, value, movingOn })),
+        ...(billing.length ? { cardBillingAddresses: billing.map(({ id, value }) => ({ id, value })) } : {}),
+      } };
       return Response.json({ document, protectedVault: await exportProtectedVault(db, session.userId) }, { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
     }
 

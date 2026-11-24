@@ -661,7 +661,7 @@ The phases follow the requested priority: information architecture → navigatio
 
 | Order | Page | Issues | Effort | Depends on |
 |---|---|---|---|---|
-| 1 | **Inbox and request review**: row anatomy, review screen, release reorder, `returnTo` detours, inline billing address, named notices, focus-target | W-06, W-07, W-14 (Inbox) | L | `focus-target`, `DescriptionList` (build them just in time) |
+| 1 | **Inbox and request review**: row anatomy, review screen, release reorder, `returnTo` detours, inline card-only billing address (done; never saved to About you), named notices, focus-target | W-06, W-07, W-14 (Inbox) | L | `focus-target`, `DescriptionList` (build them just in time) |
 | 2 | **Home**: Needs you, conversations, Coming up, compact set-up | W-05, W-30 | M | Activity run grouping (server) |
 | 3 | **Agent page**: Overview / Access / Limits / Activity, Disconnect, one Save; redirect old `?section=` links | W-08, W-28 | L | `use-dirty-form` (phase 0), `Switch`, `SegmentedControl`, `ConfirmDialog` |
 | 4 | **Spending as the money hub**; remove Rules › Budgets; card access in Limits; Vault › Cards agent list | W-09 | M | Agent › Limits |

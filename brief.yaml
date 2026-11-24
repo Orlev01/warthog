@@ -317,7 +317,12 @@ features:
     Saved cards — add one or more cards (cardholder name, number, expiry, a nickname, a billing
     address from the vault); the security code is never stored; the interface only ever shows the
     brand and last four digits; cards are protected by the device-held protection above; remove a
-    card at any time.
+    card at any time. (Amended 24 November 2026: a card's billing address is either one of the
+    person's postal addresses from About you or one they type for their cards only. A card-only
+    billing address is kept encrypted with their cards, is never added to About you and is never
+    shared with agents as an everyday detail; like the rest of the card, an agent receives it only
+    in a card release the person approves. The person can see and change each card's billing
+    address. See docs/adr/card-billing-addresses.md.)
   - >-
     Card requests — an agent requests a card for a specific purchase; Warthog first checks the
     person's rules in code (agent has card access, per-purchase limit, the agent's budget for the

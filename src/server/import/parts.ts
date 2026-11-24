@@ -7,7 +7,7 @@ import { withTransaction, type Db } from "../db/index";
 import { encrypt, decrypt } from "../crypto/envelope";
 import { HttpError } from "../http/validate";
 import type { Clock } from "../seams/clock";
-import { importExportDocument } from "./import";
+import { importExportDocument, newTransferContext } from "./import";
 import { createRedactingRecorder } from "../mcp/recorder";
 
 export const preparedImportSchema = z.strictObject({
@@ -52,7 +52,8 @@ export async function importParts(db: Db, userId: string, input: z.infer<typeof 
     }
     const count = Number((await tx.query("SELECT count(*) AS n FROM data_import_parts WHERE user_id = $1 AND import_id = $2", [userId, input.id])).rows[0]!.n);
     if (count !== Number(row.part_count)) throw new HttpError(409, "Import has missing parts");
-    const transferContext = { importedAddresses: new Map<string, string>() };
+    // Kept across the parts: a card in a later part is re-linked to a billing address in part 0.
+    const transferContext = newTransferContext();
     for (let seq = 0; seq < count; seq++) {
       const part = (await tx.query("SELECT content_ct FROM data_import_parts WHERE user_id = $1 AND import_id = $2 AND seq = $3", [userId, input.id, seq])).rows[0]!;
       const content = await decrypt(dek, "data_import_parts", "content_ct", `${userId}:${input.id}:${seq}`, String(part.content_ct));

@@ -38,7 +38,10 @@ export interface PlaintextCard {
   expiryMonth?: number;
   expiryYear?: number;
   cardholderName?: string | null;
+  // The billing address: a postal identity field id OR a card-only address id
+  // (docs/adr/card-billing-addresses.md), never both; neither means none yet.
   billingAddressId?: string;
+  billingEntryId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -62,6 +65,7 @@ export interface SealedCard {
   expiryYear?: number;
   cardholderName?: string | null;
   billingAddressId?: string;
+  billingEntryId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -146,6 +150,7 @@ export async function reprotectDeviceProtected(
       ...(card.expiryYear !== undefined ? { expiryYear: card.expiryYear } : {}),
       ...(card.cardholderName !== undefined ? { cardholderName: card.cardholderName } : {}),
       ...(card.billingAddressId !== undefined ? { billingAddressId: card.billingAddressId } : {}),
+      ...(card.billingEntryId !== undefined ? { billingEntryId: card.billingEntryId } : {}),
       numberCiphertext: await encryptValue(vaultKey, card.number),
     });
   }

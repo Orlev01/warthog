@@ -9,6 +9,9 @@ import { saveWrappedKey } from "../db/vault-unlock-methods";
 import { encryptValue, decryptValue } from "../../client/vault/values";
 import { importParts } from "./parts";
 import { buildExportDocument } from "../export/build";
+import { listCards } from "../db/cards";
+import { listCardBillingAddresses } from "../db/card-billing-addresses";
+import { listIdentityFields } from "../db/identity-fields";
 
 const clock = fixedClock(new Date("2026-11-12T00:00:00Z"));
 test("an export above 16 MiB restores packages atomically in bounded parts and commit retries are idempotent", async () => {
@@ -64,6 +67,36 @@ test("protected chunks keep remapped card addresses and a second export retains 
   const exported=await buildExportDocument(db,user.id,dek,clock);
   assert.equal(exported.importedActivity?.length,1);assert.match(JSON.stringify(exported.importedActivity),/Investigate synthetic event/);
   assert.equal(exported.activity.length,1,"only the import lifecycle event belongs to this account's live chain");
+ } finally {await db.close();}
+});
+
+// docs/adr/card-billing-addresses.md: card-only billing addresses travel with the profile (part
+// 0) while the cards come in later protected parts, so the import keeps them across parts.
+test("a card-only billing address in the first part is linked to its cards in later parts", async () => {
+ const db=await freshDb();
+ try {
+  const dek=randomBytes(32),key=new Uint8Array(randomBytes(32)),user=await createUser(db,{email:"billing-parts@example.test",wrappedDek:"test"});
+  for (const method of ["passphrase","recovery"] as const) await saveWrappedKey(db,{userId:user.id,method,wrappedKey:"synthetic-key-envelope"});
+  const doc=emptyTransferDocument(clock.now().toISOString());
+  doc.profile={fields:[{id:"old-address",kind:"postal_address",value:"Synthetic home"}],cardBillingAddresses:[{id:"old-billing",value:"Synthetic card-only address"}]};
+  const ciphertext=await encryptValue(key,"Protected-value".padEnd(50_000,"x")),number=await encryptValue(key,"4111111111111111");
+  const card={brand:"Test",lastFour:"1111",expiryMonth:12,expiryYear:2030,numberCiphertext:number};
+  const protectedVault={highTierFields:Array.from({length:100},(_,i)=>({type:"custom" as const,label:`Field ${i}`,ciphertext})),cards:[
+   {...card,nickname:"Card-only A",billingEntryId:"old-billing"},{...card,nickname:"Card-only B",billingEntryId:"old-billing"},{...card,nickname:"Postal",billingAddressId:"old-address"}]};
+  const parts=[...splitPreparedTransfer(doc,protectedVault)];
+  assert.ok(parts.length>2);
+  assert.equal(parts[0]!.protectedVault,undefined,"the cards are not in the profile's part");
+  const id=(await importParts(db,user.id,{operation:"begin",partCount:parts.length},dek,clock)).id!;
+  for(let seq=0;seq<parts.length;seq++) await importParts(db,user.id,{operation:"part",id,seq,part:parts[seq]!},dek,clock);
+  await importParts(db,user.id,{operation:"commit",id},dek,clock);
+  const billing=await listCardBillingAddresses(db,user.id,dek);
+  assert.deepEqual(billing.map(b=>b.value),["Synthetic card-only address"],"one card-only address, however many cards share it");
+  const cards=new Map((await listCards(db,user.id)).map(c=>[c.nickname,c]));
+  assert.equal(cards.get("Card-only A")!.billingEntryId,billing[0]!.id);
+  assert.equal(cards.get("Card-only B")!.billingEntryId,billing[0]!.id);
+  const [home]=await listIdentityFields(db,user.id,dek);
+  assert.equal(cards.get("Postal")!.billingAddressId,home!.id);
+  assert.deepEqual((await listIdentityFields(db,user.id,dek)).map(f=>f.value),["Synthetic home"],"the card-only address is never an identity field");
  } finally {await db.close();}
 });
 

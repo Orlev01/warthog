@@ -6,11 +6,13 @@ import { freshDb } from "../src/test/db";
 import { createUser } from "../src/server/db/users";
 import { saveWrappedKey } from "../src/server/db/vault-unlock-methods";
 import { listIdentityFields } from "../src/server/db/identity-fields";
+import { listCardBillingAddresses } from "../src/server/db/card-billing-addresses";
 import { emptyTransferDocument, splitPreparedTransfer, TRANSFER_REQUEST_BYTES } from "../src/domain/transfer-parts";
 import { importParts } from "../src/server/import/parts";
 import { buildExportDocument } from "../src/server/export/build";
 import { encryptValue } from "../src/client/vault/values";
 import type { ExportDocument } from "../src/server/export/schema";
+import type { SealedVault } from "../src/domain/data-transfer";
 
 const db = await freshDb();
 const clock = { now: () => new Date("2026-11-12T00:00:00Z") };
@@ -22,15 +24,17 @@ try {
   for (const user of [source, destination]) {
     for (const method of ["passphrase", "recovery"] as const) await saveWrappedKey(db, { userId: user.id, method, wrappedKey: "synthetic-envelope" });
   }
-  const protectedVault = {
+  // Half the cards use an About you postal address, half a card-only billing address
+  // (docs/adr/card-billing-addresses.md) that they all share.
+  const protectedVault: SealedVault = {
     highTierFields: Array.from({ length: 1000 }, (_, i) => ({ type: "custom" as const, label: `Synthetic field ${i}`, ciphertext: "" })),
-    cards: Array.from({ length: 1000 }, (_, i) => ({ brand: "Test", lastFour: "1111", nickname: `Synthetic card ${i}`, expiryMonth: 12, expiryYear: 2030, billingAddressId: "source-address", numberCiphertext: "" })),
+    cards: Array.from({ length: 1000 }, (_, i) => ({ brand: "Test", lastFour: "1111", nickname: `Synthetic card ${i}`, expiryMonth: 12, expiryYear: 2030, ...(i % 2 ? { billingEntryId: "source-billing" } : { billingAddressId: "source-address" }), numberCiphertext: "" })),
   };
   const protectedCipher = await encryptValue(key, "synthetic protected value"), cardCipher = await encryptValue(key, "4111111111111111");
   for (const field of protectedVault.highTierFields) field.ciphertext = protectedCipher;
   for (const card of protectedVault.cards) card.numberCiphertext = cardCipher;
   let document: ExportDocument = emptyTransferDocument(clock.now().toISOString());
-  document.profile = { fields: [{ id: "source-address", kind: "postal_address", value: "Synthetic billing address" }] };
+  document.profile = { fields: [{ id: "source-address", kind: "postal_address", value: "Synthetic billing address" }], cardBillingAddresses: [{ id: "source-billing", value: "Synthetic card-only billing address" }] };
   document.skillPackages = Array.from({ length: 100 }, (_, i) => ({ id: randomUUID(), name: `Package ${i}`, files: [
     { path: "SKILL.md", content: `---\nname: Package ${i}\ndescription: Capacity check\n---\nSynthetic instructions` },
     { path: "support.txt", content: "x".repeat(180_000) },
@@ -54,19 +58,28 @@ try {
   // The device-export handler enriches the ordinary export with these owned
   // address references so its opaque card envelopes can be reassigned safely.
   document.profile.fields = (await listIdentityFields(db, source.id, dek)).map(({id,kind,value,movingOn})=>({id,kind,value,movingOn}));
+  document.profile.cardBillingAddresses = (await listCardBillingAddresses(db, source.id, dek)).map(({ id, value }) => ({ id, value }));
   assert.equal(document.skills.length, 1000); assert.equal(document.memory.length, 5000);
   assert.ok(document.skills.some(skill => typeof skill.text === "string" && skill.text.includes("s".repeat(21_000))));
   assert.equal(document.skillPackages?.length, 100); assert.equal(document.importedActivity?.length, 100_000);
   const address = (document.profile.fields as { id: string }[])[0]!;
-  for (const card of protectedVault.cards) card.billingAddressId = address.id;
+  const billing = (document.profile.cardBillingAddresses as { id: string }[]);
+  assert.equal(billing.length, 1, "the source's 500 cards that share a card-only address restored it once");
+  for (const card of protectedVault.cards) {
+    if (card.billingEntryId !== undefined) card.billingEntryId = billing[0]!.id;
+    else card.billingAddressId = address.id;
+  }
   const secondParts = await restore(destination.id, document);
-  for (const [table, expected] of [["skills", 1000], ["skill_packages", 100], ["memories", 5000], ["high_tier_fields", 1000], ["cards", 1000], ["imported_history", 100_001]] as const) {
+  for (const [table, expected] of [["skills", 1000], ["skill_packages", 100], ["memories", 5000], ["high_tier_fields", 1000], ["cards", 1000], ["card_billing_addresses", 1], ["identity_fields", 1], ["imported_history", 100_001]] as const) {
     assert.equal(Number((await db.query(`SELECT count(*) AS n FROM ${table} WHERE user_id=$1`, [destination.id])).rows[0]!.n), expected, table);
   }
   const final = await buildExportDocument(db, destination.id, dek, clock);
   assert.ok(final.skills.some(skill => typeof skill.text === "string" && skill.text.includes("s".repeat(21_000))));
   assert.equal(final.skillPackages?.[0]?.files.find(file => file.path === "support.txt")?.content.length, 180_000);
   assert.ok(final.importedActivity?.some(entry => JSON.stringify(entry.disputes).includes("Synthetic dispute retained")));
-  assert.equal(Number((await db.query("SELECT count(*) AS n FROM cards c JOIN identity_fields f ON f.id::text=c.billing_address_id AND f.user_id=c.user_id WHERE c.user_id=$1", [destination.id])).rows[0]!.n), 1000);
+  // A card references a postal identity field, a card-only billing address or nothing.
+  assert.equal(Number((await db.query("SELECT count(*) AS n FROM cards c JOIN identity_fields f ON f.id::text=c.billing_address_id AND f.user_id=c.user_id WHERE c.user_id=$1 AND c.billing_entry_id IS NULL", [destination.id])).rows[0]!.n), 500);
+  assert.equal(Number((await db.query("SELECT count(*) AS n FROM cards c JOIN card_billing_addresses b ON b.id=c.billing_entry_id AND b.user_id=c.user_id WHERE c.user_id=$1 AND c.billing_address_id IS NULL", [destination.id])).rows[0]!.n), 500);
+  assert.equal(Number((await db.query("SELECT count(*) AS n FROM cards WHERE user_id=$1 AND billing_address_id IS NULL AND billing_entry_id IS NULL", [destination.id])).rows[0]!.n), 0);
   console.log(JSON.stringify({ passed: true, fixtureBytes, firstParts, secondParts, skills: 1000, packages: 100, memories: 5000, protectedFields: 1000, cards: 1000, history: 100_000, durationMs: Math.round(performance.now() - started) }));
 } finally { key.fill(0); await db.close(); }

@@ -228,6 +228,27 @@ test("returns every stored field and card, decrypted, in the order given", async
   );
 });
 
+// docs/adr/card-billing-addresses.md: a card's billing reference is either a postal address
+// (billingAddressId) or a card-only address (billingEntryId), or none. Whichever it has must
+// reach the export, or the importing account loses the card's billing address.
+test("carries each card's billing reference through — postal, card-only or none", async () => {
+  const vaultKey = freshVaultKey();
+  const stored = await storedUnder(vaultKey, [], [CARD_EVERYDAY, CARD_TRAVEL, CARD_EVERYDAY]);
+  const cards = [
+    { ...stored.cards[0]!, billingAddressId: "postal-1" },
+    { ...stored.cards[1]!, billingEntryId: "billing-1" },
+    stored.cards[2]!,
+  ];
+
+  const section = await buildDeviceProtected(vaultKey as Uint8Array<ArrayBuffer>, { highTierFields: [], cards });
+
+  assert.equal(section.cards[0]!.billingAddressId, "postal-1", "a postal reference is carried through");
+  assert.equal("billingEntryId" in section.cards[0]!, false, "a postal card gains no card-only reference");
+  assert.equal(section.cards[1]!.billingEntryId, "billing-1", "a card-only reference is carried through");
+  assert.equal("billingAddressId" in section.cards[1]!, false, "a card-only card gains no postal reference");
+  assert.equal("billingAddressId" in section.cards[2]! || "billingEntryId" in section.cards[2]!, false, "a card with no address carries no reference");
+});
+
 test("an empty vault yields a well-formed, empty device-protected section", async () => {
   const vaultKey = freshVaultKey();
 
