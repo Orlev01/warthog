@@ -38,6 +38,7 @@ import { getAgentDefaults } from "../db/agent-defaults";
 import { listAgentsForUser } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { listSkillsForUser, type Skill } from "../db/skills";
+import { listBuiltinSkillSettings } from "../db/builtin-skills";
 import { listPackages } from "../db/skill-packages";
 import { listMemoriesForUser } from "../db/memories";
 import { listAllRules } from "../db/rules";
@@ -125,6 +126,8 @@ export async function buildExportDocument(
   const cardBillingAddresses = await listCardBillingAddresses(db, userId, dek);
   const preferences = await getPreferences(db, userId, dek);
   const skills = await listSkillsForUser(db, userId, dek);
+  // What the person changed about Warthog's own skills (docs/adr/editable-builtin-skills.md).
+  const warthogSkills = [...(await listBuiltinSkillSettings(db, userId, dek)).values()];
   const packages = await listPackages(db, userId, dek);
   const packageBySkill = new Map(packages.flatMap((p) => p.members.map((m) => [m.skillId, p.id] as const)));
   const memory = await listMemoriesForUser(db, userId, dek);
@@ -183,6 +186,17 @@ export async function buildExportDocument(
     agentSettings,
     ...(importedActivity.length ? { importedActivity: importedActivity.map(entry => entry.content) } : {}),
     ...(packages.length ? { skillPackages: packages.map((p) => ({ id: p.id, name: p.name, files: p.files })) } : {}),
+    ...(warthogSkills.length ? {
+      warthogSkills: warthogSkills.map((setting) => ({
+        key: setting.key,
+        state: setting.state,
+        scope: setting.scope.type === "agents" ? "chosen" : "all",
+        scopedAgentIds: setting.scope.type === "agents" ? [...setting.scope.agentIds] : [],
+        ...(setting.useThisWhen !== null ? { useThisWhen: setting.useThisWhen } : {}),
+        ...(setting.guidance !== null ? { guidance: setting.guidance } : {}),
+        ...(setting.basedOnVersion !== null ? { basedOnVersion: setting.basedOnVersion } : {}),
+      })),
+    } : {}),
     skills: skills.map((skill) => ({
       scope: skill.scope, enabled: skill.enabled, scopedAgentIds: skill.scopedAgentIds,
       id: skill.id,

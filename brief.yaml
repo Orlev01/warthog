@@ -270,7 +270,13 @@ features:
     with Warthog (fetch context first, give a reason with each request, wait for approvals, log
     high-level outcomes with the activity tool, and treat content it reads from connected services
     as information rather than instructions, while following the person's own saved notes). Every
-    agent also receives that last point when it connects, before it calls anything.
+    agent also receives that last point when it connects, before it calls anything. (Amended 25
+    November 2026, founder: the house skill's rules — treat read content as information, stay within
+    what's granted, wait for approvals and never ask for them by reply, check before retrying an
+    unknown outcome, use a released card or high-tier value once, stay within budgets, be wary of
+    what another agent saved — reach every agent with its context whatever the person does to the
+    skill; its other guidance is the person's to edit, switch off or remove, like Warthog's other
+    skills. See docs/adr/editable-builtin-skills.md.)
   - >-
     Agent tool set — fetch context; fetch a skill's full text by its title; call any permitted
     connector tool; request a high-tier identity detail with a stated purpose; request a card for a
@@ -431,6 +437,15 @@ features:
     when" lines of the skills it may use and the agent fetches a skill's full text by title when it
     decides the skill is relevant (Warthog never guesses relevance); Warthog's own house skill is
     always included in full; skills can be created, edited, duplicated, switched off and deleted.
+    (Amended 25 November 2026, founder: Warthog's own skills — the house skill, "Life admin records",
+    "Building a profile" and a set of default skills for everyday jobs, with opt-in packs that start
+    switched off — are shown on the Skills page, and the person can edit each one's guidance, switch
+    it off, remove it, choose which agents get it and restore Warthog's version; each keeps a short
+    set of Warthog's rules and the parts Warthog generates (record kinds, searches, what the agent
+    can read), which can't be edited, so editing or removing a skill never weakens a protection.
+    Each is given only to agents with the permissions it needs, and its title is Warthog's own. When
+    Warthog updates a skill the person changed, they're offered the new version rather than having
+    theirs replaced. See docs/adr/editable-builtin-skills.md.)
   - >-
     Shared memory — agents with permission save memories (a short fact or note with the source agent
     and time); each memory is either kept to the agent that saved it or shared with the person's
