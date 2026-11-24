@@ -84,6 +84,8 @@ export interface CuratedToolResult {
   readonly tooLargeToCheck?: boolean;
   /** Warthog's own note on what was read (a spreadsheet's first tab only). */
   readonly note?: string;
+  /** The window a calendar list covered (ISO instants), when Warthog chose or checked it. */
+  readonly window?: { readonly from: string; readonly to: string };
 }
 
 // The internal richer declaration: the public fields plus how the tool is dispatched —

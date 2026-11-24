@@ -266,6 +266,13 @@ const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; descri
   },
 };
 
+const OUTLOOK_CALENDAR_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
+  list: {
+    title: "Outlook Calendar: List events",
+    description: "List the events in a window of the connected Outlook calendar: query.startDateTime and query.endDateTime are dates (2026-11-25) or date-times, at most 3 years apart; with neither, the next 90 days. Events come sorted by start, query.$top (up to 50, default 25) at a time: pass the result's next as query for the following page. query.$filter narrows with Graph's syntax, e.g. isCancelled eq false. Returns each event's subject, start and end, place, organiser, guest count and a short preview, never its full text: account picks the calendar when you can use more than one. Doesn't change the calendar.",
+  },
+};
+
 const LINKEDIN_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   profile: {
     title: "LinkedIn: Your profile",
@@ -311,6 +318,7 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
   const verb = tool.name.slice(tool.connectorId.length + NAMESPACE.length);
   const presentation = tool.connectorId === "google-gmail" ? GMAIL_PRESENTATION[verb]
     : tool.connectorId === "microsoft-outlook-mail" ? OUTLOOK_MAIL_PRESENTATION[verb]
+    : tool.connectorId === "microsoft-outlook-calendar" ? OUTLOOK_CALENDAR_PRESENTATION[verb]
     : tool.connectorId === "linkedin" ? LINKEDIN_PRESENTATION[verb] : undefined;
   return {
     name: verb,

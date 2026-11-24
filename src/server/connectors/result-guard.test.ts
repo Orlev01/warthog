@@ -166,6 +166,62 @@ describe("createResultGuard", () => {
   });
 });
 
+// The Outlook calendar list as a compact checked view (dogfood 25 Nov 2026): each event's who,
+// what, when and where, never its full body, and how to ask for the next page.
+describe("createResultGuard on an Outlook calendar list", () => {
+  const event = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, subject: `Event ${id}`, isAllDay: false, isCancelled: false, isOrganizer: false, showAs: "busy", type: "singleInstance",
+    start: { dateTime: "2026-11-26T01:00:00.0000000", timeZone: "UTC" }, end: { dateTime: "2026-11-26T02:30:00.0000000", timeZone: "UTC" },
+    location: { displayName: "Tucker Bellevue Hill" },
+    organizer: { emailAddress: { name: "Josh", address: "josh@example.com" } },
+    attendees: [{ emailAddress: { address: "a@example.com" } }, { emailAddress: { address: "b@example.com" } }],
+    bodyPreview: `Agenda​ ${"x".repeat(400)}`,
+    body: { contentType: "html", content: "<html>very long</html>" },
+    webLink: "https://outlook.office365.com/owa/?itemid=1",
+    ...extra,
+  });
+  const list = (value: unknown[], nextLink?: string) => guard.review(call("microsoft-outlook-calendar__list"), {
+    status: 200, truncated: false,
+    window: { from: "2026-11-25T00:00:00.000Z", to: "2027-02-23T00:00:00.000Z" },
+    body: JSON.stringify({ value, ...(nextLink ? { "@odata.nextLink": nextLink } : {}) }),
+  } as never);
+
+  it("shows each event's who, what, when and where, never its body", () => {
+    const guarded = list([
+      event("e1", { isOrganizer: true, organizer: { emailAddress: { name: "Sam", address: "sam@example.com" } } }),
+      event("e2", { isAllDay: true, isCancelled: true, type: "occurrence", seriesMasterId: "s1", start: { dateTime: "2026-12-01T00:00:00.0000000", timeZone: "AUS Eastern Standard Time" }, location: { displayName: "" } }),
+    ], "https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=2026-11-25T00%3a00%3a00.000Z&endDateTime=2027-02-23T00%3a00%3a00.000Z&%24top=25&%24skip=25");
+    const result = guarded.result as { notice: string; source: unknown; status: number; window: unknown; events: Record<string, unknown>[]; next?: unknown; note: string };
+    assert.deepEqual(Object.keys(result).slice(0, 2), ["notice", "source"]);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.window, { from: "2026-11-25T00:00:00.000Z", to: "2027-02-23T00:00:00.000Z" });
+    assert.deepEqual(result.events[0], {
+      account: "sam@example.com", id: "e1", subject: "Event e1",
+      start: "2026-11-26T01:00:00Z", end: "2026-11-26T02:30:00Z", allDay: false,
+      location: "Tucker Bellevue Hill", organizer: "Sam <sam@example.com>", youOrganised: true,
+      cancelled: false, showAs: "busy", guests: 2, preview: result.events[0]!.preview,
+      openInCalendar: "https://outlook.office365.com/owa/?itemid=1",
+    });
+    const preview = String(result.events[0]!.preview);
+    assert.ok(preview.length <= 200 && preview.startsWith("Agenda x"), "a short, checked preview (hidden characters removed)");
+    assert.deepEqual(
+      { start: result.events[1]!.start, allDay: result.events[1]!.allDay, cancelled: result.events[1]!.cancelled, repeats: result.events[1]!.repeats, location: result.events[1]!.location },
+      { start: "2026-12-01T00:00:00 (AUS Eastern Standard Time)", allDay: true, cancelled: true, repeats: true, location: undefined },
+    );
+    assert.ok(!JSON.stringify(result).includes("very long"), "the event body never reaches the agent");
+    assert.deepEqual(result.next, { startDateTime: "2026-11-25T00:00:00.000Z", endDateTime: "2027-02-23T00:00:00.000Z", $top: "25", $skip: "25" }, "the query for the next page");
+    // Someone else's event was shown, so the recently-read window opens for its organiser.
+    assert.deepEqual(guarded.exposure, { service: "microsoft-outlook-calendar", kind: "event", sender: "josh@example.com", account: "sam@example.com" });
+  });
+
+  it("says when the window is empty, and opens no window for the person's own events", () => {
+    const empty = list([]);
+    assert.deepEqual((empty.result as { events: unknown[] }).events, []);
+    assert.match(String((empty.result as { note: string }).note), /No events/);
+    assert.equal(list([event("e1", { isOrganizer: true })]).exposure, undefined);
+  });
+});
+
 // The person's "what agents see" level (docs/adr/read-side-protection.md, amendment 24 November
 // 2026), carried on the call by the pipeline: every path checks at that level, and the evidence
 // says when a result was shown at a level other than the default.
