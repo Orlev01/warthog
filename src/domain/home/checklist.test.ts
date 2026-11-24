@@ -144,7 +144,7 @@ test("each documented item exists with the right label at its link", () => {
   }
 });
 
-test("labels and links do not change when signals change (only done varies)", () => {
+test("labels and links do not change when signals change (only done varies), except Build your profile's link", () => {
   const allOn: SetupSignals = {
     notificationsEnabled: true,
     profileBuilt: true,
@@ -154,9 +154,11 @@ test("labels and links do not change when signals change (only done varies)", ()
   };
   const empty = run({}).map((i) => ({ label: i.label, href: i.href }));
   const full = run(allOn).map((i) => ({ label: i.label, href: i.href }));
+  // Once the profile is built, Home's block is gone, so its row leads to Life admin's.
+  const expected = empty.map((item) => (item.label === "Build your profile" ? { ...item, href: "/life-admin?tab=add#build-profile" } : item));
   assert.deepEqual(
     full,
-    empty,
+    expected,
     "the item definitions (label + href, in order) must be identical whatever the signals",
   );
 });
@@ -183,7 +185,7 @@ test("each present signal marks ONLY its own item done", () => {
     const signals = { [target.signal]: true } as SetupSignals;
     const items = run(signals);
     for (const other of EXPECTED) {
-      const item = byHref(items, other.href);
+      const item = items.find((candidate) => candidate.label === other.label)!;
       const expectDone = other.signal === target.signal;
       assert.equal(
         item.done,
@@ -247,7 +249,9 @@ test("Build your profile says how many things wait for the person to check, unti
   const waiting = byHref(run({ profileWaiting: 12 }), "/home#build-profile");
   assert.equal(waiting.done, false);
   assert.equal((waiting as SetupChecklistItem & { note?: string }).note, "12 waiting for you to check");
-  assert.equal((byHref(run({ profileWaiting: 12, profileBuilt: true }), "/home#build-profile") as { note?: string }).note, undefined);
+  const built = byHref(run({ profileWaiting: 12, profileBuilt: true }), "/life-admin?tab=add#build-profile");
+  assert.equal((built as { note?: string }).note, undefined);
+  assert.equal(built.done, true, "once built, the row leads to Life admin's block, since Home's is gone");
   assert.equal((byHref(run({}), "/home#build-profile") as { note?: string }).note, undefined);
   assert.ok(!run({}).some((item) => item.label === "Add your details"), "the old step is gone");
 });

@@ -277,9 +277,7 @@ test("Fill in the rest offers at most six empty categories by priority, each wit
     fillInPrompt(CATEGORIES.filter((category) => ["vehicles", "health"].includes(category.id))),
     "Please look through what you can read in Warthog for my rego and car insurance and health insurance and appointments, and save what you find to my Life admin for me to check. Read Warthog's \"Life admin records\" skill first.",
   );
-  const empty = panelOf(render({ records: [] }), "Fill in your life admin");
-  assert.match(text(empty), /Vehicles/, "with nothing yet, the first six are offered");
-  assert.match(empty, /href="\/home#build-profile"[^>]*>Build your profile/, "and a way to have the agent build the whole profile");
+  assert.match(text(panelOf(render({ records: [] }), "Fill in your life admin")), /Vehicles/, "with nothing yet, the first six are offered");
 });
 
 test("an empty category the person once chose to show is offered too, as production's every-category-shown accounts have", () => {
@@ -508,4 +506,19 @@ test("suggestions across categories are grouped, each with its count and its own
   assert.match(text(markup), /Confirm all 3/, "the panel's Confirm all stays");
   const single = render({ records: [REGO, BIKE] });
   assert.doesNotMatch(text(single), /Vehicles · 1/, "one category: no grouping");
+});
+
+
+// docs/adr/profile-build.md: the Add tab is the permanent home of "Build your whole profile", where
+// Home's set-up row leads once the step is done (the prompt can be run again any time).
+test("the Add tab has Build your whole profile, first, with the prompt to copy for the agent that can do it", () => {
+  const markup = render({ profileBuild: { state: "ready", agentName: "Claude", sources: ["Gmail", "Google Drive"] } });
+  const panel = panelOf(markup, "Build your whole profile");
+  assert.match(panel, /id="build-profile"/);
+  assert.match(text(panel), /Claude can read: Gmail and Google Drive\./);
+  assert.match(panel, /Copy for Claude/);
+  assert.match(text(panel), /Run it again any time: it fills the gaps\./);
+  const add = markup.slice(markup.indexOf("Build your whole profile"));
+  assert.ok(add.indexOf("Build your whole profile") < add.indexOf("Add something yourself"), "first on Add");
+  assert.equal(panelOf(render({}), "Build your whole profile"), "", "only when the page passes who can build it");
 });

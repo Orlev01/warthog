@@ -25,3 +25,9 @@ test("otherwise it says what's missing, and where to fix it", () => {
   assert.deepEqual(profileBuildView({ ...base, agents: [{ ...claude, sources: [] }] }), { state: "no_sources", agentName: "Claude", agentHref: "/agents/a1?section=connectors" });
   assert.deepEqual(profileBuildView({ ...base, agents: [{ ...claude, savesRecords: false }] }), { state: "no_records", agentName: "Claude", agentHref: "/agents/a1?section=settings" });
 });
+
+test("Life admin's block names who can build the profile whatever has been built, never 'waiting'", async () => {
+  const { profileBuildChoice } = await import("./profile-build");
+  assert.deepEqual(profileBuildChoice([claude]), { state: "ready", agentName: "Claude", sources: ["Gmail", "Google Drive"] });
+  assert.deepEqual(profileBuildChoice([]), { state: "no_agent" });
+});

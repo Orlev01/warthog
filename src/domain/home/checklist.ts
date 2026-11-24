@@ -29,8 +29,12 @@ export type SetupChecklistItem = {
   readonly note?: string;
 };
 
-// Home's "Build your profile" block (docs/adr/profile-build.md), where the step's row leads.
+// "Build your profile" (docs/adr/profile-build.md): the block the step's row leads to. On Home while
+// the step is to do; once it's done, the permanent one on Life admin's Add tab (the prompt can be run
+// again any time to fill gaps), since Home no longer shows it.
 export const BUILD_PROFILE_ANCHOR = "build-profile";
+export const BUILD_PROFILE_HOME_HREF = `/home#${BUILD_PROFILE_ANCHOR}`;
+export const BUILD_PROFILE_LIFE_ADMIN_HREF = `/life-admin?tab=add#${BUILD_PROFILE_ANCHOR}`;
 
 // The five first-run items, in documented order: label, link, and the signal
 // that marks it done. This table fixes the items for every consumer. The order is
@@ -46,7 +50,7 @@ const ITEMS: ReadonlyArray<{
 }> = [
   { label: "Connect an agent", href: "/agents/connect", signal: "agentConnected" },
   { label: "Connect a service", href: "/connectors", signal: "serviceConnected" },
-  { label: "Build your profile", href: `/home#${BUILD_PROFILE_ANCHOR}`, signal: "profileBuilt" },
+  { label: "Build your profile", href: BUILD_PROFILE_HOME_HREF, signal: "profileBuilt" },
   { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
   { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
 ];
@@ -58,6 +62,8 @@ export function computeSetupChecklist(signals: SetupSignals): SetupChecklistItem
   return ITEMS.map(({ label, href, signal }) => {
     const done = signals[signal] === true;
     const waiting = signal === "profileBuilt" && !done ? signals.profileWaiting ?? 0 : 0;
-    return { label, href, done, ...(waiting > 0 ? { note: `${waiting} waiting for you to check` } : {}) };
+    // Once the profile is built, Home's block is gone: the row leads to the one on Life admin.
+    const to = signal === "profileBuilt" && done ? BUILD_PROFILE_LIFE_ADMIN_HREF : href;
+    return { label, href: to, done, ...(waiting > 0 ? { note: `${waiting} waiting for you to check` } : {}) };
   });
 }
