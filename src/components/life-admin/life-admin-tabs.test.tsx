@@ -17,8 +17,8 @@ import { readFileSync } from "node:fs";
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
 // Tasks is a tab when the page passes its content (LifeAdminScreen does).
-function render(initialTab?: "records" | "upcoming" | "history" | "tasks"): string {
-  return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} initialTab={initialTab} tasks={<p>No tasks yet.</p>} />);
+function render(initialTab?: "records" | "add" | "upcoming" | "history" | "tasks", records: React.ComponentProps<typeof LifeAdminView>["records"] = []): string {
+  return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={records} initialTab={initialTab} tasks={<p>No tasks yet.</p>} />);
 }
 
 function attr(attrs: string, name: string): string | null {
@@ -42,7 +42,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Records", "Upcoming", "History", "Tasks"],
+    ["Records", "Add", "Upcoming", "History", "Tasks"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
@@ -51,12 +51,12 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   assert.equal(selected[0]!.text, "Tasks");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
-    3,
+    4,
   );
   // Roving tabindex: only the selected tab is in the tab order.
   assert.deepEqual(
     tabs.map((t) => attr(t.attrs, "tabindex")),
-    ["-1", "-1", "-1", "0"],
+    ["-1", "-1", "-1", "-1", "0"],
   );
 
   const panelId = attr(selected[0]!.attrs, "aria-controls");
@@ -93,12 +93,23 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
   assert.equal(nextTabIndex(1, "a", 4), null, "other keys are left alone");
 });
 
-test("every panel stays mounted with only the selected panel visible; Records opens by default", () => {
-  for (const [initialTab, shownIndex] of [[undefined, 0], ["records", 0], ["upcoming", 1], ["history", 2], ["tasks", 3]] as const) {
+test("every panel stays mounted with only the selected panel visible; Records opens by default once something is on file, Add before", () => {
+  const onFile: React.ComponentProps<typeof LifeAdminView>["records"] = [
+    { id: "00000000-0000-4000-8000-00000000000d", kind: "item", type: "vehicles.vehicle", fields: { name: "Honda CB500X" }, dueDate: null, status: "active", reminderOffsets: [] },
+  ];
+  for (const [initialTab, records, shownIndex] of [
+    [undefined, onFile, 0],
+    [undefined, [], 1],
+    ["records", [], 0],
+    ["add", onFile, 1],
+    ["upcoming", [], 2],
+    ["history", [], 3],
+    ["tasks", [], 4],
+  ] as const) {
     const panels = [
-      ...render(initialTab).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
+      ...render(initialTab, records).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
     ].map((match) => match[1]!);
-    assert.equal(panels.length, 4);
-    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [0, 1, 2, 3].map((index) => index !== shownIndex), String(initialTab));
+    assert.equal(panels.length, 5);
+    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [0, 1, 2, 3, 4].map((index) => index !== shownIndex), `${String(initialTab)} with ${records.length} records`);
   }
 });

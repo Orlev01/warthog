@@ -3,7 +3,7 @@ import { canonicalDateTime, calendarDate } from "@/domain/life-admin/normalise";
 import { DEFAULT_LIST_STATUSES, HISTORY_STATUSES, RECORDS_TAB_STATUSES, historyHref, recordsHref } from "@/components/life-admin/record-groups";
 import type { HistoryFilter, LifeAdminTab, RecordFilter, RecordListStatus } from "@/components/life-admin/record-view-types";
 import { allParams } from "@/lib/href";
-import { tabNamed } from "@/components/life-admin/tab-address";
+import { ADD_TAB_HREF, tabNamed } from "@/components/life-admin/tab-address";
 
 // The Life admin forms' inputs, read from a submitted FormData (pure: no session, no DB).
 
@@ -66,7 +66,7 @@ export function recordStatus(form: FormData): string | undefined {
 
 // Life admin's tabs and older addresses (`?tab=`, `?view=…`): shared with the view, which puts
 // today's address in the browser (`./tab-address.ts`).
-export { currentLifeAdminHref, lifeAdminTab } from "@/components/life-admin/tab-address";
+export { currentLifeAdminHref, lifeAdminTab, requestedLifeAdminTab } from "@/components/life-admin/tab-address";
 type Params = Readonly<Record<string, string | readonly string[] | undefined>>;
 const first = (value: string | readonly string[] | undefined): string | undefined => (typeof value === "string" ? value : value?.[0]);
 
@@ -85,12 +85,16 @@ const isListStatus = (value: string): value is RecordListStatus => (["active", "
 const pageNumber = (value: string | undefined): number | undefined =>
   value && /^\d{1,4}$/.test(value) && Number(value) >= 1 ? Number(value) : undefined;
 
+// The Add tab: what's still to fill in, and adding a record (founder, 24 Nov 2026).
+export { ADD_TAB_HREF } from "@/components/life-admin/tab-address";
+
 // Where a record action lands afterwards: the tab it was submitted from and, on Records or in
 // History, the filters it was shown under (`returnCategory` / `returnStatus` / `returnPage`,
 // well-formed values only; the page validates them again).
 export function recordReturnPath(form: FormData): string {
   const tab = recordTab(form.get("returnTab"));
   if (tab === "upcoming") return "/life-admin?tab=upcoming";
+  if (tab === "add") return ADD_TAB_HREF;
   const strings = (name: string) => form.getAll(name).filter((value): value is string => typeof value === "string");
   const categories = allParams(strings("returnCategory")).filter((value) => CATEGORY_ID.test(value));
   const statuses = allParams(strings("returnStatus")).filter(isListStatus);

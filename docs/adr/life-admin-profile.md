@@ -338,6 +338,34 @@ date says when, against the date ("Reminds you 14 days and 1 day before · Expir
 any other day the record already has. Unticking them all turns reminders off. The typed "days
 before" list is gone, and a form left open with it still saves.
 
+
+### The Add tab (amended 24 November 2026)
+
+The founder asked to keep what is on file apart from what is still to fill in: the "Fill in the
+rest" and "Add something yourself" panels at the bottom of Records "need to be distinct from the
+record tab … which captures things that already exist … The idea is to separate the two concepts
+of items that already have data and items that do not." They chose a new tab named **Add**, right
+after Records.
+
+**Records | Add | Upcoming | History | Tasks** (`?tab=add`):
+
+- **Records** keeps only what is on file: To check, the filters, what's active by category and
+  what's on hold, then an "Add a record" link to Add. With nothing on file it says so ("Nothing on
+  file yet.") and links to Add.
+- **Add** holds Fill in the rest (the empty categories to look for, the prompt for an agent, and
+  Not for me, to undo) and Add something yourself (pick a kind, then its form). Choosing "Not for
+  me" or Undo comes back to Add. A record added there lands where it lives (Records, or its own
+  page when it's a booking or finished); a problem keeps the person on Add with the form open.
+- **Which tab opens.** An address without `?tab=` opens Records, or Add while nothing is on file
+  (`nothingOnFile`: no record shown on any tab and nothing to check; when everything kept is in
+  categories marked not for them, Records says so). Picking a kind to add (`?add=`) opens Add.
+  Older addresses and reminder links map as before, and an old `/life-admin#new-record` link
+  reloads at `?tab=add#new-record`. The browser's address then names the tab shown whenever it
+  isn't this person's default (`shownLifeAdminAddress`), and the shared tabs show the page's tab on
+  load when the address names none, so the server and the browser never disagree.
+- **Links between tabs open in place.** "Add a record" and Upcoming's "Add a booking" switch tab
+  without reloading (`ViewTabLink`), so what's half-typed in other tabs survives; without
+  JavaScript they're plain links.
 ## Agents
 
 | Tool | Change |

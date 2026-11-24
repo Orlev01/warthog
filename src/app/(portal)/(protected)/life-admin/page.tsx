@@ -8,7 +8,8 @@ import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
 import { firstParam } from "@/lib/href";
 import {
   historyFilters,
-  lifeAdminTab,
+  requestedLifeAdminTab,
+  recordTab,
   noticeField,
   recordDate,
   recordFields,
@@ -29,8 +30,8 @@ import { buildActions, resolveSession, run, type Outcome } from "./wiring";
 // from the host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into
 // the person's own records and tasks — content decrypted, each task's assignee + note authors
 // resolved to agent names — and mounts the already-render-tested <LifeAdminScreen/>: one row of
-// tabs, Records | Upcoming | History | Tasks (`?tab=` picks the one shown first; all stay
-// mounted, so switching keeps a half-typed record or task). An older address (`?view=…`, the
+// tabs, Records | Add | Upcoming | History | Tasks (`?tab=` picks the one shown first, else Records,
+// or Add while nothing is on file; all stay mounted, so switching keeps a half-typed record or task). An older address (`?view=…`, the
 // Bookings tab, the moving checklist, older reminder links) opens the tab it meant, and the view
 // puts today's address in the browser. Every control
 // is BOUND to a `use server` wrapper over the SAME seam; each wrapper re-derives the verified
@@ -83,6 +84,10 @@ async function addRecordAction(formData: FormData): Promise<void> {
   const type = recordTypeId(formData);
   const back = recordReturnPath(formData);
   if (!type) redirect(`${withQuery(back, "notice=record_type_missing")}#new-record`);
+  // Added on the Add tab, a record is then shown on Records (or, when it doesn't live there, as a
+  // booking or something finished, on its own page); a problem keeps the person on Add with the
+  // form open.
+  const landing = recordTab(formData.get("returnTab")) === "add" ? "/life-admin?tab=records" : back;
   await run(savedOutcome, (actions, session) =>
     actions.saveRecord(session, {
       type,
@@ -91,7 +96,7 @@ async function addRecordAction(formData: FormData): Promise<void> {
       status: recordStatus(formData),
       parentId: recordParent(formData),
     }),
-    back,
+    landing,
     "invalid_input",
     withQuery(back, `add=${encodeURIComponent(type)}`),
   );
@@ -231,7 +236,8 @@ export default async function LifeAdminPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const notice = toNotice(params.notice);
-  const tab = lifeAdminTab(params);
+  // The tab the address asks for; none lets the view open Records, or Add while nothing is on file.
+  const tab = requestedLifeAdminTab(params);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {

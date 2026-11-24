@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Button, buttonClasses, type ButtonVariant } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
+import { ADD_ANCHOR, ADD_TAB_HREF } from "./tab-address";
 import { Field, SelectField, TextareaField } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
@@ -43,7 +44,7 @@ export function summaryClass(variant: ButtonVariant, size: "sm" | "md" = "md"): 
 // under the filters it was shown with. Each tab provides its own; every record form posts them back as
 // hidden values (`returnTab`, `returnCategory`, `returnStatus`, `returnPage`) and the page's
 // actions redirect there.
-export type RecordReturn = { tab: "records" | "upcoming" | "history"; filter: RecordFilter & { page?: number } };
+export type RecordReturn = { tab: "records" | "add" | "upcoming" | "history"; filter: RecordFilter & { page?: number } };
 const RecordReturnContext = React.createContext<RecordReturn>({ tab: "records", filter: { categories: [], statuses: [] } });
 export const RecordReturnProvider = RecordReturnContext.Provider;
 
@@ -438,7 +439,7 @@ export function EditRecordForm({
 
 // ─── adding ──────────────────────────────────────────────────────────────────────────
 
-const ADD_ANCHOR = "new-record";
+// The add form's anchor and the Add tab's address (./tab-address).
 
 /**
  * "Add something": step one picks the kind with a plain GET form (`?add=<kind>`), its choices
@@ -470,6 +471,8 @@ export function AddRecordPanel({
       >
         <div className="flex min-w-0 flex-col gap-4">
           <form method="get" action={`/life-admin#${ADD_ANCHOR}`} className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+            {/* The chosen kind's form opens on the Add tab, where this panel is. */}
+            <input type="hidden" name="tab" value="add" />
             <SelectField label="What are you adding?" id={pickerId} name="add" defaultValue={type?.id ?? ""} required width="text">
               <option value="" disabled>
                 Choose a type
@@ -533,7 +536,7 @@ function AddForm({
       </PendingFormFields>
       <div className="flex flex-wrap items-center gap-2">
         <FormSubmit variant="primary" pendingLabel="Adding…">Add to Life admin</FormSubmit>
-        <ButtonLink variant="ghost" href={`/life-admin#${ADD_ANCHOR}`}>
+        <ButtonLink variant="ghost" href={`${ADD_TAB_HREF}#${ADD_ANCHOR}`}>
           Cancel
         </ButtonLink>
       </div>

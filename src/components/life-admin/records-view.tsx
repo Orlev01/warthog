@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ClipboardCheck, EyeOff, MailSearch, SearchX, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ClipboardCheck, EyeOff, FolderOpen, MailSearch, Plus, SearchX, Sparkles, Trash2 } from "lucide-react";
 
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
@@ -13,9 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button-link";
 import { CopyButton } from "@/components/ui/copy-button";
 import { EmptyState } from "@/components/ui/empty";
+import { ViewTabLink } from "@/components/ui/view-tabs";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import type { CategoryDef, RecordTypeDef } from "@/domain/life-admin/record-types";
 import { categoryIcon } from "./category-icons";
+import { ADD_TAB_HREF } from "./tab-address";
 import {
   DEFAULT_LIST_STATUSES,
   LIST_STATUS_LABELS,
@@ -70,9 +72,13 @@ export { fillInPrompt } from "./record-groups";
 //      within a group the most urgent comes first. Rows are compact; their details are one click
 //      away. No category panel is ever empty.
 //   4. On hold, when chosen, as its own quieter list across categories.
-//   5. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
+//   5. "Add a record", to the Add tab; with nothing on file, an empty state saying so instead.
+//
+// The Add tab (`AddView`; founder, 24 Nov 2026) keeps what's still to fill in apart from what's on
+// file:
+//   1. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
 //      a prompt to copy into an agent, and the ones already marked "not for me", to undo.
-//   6. Add something yourself — pick a kind, then fill in its form.
+//   2. Add something yourself — pick a kind, then fill in its form.
 
 type Typed = { record: LifeAdminRecordView; type: RecordTypeDef; name: string; titleKey: string | null };
 
@@ -573,7 +579,7 @@ function StatusList({ section, ctx }: { section: StatusSection<LifeAdminRecordVi
   );
 }
 
-// ─── 5. Fill in the rest ─────────────────────────────────────────────────────────────
+// ─── the Add tab: Fill in the rest ───────────────────────────────────────────────────
 
 function FillInPanel({
   available,
@@ -642,7 +648,7 @@ function FillInPanel({
                 <li key={category.id} className={`${LIST_ROW} sm:flex-row sm:items-center sm:justify-between sm:gap-4`}>
                   <p className="min-w-0 text-sm text-fg">
                     {category.label}
-                    {records > 0 ? <span className="text-fg-muted"> · {plural(records, "record")} kept, hidden here</span> : null}
+                    {records > 0 ? <span className="text-fg-muted"> · {plural(records, "record")} kept, hidden on every tab</span> : null}
                   </p>
                   {action ? (
                     <PostButton action={action} values={{ category: category.id, setting: "clear" }} variant="secondary" pendingLabel="Restoring…">
@@ -703,6 +709,86 @@ function NothingOngoing({ upcoming, history }: { upcoming: boolean; history: boo
   );
 }
 
+// Nothing on file: no record shown on any tab (none yet, or all in categories the person said are
+// not for them) and nothing to check. Records then says so, and Life admin opens on Add.
+export function nothingOnFile(
+  records: readonly LifeAdminRecordView[],
+  listed: readonly LifeAdminRecordView[],
+  suggestedCategories: readonly SuggestedCategoryView[],
+): boolean {
+  return listed.length === 0 && suggestedCategories.length === 0 && !records.some((record) => record.reviewState === "suggested" || record.pending);
+}
+
+// Records with nothing on file. When what they keep is all in categories they said are not for
+// them, say so rather than "nothing yet".
+function NothingOnFile({ hidden }: { hidden: boolean }) {
+  return (
+    <EmptyState
+      icon={FolderOpen}
+      heading={hidden ? "Nothing to show." : "Nothing on file yet."}
+      description={
+        hidden
+          ? "What you keep is in categories you said are not for you. You can show them again from Not for me, on Add."
+          : "Your accounts, policies, memberships and things show here once you add them, or your agent finds them and you confirm."
+      }
+      action={<AddLink />}
+    />
+  );
+}
+
+// To the Add tab (in place, so half-typed work in other tabs survives): what's still to fill in,
+// and adding a record.
+function AddLink() {
+  return (
+    <ViewTabLink tab="add" href={ADD_TAB_HREF} size="sm">
+      <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
+      Add a record
+    </ViewTabLink>
+  );
+}
+
+// The things other records belong to (a vehicle, home, pet, or a thing of a category of their own),
+// as the "belongs to" choices in the record forms.
+export function assetsOf(records: readonly LifeAdminRecordView[], catalogue: Catalogue): AssetOption[] {
+  return records.flatMap((record) => {
+    const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
+    if (!type.anchor) return [];
+    const { name } = recordName(type, record.fields, Boolean(record.type));
+    return [{ id: record.id, name, typeId: type.id, typeLabel: type.label }];
+  });
+}
+
+// ─── the Add tab ─────────────────────────────────────────────────────────────────────
+
+export function AddView({
+  records,
+  catalogue,
+  categories,
+  zone = "UTC",
+  addType,
+  assets,
+  actions,
+}: {
+  records: readonly LifeAdminRecordView[];
+  catalogue: Catalogue;
+  categories: readonly CategoryStateView[];
+  zone?: string;
+  addType?: string | null;
+  // The "belongs to" choices, when the caller already worked them out.
+  assets?: readonly AssetOption[];
+  actions: RecordActions;
+}) {
+  const { available, notForMe } = fillInChoices(catalogue, categories);
+  return (
+    <RecordReturnProvider value={{ tab: "add", filter: { categories: [], statuses: [] } }}>
+      {available.length || notForMe.length ? (
+        <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
+      ) : null}
+      <AddRecordPanel catalogue={catalogue} addType={addType} assets={assets ?? assetsOf(records, catalogue)} zone={zone} addRecordAction={actions.addRecordAction} />
+    </RecordReturnProvider>
+  );
+}
+
 // ─── the Records tab ─────────────────────────────────────────────────────────────────
 
 export function RecordsView({
@@ -712,8 +798,8 @@ export function RecordsView({
   suggestedCategories = [],
   today,
   zone = "UTC",
-  addType,
   filter = DEFAULT_FILTER,
+  assets: given,
   actions,
 }: {
   records: readonly LifeAdminRecordView[];
@@ -722,7 +808,8 @@ export function RecordsView({
   suggestedCategories?: readonly SuggestedCategoryView[];
   today: string;
   zone?: string;
-  addType?: string | null;
+  // The "belongs to" choices, when the caller already worked them out.
+  assets?: readonly AssetOption[];
   // The filters the page validated; Active in every category when absent.
   filter?: RecordFilter;
   actions: RecordActions;
@@ -733,9 +820,7 @@ export function RecordsView({
     return { record, type, name, titleKey: key };
   });
   const names = new Map(all.map((item) => [item.record.id, item.name] as const));
-  const assets: AssetOption[] = all
-    .filter((item) => item.type.anchor)
-    .map((item) => ({ id: item.record.id, name: item.name, typeId: item.type.id, typeLabel: item.type.label }));
+  const assets = given ?? all.filter((item) => item.type.anchor).map((item) => ({ id: item.record.id, name: item.name, typeId: item.type.id, typeLabel: item.type.label }));
   const listed = listedRecords(records, catalogue, categories);
   const ongoing = listed.filter((record) => sectionOf(record, catalogue) === "records");
   const chosen = new Set(filter.categories);
@@ -751,12 +836,11 @@ export function RecordsView({
   const ctx: Context = { catalogue, assets, zone, currentYear: today.slice(0, 4), actions, names, visible };
   const suggestions = all.filter((item) => item.record.reviewState === "suggested");
   const changes = all.filter((item) => item.record.pending && item.record.reviewState !== "suggested");
-  const { available, notForMe } = fillInChoices(catalogue, categories);
+  const toCheck = suggestions.length > 0 || changes.length > 0 || suggestedCategories.length > 0;
   return (
     <RecordReturnProvider value={{ tab: "records", filter }}>
-      {suggestions.length || changes.length || suggestedCategories.length ? (
-        <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} />
-      ) : null}
+      {toCheck ? <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} /> : null}
+      {!listed.length && !toCheck ? <NothingOnFile hidden={records.length > 0} /> : null}
       {ongoing.length ? <RecordsToolbar view={view} filter={filter} inHistory={inHistory} /> : null}
       {listed.length && !ongoing.length ? <NothingOngoing upcoming={upcomingOnly} history={inHistory > 0} /> : null}
       {view.active.map((section) => (
@@ -766,10 +850,11 @@ export function RecordsView({
         <StatusList key={section.status} section={section} ctx={ctx} />
       ))}
       {ongoing.length && view.shown === 0 ? <NoMatches filter={filter} view={view} /> : null}
-      {available.length || notForMe.length ? (
-        <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
+      {listed.length || toCheck ? (
+        <div className="flex">
+          <AddLink />
+        </div>
       ) : null}
-      <AddRecordPanel catalogue={catalogue} addType={addType} assets={assets} zone={zone} addRecordAction={actions.addRecordAction} />
     </RecordReturnProvider>
   );
 }

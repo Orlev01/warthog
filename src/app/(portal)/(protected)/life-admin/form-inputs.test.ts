@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { combineDateTime, currentLifeAdminHref, historyFilters, itemPath, journalInput, lifeAdminTab, noticeField, recordDate, recordFields, recordFilters, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
+import { combineDateTime, currentLifeAdminHref, historyFilters, itemPath, journalInput, lifeAdminTab, requestedLifeAdminTab, noticeField, recordDate, recordFields, recordFilters, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -215,4 +215,25 @@ test("a browser address's query maps the same way", async () => {
   assert.equal(currentLifeAdminSearch("?view=tasks&assignee=any"), "/life-admin?tab=tasks&assignee=any");
   assert.equal(currentLifeAdminSearch("?tab=history&history_status=cancelled"), null);
   assert.equal(currentLifeAdminSearch(""), null);
+});
+
+// The Add tab (founder, 24 Nov 2026): what's still to fill in and adding records, apart from
+// Records, which keeps what's on file.
+test("the Add tab has its own address, and what's done there comes back to it", () => {
+  assert.equal(lifeAdminTab({ tab: "add" }), "add");
+  assert.equal(recordTab("add"), "add");
+  const form = new FormData();
+  form.set("returnTab", "add");
+  form.append("returnCategory", "vehicles");
+  assert.equal(recordReturnPath(form), "/life-admin?tab=add", "Add carries no filters");
+});
+
+test("an address names a tab only when it asks for one; picking a kind to add asks for Add", () => {
+  assert.equal(requestedLifeAdminTab({}), undefined, "no tab: the page picks (Add when nothing is on file)");
+  assert.equal(requestedLifeAdminTab({ tab: "records" }), "records");
+  assert.equal(requestedLifeAdminTab({ tab: "upcoming" }), "upcoming");
+  assert.equal(requestedLifeAdminTab({ view: "tasks" }), "tasks");
+  assert.equal(requestedLifeAdminTab({ view: "life", tab: "renewals" }), "records", "reminder links still open the record's tab");
+  assert.equal(requestedLifeAdminTab({ add: "vehicles.registration" }), "add");
+  assert.equal(requestedLifeAdminTab({ tab: "nonsense" }), "records", "an unknown tab is Records, as before");
 });

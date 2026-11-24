@@ -229,11 +229,15 @@ test("a change's link lands on the record's row when the filters show it, else o
 
 test("every record action returns to the filters it was submitted under", () => {
   const markup = render({ recordFilter: { categories: ["vehicles", "health"], statuses: ["active", "finished"] } });
-  const posting = forms(markup).filter((form) => form.buttons.some((b) => /^(Confirm|Not mine|Accept change|Keep mine|Save reminder|Save changes|Delete record|Not for me|Confirm all)/.test(b)));
+  const posting = forms(markup).filter((form) => form.buttons.some((b) => /^(Confirm|Not mine|Accept change|Keep mine|Save reminder|Save changes|Delete record|Confirm all)/.test(b)));
   assert.ok(posting.length > 5);
   for (const form of posting) {
     assert.deepEqual(form.returns, [["returnTab", "records"], ["returnCategory", "vehicles"], ["returnCategory", "health"], ["returnStatus", "active"], ["returnStatus", "finished"]], form.buttons.join());
   }
+  // "Not for me" is on the Add tab (founder, 24 Nov 2026), and comes back there.
+  const notForMe = forms(markup).filter((form) => form.buttons.some((b) => /^Not for me/.test(b)));
+  assert.ok(notForMe.length > 0);
+  for (const form of notForMe) assert.deepEqual(form.returns, [["returnTab", "add"]], form.buttons.join());
 });
 
 test("in its category, a suggestion is tagged Not checked yet and a pending change is flagged, in words and an icon", () => {
@@ -287,7 +291,7 @@ test("Not for me (n) lists the hidden categories, with how many records they kee
     records: category.id === "pets" ? 1 : 0,
   }));
   const panel = panelOf(render({ records: [], categories: states }), "Fill in your life admin");
-  assert.match(text(panel), /Not for me \(2\) Legal and estate Undo : show Legal and estate again Pets · 1 record kept, hidden here Undo : show Pets again/);
+  assert.match(text(panel), /Not for me \(2\) Legal and estate Undo : show Legal and estate again Pets · 1 record kept, hidden on every tab Undo : show Pets again/);
   const undo = forms(panel).filter((form) => form.buttons.some((b) => /^Undo/.test(b)));
   assert.deepEqual(undo.map((form) => form.hidden), [[["category", "legal"], ["setting", "clear"]], [["category", "pets"], ["setting", "clear"]]]);
 });
@@ -357,7 +361,7 @@ test("step one: a GET form picks the type from a list grouped by category", () =
   const form = /<form\b([^>]*method="get"[^>]*)>([\s\S]*?)<\/form>/.exec(markup)!;
   assert.ok(form, "a plain GET form, so it works without JavaScript");
   assert.match(form[1]!, /action="\/life-admin#new-record"/);
-  assert.doesNotMatch(form[2]!, /name="(?:view|tab)"/, "Records is the default tab: the form carries no tab of its own");
+  assert.match(form[2]!, /<input type="hidden" name="tab" value="add"\/>/, "the chosen kind's form opens on the Add tab");
   assert.match(form[2]!, /<select\b[^>]*name="add"/);
   const groups = [...form[2]!.matchAll(/<optgroup label="([^"]+)">/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
   assert.deepEqual(groups, CATEGORIES.map((category) => category.label), "every category of the catalogue, in its order");
@@ -479,4 +483,9 @@ test("Belongs to offers only the anchors this kind may belong to, by the catalog
   const petInsurance = forms(render({ records: [BIKE, PET, trip], addType: "pets.insurance" })).find((f) => f.buttons.includes("Add to Life admin"))!;
   const petOptions = [...(/<select[^>]*name="parentId"[^>]*>([\s\S]*?)<\/select>/.exec(petInsurance.body)![1]!).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map((m) => m[2]);
   assert.deepEqual(petOptions, ["Not linked", "Biscuit"]);
+});
+
+test("Cancel on a kind's form stays on the Add tab", () => {
+  const markup = render({ addType: "vehicles.registration" });
+  assert.match(markup, /href="\/life-admin\?tab=add#new-record"[^>]*>Cancel/);
 });
