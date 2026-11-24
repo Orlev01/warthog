@@ -7,7 +7,7 @@ import type { SkillGate } from "../gates";
 export interface DefaultSkillText {
   // Stable key, snake_case, never shown. Keeps an edit attached when the title changes.
   readonly key: string;
-  // 2 to 5 plain words.
+  // A few plain words.
   readonly title: string;
   // The only thing an agent sees before deciding to fetch it: what it's for and the words
   // people and emails use. At most 200 characters, starting "when ".

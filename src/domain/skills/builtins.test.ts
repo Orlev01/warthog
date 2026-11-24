@@ -24,6 +24,14 @@ const PINS: Record<string, [number, string]> = {
   using_warthog: [1, "b3304eb5b8d22c1f"],
   life_admin_records: [1, "749b3fb473c409b9"],
   building_a_profile: [1, "6cac249767c38c87"],
+  trip_planning: [1, "159f34042780e5da"],
+  tax_time: [1, "9f0b4089f2579b41"],
+  inbox_catch_up: [1, "080d36e50ab3ec35"],
+  business_problem: [1, "7a13528603f52503"],
+  school_family: [1, "c3a02155653925dc"],
+  parents_affairs: [1, "58b56ae358677f5c"],
+  sole_trader: [1, "5c5c68a4cdee8eba"],
+  new_to_australia: [1, "a4ba91f01508738d"],
 };
 
 test("Warthog's guidance can't change without a new version", () => {
