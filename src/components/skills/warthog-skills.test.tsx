@@ -468,3 +468,9 @@ test("the Skills page's library shows Warthog's skills after the person's own", 
   assert.doesNotMatch(text(markup), /Always included · Read-only/, "the old read-only house card is gone");
   assert.ok(formFor(markup, HOUSE.key, "off"), "with its controls");
 });
+
+// get_context sends the house rules to every agent whatever the person does to the skill.
+test("Using Warthog says its rules reach every agent even when it's off or removed; other skills don't claim that", () => {
+  const text = render([HOUSE, LIFE_ADMIN]).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  assert.equal(text.split("Every agent gets them, even if you switch this skill off or remove it.").length - 1, 1, "once, on Using Warthog only");
+});

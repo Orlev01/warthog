@@ -223,7 +223,10 @@ function SkillCard({
               <Lock aria-hidden={true} className={`${ICON} text-fg-muted`} />
               Always applies
             </h4>
-            <p className="text-sm text-fg-muted">Warthog&apos;s rules for every agent. They apply whatever this skill says.</p>
+            <p className="text-sm text-fg-muted">
+              Warthog&apos;s rules for every agent. They apply whatever this skill says.
+              {skill.key === "using_warthog" ? " Every agent gets them, even if you switch this skill off or remove it." : null}
+            </p>
             <ul className="flex list-disc flex-col gap-1 ps-5 text-sm text-fg [overflow-wrap:anywhere]">
               {skill.rules.map((rule) => (
                 <li key={rule}>{rule}</li>
