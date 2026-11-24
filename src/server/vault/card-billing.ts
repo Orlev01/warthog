@@ -14,6 +14,7 @@ import {
   listCardBillingAddresses,
   ownsCardBillingAddress,
   saveCardBillingAddress,
+  type CardBillingAddress,
 } from "../db/card-billing-addresses";
 import type { CardMetadata } from "../db/cards";
 import { listIdentityFields, type IdentityField } from "../db/identity-fields";
@@ -65,15 +66,21 @@ function movingOnText(movingOn: Date | string | null): string | null {
   return typeof movingOn === "string" ? movingOn.slice(0, 10) : movingOn.toISOString().slice(0, 10);
 }
 
+// Already-decrypted reads a caller can pass in so nothing is decrypted twice.
+export interface DecryptedBillingSources {
+  readonly identityFields?: readonly IdentityField[];
+  readonly cardBillingAddresses?: readonly CardBillingAddress[];
+}
+
 // The billing text of each card, by card id: the owner's postal address or card-only address it
 // points at, or null when it has none or the reference doesn't resolve to one of theirs. Pass the
-// person's already-decrypted identity fields to avoid decrypting them twice.
+// person's already-decrypted identity fields and card-only addresses to avoid decrypting them twice.
 export async function resolveCardBilling(
   db: Db,
   userId: string,
   cards: readonly CardMetadata[],
   dek: Uint8Array,
-  options: { readonly identityFields?: readonly IdentityField[] } = {},
+  options: DecryptedBillingSources = {},
 ): Promise<Map<string, ResolvedBilling | null>> {
   const out = new Map<string, ResolvedBilling | null>();
   if (cards.length === 0) return out;
@@ -82,7 +89,9 @@ export async function resolveCardBilling(
     fields.filter((f) => f.userId === userId && f.kind === "postal_address").map((f) => [f.id, f.value] as const),
   );
   const needsEntries = cards.some((c) => c.billingEntryId !== null);
-  const entries = needsEntries ? new Map((await listCardBillingAddresses(db, userId, dek)).map((e) => [e.id, e.value] as const)) : new Map<string, string>();
+  const entries = needsEntries
+    ? new Map((options.cardBillingAddresses ?? (await listCardBillingAddresses(db, userId, dek))).map((e) => [e.id, e.value] as const))
+    : new Map<string, string>();
   for (const card of cards) {
     if (card.billingEntryId !== null) {
       const text = entries.get(card.billingEntryId);
@@ -105,7 +114,7 @@ export async function listBillingChoices(
   dek: Uint8Array,
   now: Date,
   cards: readonly CardMetadata[],
-  options: { readonly identityFields?: readonly IdentityField[] } = {},
+  options: DecryptedBillingSources = {},
 ): Promise<BillingChoice[]> {
   const fields = options.identityFields ?? (await listIdentityFields(db, userId, dek));
   const usedBy = (pick: (c: CardMetadata) => string | null, id: string) =>
@@ -120,7 +129,7 @@ export async function listBillingChoices(
       movingOn: movingOnText(f.movingOn),
       usedBy: usedBy((c) => c.billingAddressId, f.id),
     }));
-  const billing = (await listCardBillingAddresses(db, userId, dek)).map<BillingChoice>((e) => ({
+  const billing = (options.cardBillingAddresses ?? (await listCardBillingAddresses(db, userId, dek))).map<BillingChoice>((e) => ({
     id: e.id,
     value: e.value,
     source: "billing",
@@ -149,11 +158,14 @@ export async function applyBillingSelection(
 ): Promise<BillingRef | null> {
   if (selection.source === "postal") {
     if (!UUID.test(selection.id)) return null;
+    // The id the database holds, not the one sent: the reference is text, so an uppercase form
+    // would never match the address again (resolving, releasing, the "Make protected" guard).
     const found = await tx.query(
-      `SELECT 1 FROM identity_fields WHERE id = $1 AND user_id = $2 AND kind = 'postal_address'`,
+      `SELECT id::text AS id FROM identity_fields WHERE id = $1 AND user_id = $2 AND kind = 'postal_address'`,
       [selection.id, userId],
     );
-    return found.rows.length > 0 ? { billingAddressId: selection.id, billingEntryId: null } : null;
+    const row = found.rows[0];
+    return row ? { billingAddressId: String(row.id), billingEntryId: null } : null;
   }
   if (selection.source === "billing") {
     return (await ownsCardBillingAddress(tx, userId, selection.id)) ? { billingAddressId: null, billingEntryId: selection.id } : null;

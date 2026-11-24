@@ -98,6 +98,8 @@ test("a selection is applied only when it is the person's own address of the rig
     const apply = (sel: Parameters<typeof applyBillingSelection>[2]) => withTransaction(db, (tx) => applyBillingSelection(tx, a, sel, key));
 
     assert.deepEqual(await apply({ source: "postal", id: home.id }), { billingAddressId: home.id, billingEntryId: null });
+    // The id is stored in the database's own form, so an uppercase id still matches everywhere.
+    assert.deepEqual(await apply({ source: "postal", id: home.id.toUpperCase() }), { billingAddressId: home.id, billingEntryId: null });
     assert.equal(await apply({ source: "postal", id: bHome.id }), null, "not another person's postal address");
     assert.equal(await apply({ source: "postal", id: name.id }), null, "not a field that isn't an address");
     assert.equal(await apply({ source: "postal", id: "nope" }), null);

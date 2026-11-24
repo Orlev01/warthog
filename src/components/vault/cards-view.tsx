@@ -203,6 +203,8 @@ export interface ChangeBillingController {
   setNewValue(value: string): void;
   save(): Promise<void>;
   setChoices(choices: readonly BillingChoiceView[]): void;
+  // The card's address as the page now has it (after a save, the refresh moves it on).
+  setCurrent(current: { source: "postal" | "billing"; id: string } | null): void;
 }
 
 const CHANGE_FAILED_COPY = "We couldn't change the billing address just now. Please try again.";
@@ -215,6 +217,7 @@ export function createChangeBillingFlow(deps: {
   onChange?: () => void;
 }): ChangeBillingController {
   let choices = deps.choices;
+  let current = deps.current ?? null;
   let state: ChangeBillingState = { stage: "idle", key: "", newValue: "" };
   function set(next: Partial<ChangeBillingState>): void {
     state = { ...state, ...next };
@@ -238,13 +241,16 @@ export function createChangeBillingFlow(deps: {
   }
   return {
     getState: () => state,
-    open: () => set({ stage: "editing", key: initialBillingKey(choices, deps.current), newValue: "", error: undefined }),
+    open: () => set({ stage: "editing", key: initialBillingKey(choices, current), newValue: "", error: undefined }),
     cancel: () => set({ stage: "idle", error: undefined }),
     choose: (key) => set({ key, error: undefined, stage: state.stage === "error" ? "editing" : state.stage }),
     setNewValue: (value) => set({ newValue: value }),
     save,
     setChoices: (next) => {
       choices = next;
+    },
+    setCurrent: (next) => {
+      current = next;
     },
   };
 }
@@ -352,6 +358,7 @@ function SavedCardRow({
   }
   const change = changeRef.current;
   change.setChoices(billingAddresses);
+  change.setCurrent(current);
   const changing = change.getState();
   const deletesAddress = removingDeletesBillingAddress(card, billingAddresses);
 
@@ -387,7 +394,7 @@ function SavedCardRow({
         </div>
         {stage === "idle" || stage === "error" ? (
           <div className="flex shrink-0 flex-wrap gap-2">
-            {card.billing !== undefined && changing.stage === "idle" ? (
+            {card.billing !== undefined && (changing.stage === "idle" || changing.stage === "saved") ? (
               <Button
                 variant="ghost"
                 size="sm"

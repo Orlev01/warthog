@@ -35,7 +35,7 @@
 
 import { cardBillingAddressesSchema, sealedVaultSchema, type SealedVault } from "../../domain/data-transfer";
 import { addCard } from "../db/cards";
-import { saveCardBillingAddress } from "../db/card-billing-addresses";
+import { applyBillingSelection, lockCardBilling } from "../vault/card-billing";
 import { saveHighTierField } from "../db/high-tier-fields";
 import { listMethods } from "../db/vault-unlock-methods";
 import { HttpError } from "../http/validate";
@@ -316,6 +316,8 @@ export async function importExportDocument(
         throw new HttpError(409, "Set up your vault and save its recovery phrase before importing protected details");
       }
       for (const field of sealed.highTierFields) await saveHighTierField(tx, { ...field, userId });
+      // Serialised with the person's card billing changes, like every other billing write.
+      if (sealed.cards.length) await lockCardBilling(tx, userId);
       // Each card is re-linked to its billing address under its NEW id: an About you postal
       // address restored above, or a card-only address created now (once, however many cards
       // share it), re-encrypted under the importing person's DEK. A reference the export doesn't
@@ -329,8 +331,10 @@ export async function importExportDocument(
           billingEntryId = context.importedCardBilling.get(card.billingEntryId) ?? null;
           const value = context.cardBillingValues.get(card.billingEntryId);
           if (billingEntryId === null && value !== undefined) {
-            billingEntryId = (await saveCardBillingAddress(tx, { userId, value }, dek)).id;
-            context.importedCardBilling.set(card.billingEntryId, billingEntryId);
+            // An identical address the person already keeps (or one this file already restored
+            // under another id) is reused, as when adding a card.
+            billingEntryId = (await applyBillingSelection(tx, userId, { source: "new", value }, dek))?.billingEntryId ?? null;
+            if (billingEntryId !== null) context.importedCardBilling.set(card.billingEntryId, billingEntryId);
           }
         }
         if (billingAddressId === null && billingEntryId === null) cardsWithoutBillingAddress += 1;

@@ -199,6 +199,7 @@ test("migration 0123 keeps good card references and clears ones that were never 
         [randomUUID(), a, nickname, ref],
       );
     await insert("good", home.id);
+    await insert("good-uppercase", home.id.toUpperCase());
     await insert("deleted", randomUUID());
     await insert("other-person", bHome.id);
     await insert("not-an-address", name.id);
@@ -208,11 +209,12 @@ test("migration 0123 keeps good card references and clears ones that were never 
     const rows = (await db.query("SELECT nickname, billing_address_id, billing_entry_id FROM cards WHERE user_id = $1 ORDER BY nickname", [a])).rows;
     const byName = Object.fromEntries(rows.map((r) => [r.nickname, r]));
     assert.equal(byName.good!.billing_address_id, home.id, "the owner's own postal address is kept");
+    assert.equal(byName["good-uppercase"]!.billing_address_id, home.id, "an uppercase form of it is kept, in the usual form");
     for (const broken of ["deleted", "other-person", "not-an-address", "not-a-uuid"]) {
       assert.equal(byName[broken]!.billing_address_id, null, `${broken}: a broken reference becomes "no billing address"`);
       assert.equal(byName[broken]!.billing_entry_id, null);
     }
-    assert.equal(rows.length, 5, "no card is lost");
+    assert.equal(rows.length, 6, "no card is lost");
   } finally {
     await db.close();
   }

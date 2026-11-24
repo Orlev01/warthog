@@ -204,3 +204,22 @@ test("an export from before card-only billing addresses still imports its postal
     assert.equal(restored!.billingEntryId, null);
   } finally { await f.db.close(); }
 });
+
+test("importing a card-only address the person already has, or one text under two ids, keeps one address", async () => {
+  const f = await setup();
+  try {
+    const target = await f.person("dedupe");
+    await saveWrappedKey(f.db, { userId: target.userId, method: "passphrase", wrappedKey: "test-only-wrapped-key" });
+    await saveWrappedKey(f.db, { userId: target.userId, method: "recovery", wrappedKey: "test-only-recovery-key" });
+    const existing = await saveCardBillingAddress(f.db, { userId: target.userId, value: "PO Box 7, Hobart" }, target.dek);
+    const document = { version: 1, exportedAt: clock.now().toISOString(), profile: { fields: [], cardBillingAddresses: [{ id: "a", value: "PO Box 7, Hobart" }, { id: "b", value: "PO Box 7, Hobart" }] }, preferences: {}, skills: [], memory: [], rules: [], tasks: [], lifeAdmin: [], connections: [], activity: [] };
+    const numberCiphertext = await encryptValue(new Uint8Array(randomBytes(32)), "4242424242424242");
+    const card = { brand: "Visa", lastFour: "4242", expiryMonth: 9, expiryYear: 2030, numberCiphertext };
+    const protectedVault = { highTierFields: [], cards: [{ ...card, nickname: "One", billingEntryId: "a" }, { ...card, nickname: "Two", billingEntryId: "b" }] };
+    const response = await createImportHandler(f.deps)(request("/api/data/import", target.cookie, { document, protectedVault }));
+    assert.equal(response.status, 200);
+    const addresses = await listCardBillingAddresses(f.db, target.userId, target.dek);
+    assert.deepEqual(addresses.map((a) => a.id), [existing.id], "no duplicate of the same text");
+    assert.deepEqual((await listCards(f.db, target.userId)).map((c) => c.billingEntryId), [existing.id, existing.id]);
+  } finally { await f.db.close(); }
+});

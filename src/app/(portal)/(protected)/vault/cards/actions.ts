@@ -46,7 +46,7 @@ import {
   setCardBilling,
   type CardMetadata,
 } from "@/server/db/cards";
-import { deleteCardBillingAddressIfUnused } from "@/server/db/card-billing-addresses";
+import { deleteCardBillingAddressIfUnused, listCardBillingAddresses } from "@/server/db/card-billing-addresses";
 import {
   applyBillingSelection,
   listBillingChoices,
@@ -210,8 +210,10 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
     const cards = await listCards(db, session.userId);
     const dek = await dataKeyFor(session.userId);
     const fields = await listIdentityFields(db, session.userId, dek);
-    const resolved = await resolveCardBilling(db, session.userId, cards, dek, { identityFields: fields });
-    const billingAddresses = await listBillingChoices(db, session.userId, dek, clock.now(), cards, { identityFields: fields });
+    // Each source is decrypted once and shared by the cards' billing lines and the choices.
+    const sources = { identityFields: fields, cardBillingAddresses: await listCardBillingAddresses(db, session.userId, dek) };
+    const resolved = await resolveCardBilling(db, session.userId, cards, dek, sources);
+    const billingAddresses = await listBillingChoices(db, session.userId, dek, clock.now(), cards, sources);
     const defaultCardholderName = fields.find((field) => field.kind === "name")?.value ?? "";
     return {
       cards: cards.map((card) => ({ ...card, billing: resolved.get(card.id) ?? null })),

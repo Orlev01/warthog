@@ -822,3 +822,21 @@ test("removing the last card that uses a card-only address deletes the address t
   assert.equal(removingDeletesBillingAddress(travel, [{ ...BOX_CHOICE, usedBy: ["Travel backup", "Everyday spending"] }]), false, "another card still uses it");
   assert.equal(removingDeletesBillingAddress({ ...CARD_A, billingEntryId: null }, [HOME_CHOICE]), false, "an About you address is never deleted");
 });
+
+test("after a billing change is saved, Change opens again on the card's new address", async () => {
+  const flow = createChangeBillingFlow({
+    cardId: CARD_A.id,
+    current: { source: "postal", id: "addr-home" },
+    choices: [HOME_CHOICE, BOX_CHOICE],
+    changeBillingAddress: async () => ({ ok: true }),
+  });
+  flow.open();
+  flow.choose("billing:box-1");
+  await flow.save();
+  assert.equal(flow.getState().stage, "saved");
+  // The page refreshes the card: it now uses the card-only address.
+  flow.setCurrent({ source: "billing", id: "box-1" });
+  flow.open();
+  assert.equal(flow.getState().stage, "editing", "Change can be used again");
+  assert.equal(flow.getState().key, "billing:box-1", "it starts on the address just saved");
+});

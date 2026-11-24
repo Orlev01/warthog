@@ -41,6 +41,13 @@ ALTER TABLE cards ADD CONSTRAINT cards_one_billing_ref
   CHECK (billing_address_id IS NULL OR billing_entry_id IS NULL);
 CREATE INDEX cards_billing_entry_idx ON cards (user_id, billing_entry_id) WHERE billing_entry_id IS NOT NULL;
 
+-- A reference is compared in the usual lowercase form (an id is stored as text), so an uppercase
+-- form of the owner's own address is kept, written in that form.
+UPDATE cards
+   SET billing_address_id = lower(billing_address_id)
+ WHERE billing_address_id IS NOT NULL
+   AND billing_address_id <> lower(billing_address_id);
+
 UPDATE cards c
    SET billing_address_id = NULL
  WHERE billing_address_id IS NOT NULL

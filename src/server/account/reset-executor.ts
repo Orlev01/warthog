@@ -25,6 +25,7 @@ import { withTransaction } from "../db/index";
 import type { Db } from "../db/index";
 import type { ResetExecutor } from "../auth/account-reset";
 import { lockUserOAuthConnections } from "../oauth/connection-lock";
+import { lockCardBilling } from "../vault/card-billing";
 
 // Build the production ResetExecutor over the db.
 export function createResetExecutor(db: Db): ResetExecutor {
@@ -49,6 +50,9 @@ export function createResetExecutor(db: Db): ResetExecutor {
     // the same transaction; About you postal addresses are identity fields and are kept.
     async eraseVaultData(userId: string, outer?: Db): Promise<void> {
       await inTransaction(outer, async (tx) => {
+        // Serialised with card billing changes, so a card can't be pointed at an address this
+        // reset is deleting.
+        await lockCardBilling(tx, userId);
         await tx.query("DELETE FROM cards WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM card_billing_addresses WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM high_tier_fields WHERE user_id = $1", [userId]);

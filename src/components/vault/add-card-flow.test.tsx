@@ -1283,3 +1283,45 @@ test("W6 — a blank name on the card is refused on the device and nothing is se
   assertPlainFailure(flow.getState().error, "blank name on card");
   assert.match(flow.getState().error ?? "", /name on the card/i, "the copy says what to fix");
 });
+
+test("choosing an address after a billing error clears the error instead of moving it", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER });
+  flow.chooseBilling("");
+  await flow.submit();
+  assert.equal(flow.getState().errorField, "billing");
+  flow.chooseBilling("postal:addr-home");
+  assert.equal(flow.getState().error, undefined, "no error left to show anywhere");
+  assert.equal(flow.getState().status, "idle");
+});
+
+test("after the first typed address is saved, the next card starts with nothing chosen", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const flow = createAddCardFlow({
+    billingAddresses: [],
+    fetch: server.fetch,
+    startAuthentication: makePasskey().fn,
+    createVaultKey: makeCreateKey().fn,
+    addCard: addCard.fn,
+  });
+  assert.equal(flow.getState().billingKey, "new", "with nothing saved, the field is the way in");
+  flow.setNumber(VISA_NUMBER);
+  flow.setNickname("Everyday spending");
+  flow.setCardholderName("Phil Bos");
+  flow.setExpiryMonth("11");
+  flow.setExpiryYear("2029");
+  flow.setNewBillingAddress("PO Box 1");
+  await submitThroughPhrase(flow);
+  assert.equal(addCard.count, 1);
+  // The page refreshes with the address now saved.
+  flow.setBillingChoices([{ id: "box-1", value: "PO Box 1", source: "billing", usedBy: ["Everyday spending"] }]);
+  assert.equal(flow.getState().billingKey, "", "nothing is chosen for the next card");
+
+  // A person who chose "A different billing address" themselves keeps that choice on a refresh.
+  flow.chooseBilling("new");
+  flow.setBillingChoices([{ id: "box-1", value: "PO Box 1", source: "billing", usedBy: ["Everyday spending"] }]);
+  assert.equal(flow.getState().billingKey, "new");
+});

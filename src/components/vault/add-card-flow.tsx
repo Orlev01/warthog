@@ -213,6 +213,9 @@ function otherProblem(state: AddCardState): string | null {
 
 export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
   let choices: readonly BillingChoiceView[] = deps.billingAddresses ?? [];
+  // True once the person picks "A different billing address" themselves (with nothing saved the
+  // field is simply the only way in, which a refresh with saved addresses replaces with a choice).
+  let typedChosen = false;
   let state: AddCardState = {
     number: "",
     nickname: "",
@@ -297,7 +300,6 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         status: "added",
         error: undefined,
         errorField: undefined,
-        billingKey: initialBillingKey(choices),
         newBillingAddress: "",
         number: "",
         nickname: "",
@@ -307,12 +309,23 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         usePassphrase: false,
         passphrase: "",
       });
+      // The next card starts afresh: nothing chosen (or the field, with nothing saved). The page's
+      // refresh then brings the saved address in as a choice.
+      typedChosen = false;
+      set({ billingKey: initialBillingKey(choices) });
       deps.onAdded?.();
     } else if (result.reason === "billing_address_not_found") {
       set({ status: "error", error: BILLING_GONE_COPY, errorField: "billing", passphrase: "" });
     } else {
       set({ status: "error", error: SAVE_FAILED_COPY, passphrase: "" });
     }
+  }
+
+  // Choosing an address answers a billing problem, so it goes (it isn't moved to the general alert).
+  function chooseBilling(key: string): void {
+    if (key === NEW_BILLING_KEY) typedChosen = true;
+    const answered = state.errorField === "billing" ? { error: undefined, errorField: undefined, status: "idle" as const } : {};
+    set({ billingKey: key, ...answered });
   }
 
   async function submit(): Promise<void> {
@@ -373,15 +386,19 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     setExpiryYear: (value) => set({ expiryYear: value }),
     setBillingAddressId: (value) => {
       const match = choices.find((choice) => choice.id === value);
-      set({ billingKey: match ? choiceKey(match) : "", errorField: undefined });
+      chooseBilling(match ? choiceKey(match) : "");
     },
-    chooseBilling: (key) => set({ billingKey: key, errorField: undefined }),
+    chooseBilling,
     setNewBillingAddress: (value) => set({ newBillingAddress: value }),
     setBillingChoices: (next) => {
       choices = next;
-      // A chosen address that is no longer offered is unchosen; with none left, type one.
-      const stillThere = state.billingKey === NEW_BILLING_KEY || next.some((choice) => choiceKey(choice) === state.billingKey);
-      if (!stillThere || (next.length === 0 && state.billingKey !== NEW_BILLING_KEY)) set({ billingKey: initialBillingKey(next) });
+      // A chosen address that is no longer offered is unchosen, and so is the typed-address field
+      // the person didn't pick themselves once there are saved addresses to choose from.
+      const key = state.billingKey;
+      const keep =
+        key === NEW_BILLING_KEY ? typedChosen || next.length === 0 || state.newBillingAddress.trim() !== "" : key === "" || next.some((choice) => choiceKey(choice) === key);
+      const nextKey = keep ? key : initialBillingKey(next);
+      if (nextKey !== key) set({ billingKey: nextKey });
     },
     setUsePassphrase: (value) => set({ usePassphrase: value }),
     setPassphrase: (value) => set({ passphrase: value }),
