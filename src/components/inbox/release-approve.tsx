@@ -355,6 +355,8 @@ type ServerUnlockMaterial = {
   readonly wrapped: string | null;
   readonly params?: Record<string, unknown> | null;
   readonly options?: PublicKeyCredentialRequestOptionsJSON | null;
+  // Passkey envelopes saved per passkey (client/vault/device-vault.ts), by credential id.
+  readonly credentials?: readonly { readonly credentialId: string; readonly wrapped: string }[];
 };
 
 // Standard / URL-safe base64 → bytes (the salt is standard base64; a WebAuthn PRF result
@@ -402,17 +404,28 @@ async function defaultUnlockByPassphrase(passphrase: string): Promise<UnlockRequ
 // Passkey PRF → the PRF unlock material: run the WebAuthn assertion (the OS prompt; a
 // dismissed prompt rejects here), read the PRF output from the extension results, and
 // hand back the envelope + the PRF bytes.
-async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
-  const material = await fetchUnlockMaterial("passkey_prf");
-  if (material.wrapped == null || material.options == null) {
-    throw new Error("no passkey that can unlock your vault is set");
-  }
-  const assertion = await startVaultAuthentication(material.options);
+// The unlock request for the passkey that answered: its own envelope (a vault set up on a device
+// saves one per passkey, leaving the top-level `wrapped` empty), else an unlabelled pre-upgrade
+// envelope. Never another passkey's envelope (the same rule as device-vault.ts).
+export function passkeyUnlockRequest(
+  material: Pick<ServerUnlockMaterial, "wrapped" | "credentials">,
+  assertion: { id?: unknown; clientExtensionResults?: { prf?: { results?: { first?: unknown } } } },
+): UnlockRequest {
   const prf = assertion.clientExtensionResults?.prf?.results?.first;
-  if (typeof prf !== "string") {
+  const own = typeof assertion.id === "string" ? material.credentials?.find((entry) => entry.credentialId === assertion.id)?.wrapped : undefined;
+  const wrapped = own ?? material.wrapped;
+  if (typeof prf !== "string" || wrapped == null) {
     throw new Error("this passkey can't unlock your vault");
   }
-  return { method: "prf", material: { wrapped: material.wrapped }, secret: base64UrlToBytes(prf) };
+  return { method: "prf", material: { wrapped }, secret: base64UrlToBytes(prf) };
+}
+
+async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
+  const material = await fetchUnlockMaterial("passkey_prf");
+  if (material.options == null || (material.wrapped == null && (material.credentials?.length ?? 0) === 0)) {
+    throw new Error("no passkey that can unlock your vault is set");
+  }
+  return passkeyUnlockRequest(material, await startVaultAuthentication(material.options));
 }
 
 // Vault recovery phrase → the recovery unlock material (review fix W1): the envelope sealed
