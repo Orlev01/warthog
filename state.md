@@ -1,4 +1,20 @@
-# Delivery status — 24 November 2026 (several accounts per agent, Life admin tabs)
+# Delivery status — 24 November 2026 (card billing addresses, Life admin Add tab)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`49a0af82fde1aad96c0e15990599f0507dfc7885` runs as `warthog--r45311099130a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- PR #56: a card's billing address is one of the person's About you addresses or one typed for
+  their cards only, kept with the cards and never an everyday detail; saved cards show and change
+  it; approving a release with a passkey works for a vault set up on a device
+  ([ADR](docs/adr/card-billing-addresses.md)).
+- PR #57: Life admin has an Add tab (Fill in the rest, Add something yourself) apart from Records,
+  which keeps what's on file.
+
+Migration 0123 (94). See the [release record](docs/audit/card-billing-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (several accounts per agent, Life admin tabs)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

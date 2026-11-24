@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Card billing addresses and Life admin's Add tab, 24 November:** main `49a0af8` runs as
+`warthog--r45311099130a1`. PR #56 lets a card have its own billing address, kept with the card and
+never an everyday detail (an agent gets it only in an approved card release); saved cards show and
+change it, the Inbox "Add a card" link comes back to the request, and approving a release with a
+passkey works for a vault set up on a device. PR #57 moves Fill in the rest and Add something
+yourself from Records to a new Add tab. Migration 0123 (94). See the
+[release record](card-billing-release-2026-11-24.md).
+
 **Several accounts per agent and Life admin's four tabs, 24 November:** main `873ab68` runs as
 `warthog--r45300201976a1`. PR #55 lets one agent use several accounts of a service, each with its
 own settings: a mail search covers every inbox the agent may read, ids carry their inbox, and
