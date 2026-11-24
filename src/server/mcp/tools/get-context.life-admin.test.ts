@@ -18,12 +18,13 @@ import { freshDb } from "../../../test/db";
 import { localAesKeyWrapper } from "../../crypto/key-wrapper";
 import { fixedClock } from "../../seams/clock";
 import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
+import { PROFILE_SKILL } from "../../../domain/life-admin/profile-skill";
 import type { AgentConnection } from "../context";
 
 import { grantServices } from "../../../test/grants";
 const clock = fixedClock(new Date("2026-11-23T01:00:00.000Z"));
 
-async function setup(grants: { recordsAccess: boolean; grantedConnectors?: string[]; recordIds?: string[] }) {
+async function setup(grants: { recordsAccess: boolean; grantedConnectors?: string[]; recordIds?: string[]; recordsWrite?: boolean }) {
   const db = await freshDb();
   const keyWrapper = localAesKeyWrapper(randomBytes(32));
   const dek = randomBytes(32);
@@ -34,7 +35,9 @@ async function setup(grants: { recordsAccess: boolean; grantedConnectors?: strin
     userId: user.id, connectionId, grantedConnectors: grants.grantedConnectors ?? [], readTools: true, changeTools: "allow",
     identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true,
     sharing: false, rulesScope: [], rateLimit: 120, recordsAccess: grants.recordsAccess, tasksAccess: true,
-    ...(grants.recordIds ? { resourceControls: { recordIds: grants.recordIds } } : {}),
+    ...(grants.recordIds || grants.recordsWrite === false
+      ? { resourceControls: { ...(grants.recordIds ? { recordIds: grants.recordIds } : {}), ...(grants.recordsWrite === false ? { recordsWrite: false } : {}) } }
+      : {}),
   } as Parameters<typeof upsertPermissions>[1]);
   const connection = { userId: user.id, connectionId, agentId: agent.id, active: true } as unknown as AgentConnection;
   const deps = { db, keyWrapper, clock };
@@ -73,13 +76,61 @@ test("the summary counts only the records this agent may see", async () => {
   } finally { await t.db.close(); }
 });
 
-test("only an agent that can read the person's mail is offered the chance to fill life admin in", async () => {
+// Building a profile (docs/adr/profile-build.md): the offer goes to an agent that can read the
+// person's email, calendar or files through Warthog's own connectors (connected, and readable by
+// this agent) and save records, and names only what it can read.
+test("an agent that can read the person's email, calendar or files is offered the chance to build their profile", async () => {
   const mail = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail"] });
   try {
-    assert.match((await mail.context.handle(mail.connection)).lifeAdmin?.next ?? "", /look through your email/);
+    const next = (await mail.context.handle(mail.connection)).lifeAdmin?.next ?? "";
+    assert.match(next, /build your profile/);
+    assert.match(next, /go through your email for/);
+    assert.match(next, new RegExp(`"${PROFILE_SKILL.title}"`));
   } finally { await mail.db.close(); }
-  const noMail = await setup({ recordsAccess: true, grantedConnectors: ["google-calendar"] });
+  const calendar = await setup({ recordsAccess: true, grantedConnectors: ["google-calendar", "google-drive"] });
   try {
-    assert.equal((await noMail.context.handle(noMail.connection)).lifeAdmin?.next, undefined);
-  } finally { await noMail.db.close(); }
+    assert.match((await calendar.context.handle(calendar.connection)).lifeAdmin?.next ?? "", /go through your calendar and files/);
+  } finally { await calendar.db.close(); }
+});
+
+test("no offer for a service that asks before every read, an account that needs reconnecting, or an agent that can't save records", async () => {
+  const notion = await setup({ recordsAccess: true, grantedConnectors: ["notion"] });
+  try {
+    assert.equal((await notion.context.handle(notion.connection)).lifeAdmin?.next, undefined);
+  } finally { await notion.db.close(); }
+  const expired = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail"] });
+  try {
+    await expired.db.query("UPDATE connections SET status = 'needs_reconnect' WHERE user_id = $1", [expired.userId]);
+    assert.equal((await expired.context.handle(expired.connection)).lifeAdmin?.next, undefined);
+  } finally { await expired.db.close(); }
+  const readOnly = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail"], recordsWrite: false });
+  try {
+    const view = await readOnly.context.handle(readOnly.connection);
+    assert.equal(view.lifeAdmin?.next, undefined);
+    assert.ok(!view.skills.some((entry) => entry.title === PROFILE_SKILL.title), "no profile skill without records write");
+    assert.equal((await readOnly.skill.handle({ title: PROFILE_SKILL.title }, readOnly.connection)).status, "not_available");
+  } finally { await readOnly.db.close(); }
+});
+
+test("the profile skill is listed for an agent that may save records, and names only what it can read", async () => {
+  const t = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail", "google-drive"] });
+  try {
+    const view = await t.context.handle(t.connection);
+    assert.ok(view.skills.some((entry) => entry.title === PROFILE_SKILL.title));
+    const found = await t.skill.handle({ title: PROFILE_SKILL.title }, t.connection);
+    assert.equal(found.status, "found");
+    const text = (found as { text: string }).text;
+    assert.match(text, /^Email$/m);
+    assert.match(text, /^Files$/m);
+    assert.doesNotMatch(text, /^Calendar$/m);
+  } finally { await t.db.close(); }
+  const none = await setup({ recordsAccess: true });
+  try {
+    const found = await none.skill.handle({ title: PROFILE_SKILL.title }, none.connection);
+    assert.match((found as { text: string }).text, /You can't read anything through Warthog yet/, "the skill still explains how to start");
+  } finally { await none.db.close(); }
+  const without = await setup({ recordsAccess: false, grantedConnectors: ["google-gmail"] });
+  try {
+    assert.equal((await without.skill.handle({ title: PROFILE_SKILL.title }, without.connection)).status, "not_available");
+  } finally { await without.db.close(); }
 });

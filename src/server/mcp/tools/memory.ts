@@ -27,6 +27,7 @@
 // by the pipeline that routes `remember` (Warthog writes the record, principle 14).
 
 import { savedByResolver, type SavedBy } from "../../agents/saved-by";
+import { neverKeptMessage, neverKeptRule, tidyKeptText } from "../../../domain/content/never-kept";
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
@@ -58,7 +59,12 @@ const MAX_REASON = 2000;
 // without it) plus the universal OPTIONAL `reason`. A z.object, so its `.shape`
 // exposes each field.
 export const rememberSchema = z.object({
-  content: z.string().min(1).max(MAX_CONTENT),
+  // What Warthog never keeps is refused here, at the schema, so a refused call is recorded
+  // without its parameters (docs/adr/profile-build.md); card numbers are masked when saved.
+  content: z.string().min(1).max(MAX_CONTENT).superRefine((value, ctx) => {
+    const rule = neverKeptRule(value);
+    if (rule) ctx.addIssue({ code: "custom", message: neverKeptMessage("The memory", rule) });
+  }),
   reason: z.string().max(MAX_REASON).optional(),
 });
 
@@ -190,7 +196,7 @@ export function createRememberTool(deps: MemoryToolDeps): RememberTool {
         db,
         {
           userId: connection.userId,
-          content: parsed.content,
+          content: tidyKeptText(parsed.content),
           sourceAgentId: connection.agentId,
           scope,
         },

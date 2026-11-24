@@ -87,7 +87,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { createRememberTool, createSearchMemoryTool } from "./memory";
+import { createRememberTool, createSearchMemoryTool, rememberSchema } from "./memory";
 import { createMemory, listMemoriesForUser } from "../../db/memories";
 import { createAgentCallPipeline, type AgentCall, type AgentCallResult } from "../pipeline";
 import { createRateLimiter } from "../rate-limit";
@@ -572,3 +572,36 @@ function subschema(
     ?.shape;
   return shape?.[field];
 }
+
+// Building a profile (docs/adr/profile-build.md): an agent reading a lot of other people's writing
+// can't save what Warthog never keeps into a memory; card numbers are masked.
+test("remember refuses what Warthog never keeps, naming the rule and never the value; cards are masked", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "never-kept", keyWrapper);
+    const conn = connectionFor(userId);
+    await grant(db, userId, conn.connectionId, { sharing: false });
+    const tool = createRememberTool(memoryDeps(db, keyWrapper, fixedClock(NOW)));
+    for (const [content, rule] of [
+      ["Their TFN is 123 456 782", /tax file number/],
+      ["Pay rent to BSB 062-000 account 12345678", /BSB and account number/],
+      ["Pay with BPAY biller code 12345 ref 9876543210", /payment details/],
+    ] as const) {
+      // The agent gets the schema's message (the MCP layer checks the input against it first)…
+      const parsed = rememberSchema.safeParse({ content });
+      assert.equal(parsed.success, false);
+      const message = parsed.error!.issues.map((issue) => issue.message).join(" ");
+      assert.match(message, rule);
+      assert.ok(!message.includes("123 456 782") && !message.includes("12345678") && !message.includes("9876543210"), "never the value");
+      // …and the tool itself refuses with the boundary's fixed 4xx.
+      await assert.rejects(() => tool.handle({ content }, conn), /Invalid request parameters/);
+    }
+    assert.equal((await listMemoriesForUser(db, userId, dek)).length, 0, "nothing was saved");
+
+    await tool.handle({ content: "Gym membership is on card 4111 1111 1111 1111" }, conn);
+    assert.equal((await listMemoriesForUser(db, userId, dek))[0]!.content, "Gym membership is on card ••••1111");
+  } finally {
+    await db.close();
+  }
+});

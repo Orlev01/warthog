@@ -28,6 +28,16 @@
 // these core tools (Warthog writes the record, principle 14).
 
 import { savedByResolver, type SavedBy, type SavedByResolver } from "../../agents/saved-by";
+import { neverKeptMessage, neverKeptRule, tidyKeptText } from "../../../domain/content/never-kept";
+
+// What Warthog never keeps is refused in a task's title and notes, at the schema, so a refused call
+// is recorded without its parameters (docs/adr/profile-build.md); card numbers are masked.
+function neverKept(what: string) {
+  return (value: string, ctx: z.RefinementCtx) => {
+    const rule = neverKeptRule(value);
+    if (rule) ctx.addIssue({ code: "custom", message: neverKeptMessage(what, rule) });
+  };
+}
 import { z } from "zod";
 import { getRecordForUser } from "../../db/life-admin-records";
 import { visibleTo } from "./records";
@@ -71,7 +81,7 @@ export const listTasksSchema = z.object({ reason });
 // create_task's input: a REQUIRED non-empty `title`, an OPTIONAL `assignee` (a
 // specific agent id, defaulting to 'any'), plus the universal OPTIONAL `reason`.
 export const createTaskSchema = z.object({
-  title: z.string().min(1).max(MAX_TITLE),
+  title: z.string().min(1).max(MAX_TITLE).superRefine(neverKept("The task")),
   assignee: z.string().min(1).max(MAX_ASSIGNEE).optional(),
   recordId: z.uuid().optional().describe("The life-admin record this task is about (an id from list_records), e.g. \"finalise the motorcycle insurance\"."),
   reason,
@@ -82,7 +92,7 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = z.object({
   id: z.string().min(1).max(MAX_ID),
   status: z.enum(["open", "in_progress", "done"]).optional(),
-  note: z.string().min(1).max(MAX_NOTE).optional(),
+  note: z.string().min(1).max(MAX_NOTE).superRefine(neverKept("The note")).optional(),
   reason,
 });
 
@@ -275,7 +285,7 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
         db,
         {
           userId: connection.userId,
-          title: parsed.title,
+          title: tidyKeptText(parsed.title),
           assignee: parsed.assignee ?? "any",
           createdBy: { kind: "agent", agentId: connection.agentId },
           ...(parsed.recordId ? { recordId: parsed.recordId } : {}),
@@ -308,7 +318,7 @@ export function createUpdateTaskTool(deps: TasksToolDeps): UpdateTaskTool {
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
       const changed = await changeTaskAsAgent(db, {
         userId: connection.userId, agentId: connection.agentId,
-        id: parsed.id, status: parsed.status, note: parsed.note,
+        id: parsed.id, status: parsed.status, note: parsed.note === undefined ? undefined : tidyKeptText(parsed.note),
       }, dek, (deps.clock ?? systemClock).now());
       return changed ? { status: "updated", id: parsed.id, ...changed }
         : { status: "refused", reason: "Task unavailable, completed, or claimed by another agent." };

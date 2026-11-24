@@ -11,6 +11,7 @@ export type MemoryNotice =
   | "deleted"
   | "blank"
   | "problem"
+  | "never_kept"
   | "storage_full";
 
 // What happened, in plain words; a problem names what failed and what to do next.
@@ -21,6 +22,10 @@ const NOTICES: Record<MemoryNotice, { readonly tone: NoticeTone; readonly text: 
   deleted: { tone: "success", text: "Memory deleted." },
   blank: { tone: "error", text: "Type what to remember. A memory can't be blank, so nothing was saved." },
   problem: { tone: "error", text: "We couldn't save that change to your memory. Please try again." },
+  never_kept: {
+    tone: "error",
+    text: "That looks like a tax file number, password or code, bank account number, ID number or payment details. Warthog never keeps those in memory, so nothing was saved.",
+  },
   storage_full: {
     tone: "error",
     text: "Storage limit reached. Remove unused items or reduce their size before saving.",

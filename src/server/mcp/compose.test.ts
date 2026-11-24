@@ -719,17 +719,19 @@ test("D4: a released value echoed in a later tool call is redacted from the acti
     }
     const dispatch = createMcpDispatch({ db, config });
 
+    // log_activity, whose reason is kept as the agent wrote it (remember now refuses ID numbers
+    // outright, docs/adr/profile-build.md, so it can't be the carrier here).
     const content = "My passport is PA1234567, licence ab 123 456";
-    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("remember", { content }))));
-    assert.notEqual(rpc.result?.isError, true, `remember succeeds, got: ${JSON.stringify(rpc)}`);
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("log_activity", { reason: content }))));
+    assert.notEqual(rpc.result?.isError, true, `log_activity succeeds, got: ${JSON.stringify(rpc)}`);
 
     const entries = await listActivity(db, userId, { agentId }, dek);
-    const entry = entries.find((candidate) => candidate.tool === "remember");
-    assert.ok(entry, "the remember call was recorded");
+    const entry = entries.find((candidate) => candidate.tool === "log_activity");
+    assert.ok(entry, "the log_activity call was recorded");
     const stored = JSON.stringify(entry!.payload);
     assert.ok(!stored.includes("PA1234567"), "the released passport number is not stored");
     assert.ok(!/ab 123 456/i.test(stored), "the released licence is not stored in another surface form");
-    assert.equal(stored.split("[released value]").length - 1, 2, "both values are replaced by the marker");
+    assert.ok(stored.split("[released value]").length - 1 >= 2, "both values are replaced by the marker (wherever the reason is kept)");
   } finally {
     await db.close();
   }

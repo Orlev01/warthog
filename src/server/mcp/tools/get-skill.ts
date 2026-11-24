@@ -28,6 +28,10 @@ import { getSkillText } from "../../db/skills";
 import { getUserById } from "../../db/users";
 import { HOUSE_SKILL } from "../../../domain/skills/index";
 import { LIFE_ADMIN_SKILL, lifeAdminSkillText } from "../../../domain/life-admin/skill";
+import { PROFILE_SKILL, profileSkillText } from "../../../domain/life-admin/profile-skill";
+import { readableSources } from "../../../domain/life-admin/profile-sources";
+import { accountPolicy } from "../../../domain/permissions/account-access";
+import { listConnectionsForUser } from "../../db/connections";
 import { getConnectionPermissions } from "../../db/agent-permissions";
 import { catalogueFor } from "../../life-admin/catalogue";
 import type { KeyWrapper } from "../../crypto/key-wrapper";
@@ -172,6 +176,25 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
         const person = await catalogueFor(db, connection.userId, await dataKeyFor(connection.userId));
         const notForMe = Object.entries(person.settings).filter(([, setting]) => setting === "not_for_me").map(([id]) => id);
         return { status: "found", title: LIFE_ADMIN_SKILL.title, text: lifeAdminSkillText(person.catalogue, { notForMe }) };
+      }
+
+      // Warthog's "Building a profile" skill, for an agent that may save records
+      // (docs/adr/profile-build.md). Built for this person (what's not for them) and this agent
+      // (what it can read through Warthog's own connectors, connected and readable by it).
+      if (parsed.title === PROFILE_SKILL.title && !parsed.file) {
+        const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+        if (!permissions?.recordsAccess || permissions.resourceControls?.recordsWrite === false) {
+          return { status: "not_available", reason: NOT_AVAILABLE_REASON };
+        }
+        const person = await catalogueFor(db, connection.userId, await dataKeyFor(connection.userId));
+        const notForMe = Object.entries(person.settings).filter(([, setting]) => setting === "not_for_me").map(([id]) => id);
+        const connected = new Set((await listConnectionsForUser(db, connection.userId)).filter((account) => account.status === "connected").map((account) => account.id));
+        const sources = readableSources(permissions.accounts.map((grant) => ({
+          connectorId: grant.connectorId,
+          connected: connected.has(grant.accountId),
+          reads: accountPolicy(grant, permissions).readTools,
+        })));
+        return { status: "found", title: PROFILE_SKILL.title, text: profileSkillText(person.catalogue, { sources, aboutYou: false, notForMe }) };
       }
 
       // A personal skill: taking the OWNING person and the agent from the connection
