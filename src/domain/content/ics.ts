@@ -5,7 +5,7 @@
 // linear line parser for the handful of iCalendar fields an agent needs to add an invitation
 // to a calendar: what, when, where and who sent it.
 
-import { cleanText, type FilterCounts } from "./text-filters";
+import { cleanText, type CleanOptions, type FilterCounts } from "./text-filters";
 
 /** The event an invitation describes. */
 export interface Invitation {
@@ -23,17 +23,17 @@ export interface Invitation {
 const DATE_TIME = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/;
 
 // A time zone name as written (Olson or Windows style), cleaned and with nothing else in it.
-function zoneName(tzid: string, counts: FilterCounts): string {
-  return cleanText(tzid.replace(/^"|"$/g, ""), counts).replace(/[^\w/+.():, -]/g, "").trim().slice(0, 60);
+function zoneName(tzid: string, counts: FilterCounts, options: CleanOptions): string {
+  return cleanText(tzid.replace(/^"|"$/g, ""), counts, options).replace(/[^\w/+.():, -]/g, "").trim().slice(0, 60);
 }
 
 // "20261120T100000Z" → "2026-11-20 10:00 UTC"; "20261120" → "2026-11-20"; with a TZID it keeps the zone.
-function when(value: string, tzid: string | undefined, counts: FilterCounts): string | undefined {
+function when(value: string, tzid: string | undefined, counts: FilterCounts, options: CleanOptions): string | undefined {
   const match = DATE_TIME.exec(value.trim());
   if (!match) return undefined;
   const [, y, m, d, hh, mm, , z] = match;
   if (!hh) return `${y}-${m}-${d}`;
-  const named = !z && tzid ? zoneName(tzid, counts) : "";
+  const named = !z && tzid ? zoneName(tzid, counts, options) : "";
   const zone = z ? " UTC" : named ? ` (${named})` : "";
   return `${y}-${m}-${d} ${hh}:${mm}${zone}`;
 }
@@ -74,8 +74,8 @@ function splitLine(line: string): { params: string[]; value: string } | null {
   return null;
 }
 
-/** The first event of an iCalendar document, or null when there is none. */
-export function parseInvitation(ics: string, counts: FilterCounts): Invitation | null {
+/** The first event of an iCalendar document, or null when there is none. Its text is checked at the person's level (`options.level`). */
+export function parseInvitation(ics: string, counts: FilterCounts, options: CleanOptions = {}): Invitation | null {
   // Unfold continuation lines (a line starting with a space or tab continues the one above).
   const lines = ics.slice(0, 200_000).replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
   let method: string | undefined;
@@ -96,11 +96,11 @@ export function parseInvitation(ics: string, counts: FilterCounts): Invitation |
     }
   }
   if (!inEvent) return null;
-  const text = (key: string, max: number) => (fields[key] ? cleanText(unescape(fields[key]!.value).slice(0, max), counts) : undefined);
-  const organizer = fields.ORGANIZER ? cleanText(fields.ORGANIZER.value.replace(/^mailto:/i, "").trim().slice(0, 254), counts) : undefined;
-  const start = fields.DTSTART ? when(fields.DTSTART.value, fields.DTSTART.tzid, counts) : undefined;
+  const text = (key: string, max: number) => (fields[key] ? cleanText(unescape(fields[key]!.value).slice(0, max), counts, options) : undefined);
+  const organizer = fields.ORGANIZER ? cleanText(fields.ORGANIZER.value.replace(/^mailto:/i, "").trim().slice(0, 254), counts, options) : undefined;
+  const start = fields.DTSTART ? when(fields.DTSTART.value, fields.DTSTART.tzid, counts, options) : undefined;
   const allDay = fields.DTSTART && fields.DTEND && start !== undefined && !start.includes(":");
-  const end = allDay ? lastAllDay(fields.DTSTART!.value, fields.DTEND!.value) : fields.DTEND ? when(fields.DTEND.value, fields.DTEND.tzid, counts) : undefined;
+  const end = allDay ? lastAllDay(fields.DTSTART!.value, fields.DTEND!.value) : fields.DTEND ? when(fields.DTEND.value, fields.DTEND.tzid, counts, options) : undefined;
   const title = text("SUMMARY", 300);
   const location = text("LOCATION", 500);
   const uid = text("UID", 255);

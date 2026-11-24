@@ -65,6 +65,7 @@ const KIND_LABELS: Record<string, string> = {
   connection_change: "Connection change",
   permission_change: "Permission change",
   agent_defaults_change: "Agent defaults change",
+  read_level_change: "What agents see changed",
   skill_access_change: "Skill access change",
   memory_scope_change: "Memory sharing change",
   rule_created: "Rule created",

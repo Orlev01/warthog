@@ -502,15 +502,15 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     buildCoreTool(spec, pipeline),
   );
 
-  // The collapse helpers served IN PLACE OF a large permitted connector set (design
-  // §6.2). They are not part of the always-available core, so a small set is never
-  // collapsed into them.
+  // find_tools and call_tool: served IN PLACE OF a large permitted connector set (design §6.2),
+  // and alongside a small one, so an agent whose app still has an older tool list can reach a
+  // service the person granted since (docs/adr/several-accounts-per-agent.md).
   const collapseHelpers: readonly ToolDefinition[] = [
     buildCoreTool(
       {
         name: "find_tools",
         description:
-          "Find permitted connected-service tools by name or description. Results include schemas and a pagination cursor.",
+          "Find the connected-service tools you may use, by name or description, including any the person granted after your tool list was loaded. Results include schemas and a pagination cursor.",
         makesChange: false,
         schema: findToolsSchema,
       },
@@ -520,7 +520,7 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       {
         name: "call_tool",
         description:
-          "Call a permitted tool from find_tools with its exact name and input object in arguments.",
+          "Call a tool from find_tools with its exact name and input object in arguments. Use it for a tool that isn't in your tool list yet.",
         makesChange: false,
         schema: callToolSchema,
       },
@@ -567,31 +567,31 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
         }
       }
 
-      // Over the limit the connector tools collapse into find_tools + call_tool; the
-      // core tools are always served either way.
-      if (!options.expanded && connectorDefs.length > CONNECTOR_TOOL_LIMIT) {
-        const callTool: ToolDefinition = {
-          ...collapseHelpers[1]!,
-          async handle(input, connection) {
-            const parsed = parseParams(callToolSchema, input);
-            const target = connectorDefs.find(
-              (tool) => tool.name === parsed.name,
-            );
-            // The actual tool is audited and gated with its own trusted declaration.
-            // Unknown targets take the normal audited refusal path.
-            if (!target) return collapseHelpers[1]!.handle(parsed, connection);
-            return target.handle(
-              {
-                ...parsed.arguments,
-                ...(parsed.reason ? { reason: parsed.reason } : {}),
-              },
-              connection,
-            );
-          },
-        };
-        return [...coreTools, collapseHelpers[0]!, callTool];
-      }
-      return [...coreTools, ...connectorDefs];
+      // find_tools itself lists the connector tools alone.
+      if (options.expanded) return [...coreTools, ...connectorDefs];
+      // call_tool routes to a permitted tool by name: the actual tool is audited and gated with
+      // its own trusted declaration, and unknown targets take the normal audited refusal path.
+      const callTool: ToolDefinition = {
+        ...collapseHelpers[1]!,
+        async handle(input, connection) {
+          const parsed = parseParams(callToolSchema, input);
+          const target = connectorDefs.find(
+            (tool) => tool.name === parsed.name,
+          );
+          if (!target) return collapseHelpers[1]!.handle(parsed, connection);
+          return target.handle(
+            {
+              ...parsed.arguments,
+              ...(parsed.reason ? { reason: parsed.reason } : {}),
+            },
+            connection,
+          );
+        },
+      };
+      // Over the limit the connector tools collapse into find_tools + call_tool; the core tools
+      // are always served either way.
+      if (connectorDefs.length > CONNECTOR_TOOL_LIMIT) return [...coreTools, collapseHelpers[0]!, callTool];
+      return [...coreTools, ...connectorDefs, collapseHelpers[0]!, callTool];
     },
   };
 }

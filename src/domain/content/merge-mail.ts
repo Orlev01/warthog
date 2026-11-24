@@ -55,10 +55,19 @@ function tagged(message: unknown, handle: string): unknown {
   return out;
 }
 
-/** A checked mail view (a search, a message or one of its links) with every message id and thread id carrying `handle`. Anything else is returned as it is. */
-export function tagMailIds(result: unknown, handle: string): unknown {
+/**
+ * A checked mail view (a search, a message or one of its links) with every message id and thread
+ * id carrying `handle`. Given `account`, each message of a search also names its inbox, the same
+ * way a search across inboxes does. Anything else is returned as it is.
+ */
+export function tagMailIds(result: unknown, handle: string, account?: string): unknown {
   if (!isRecord(result) || typeof result.notice !== "string") return result;
-  if (Array.isArray(result.messages)) return { ...result, messages: result.messages.map((m) => tagged(m, handle)) };
+  if (Array.isArray(result.messages)) {
+    return { ...result, messages: result.messages.map((m) => {
+      const out = tagged(m, handle);
+      return account && isRecord(out) ? { account, ...out } : out;
+    }) };
+  }
   if (isRecord(result.message)) return { ...result, message: tagged(result.message, handle) };
   return result;
 }
@@ -95,6 +104,53 @@ function skipOf(nextLink: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// A further fetch from one inbox, to fill the room the others left on a page.
+export interface PageFill {
+  // Which inbox, as its place in the list.
+  readonly index: number;
+  // How many more results to ask it for.
+  readonly size: number;
+  // Where its next page starts: Gmail's page token, or Outlook's $skip.
+  readonly pageToken?: string;
+  readonly skip?: string;
+}
+
+/**
+ * After every inbox's share of a page, the room left over goes to the inboxes that filled their
+ * share and have more, evenly: one inbox with many results isn't cut short because another had
+ * none. Empty when the page is full or no inbox has more.
+ */
+export function pageFills(inboxes: readonly InboxSearch[], share: number, page: number): PageFill[] {
+  const room = page - inboxes.reduce((sum, inbox) => sum + countOf(inbox), 0);
+  if (room <= 0) return [];
+  const more = inboxes.flatMap((inbox, index) => {
+    if (inbox.status !== "searched" || countOf(inbox) < share) return [];
+    const pageToken = typeof inbox.view?.nextPageToken === "string" ? inbox.view.nextPageToken : undefined;
+    const skip = skipOf(inbox.view?.nextLink);
+    return pageToken || skip ? [{ index, ...(pageToken ? { pageToken } : {}), ...(skip ? { skip } : {}) }] : [];
+  });
+  if (more.length === 0) return [];
+  const size = Math.ceil(room / more.length);
+  return more.map((inbox) => ({ ...inbox, size }));
+}
+
+/** One inbox's first page and its fill as one page: the messages in order, and the fill's next page. */
+export function withFill(first: InboxSearch, fill: InboxSearch): InboxSearch {
+  if (first.status !== "searched" || fill.status !== "searched" || !first.view || !fill.view) return first;
+  const { nextPageToken: _token, nextLink: _link, ...rest } = first.view;
+  const earlier = Array.isArray(first.view.messages) ? first.view.messages : [];
+  const later = Array.isArray(fill.view.messages) ? fill.view.messages : [];
+  return {
+    ...first,
+    view: {
+      ...rest,
+      messages: [...earlier, ...later],
+      ...(typeof fill.view.nextPageToken === "string" ? { nextPageToken: fill.view.nextPageToken } : {}),
+      ...(typeof fill.view.nextLink === "string" ? { nextLink: fill.view.nextLink } : {}),
+    },
+  };
 }
 
 // When a message was received, for ordering; one with no readable date sorts last.

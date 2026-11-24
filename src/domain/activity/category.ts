@@ -74,6 +74,8 @@ export const ACCESS_KINDS: readonly string[] = [
   "connection_change",
   "permission_change",
   "agent_defaults_change",
+  // How much Warthog hides from what agents read (docs/adr/read-side-protection.md, 24 Nov 2026).
+  "read_level_change",
   "skill_access_change",
   "memory_scope_change",
   "client_observed",

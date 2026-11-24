@@ -278,6 +278,31 @@ test("one search covers every inbox the agent may read: merged newest first, eac
   } finally { await db.close(); }
 });
 
+test("the room an empty inbox leaves on a page is filled from an inbox that has more", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seed(db, config);
+    const many = Array.from({ length: 8 }, (_, i) => mail(`h${i}`, "AGL <hi@agl.com.au>", `Bill ${i}`, 20 - i));
+    // Home's search pages through its eight emails by token; Work has none.
+    const paged = (url: URL) => {
+      const start = Number(url.searchParams.get("pageToken") ?? "0");
+      const size = Number(url.searchParams.get("maxResults") ?? "10");
+      const slice = many.slice(start, start + size);
+      return Response.json({ messages: slice.map((m) => ({ id: m.id, threadId: m.threadId })), ...(start + size < many.length ? { nextPageToken: String(start + size) } : {}) });
+    };
+    const net = gmail({ home: { list: paged, messages: many }, Work: { messages: [] } });
+    const dispatch = createMcpDispatch({ db, config, fetch: net.fetch });
+    const rpc = await readRpc(await dispatch(connectionId, call("google-gmail__search", { query: { q: "from:agl" } })));
+    const view = viewOf(rpc);
+    assert.equal(view.messages.length, 8, "all eight, not just home's share of five");
+    assert.deepEqual(view.accounts.map((a) => [a.account, a.count]), [["home@example.com", 8], ["Work@Example.com", 0]]);
+    const lists = net.sent.filter((s) => s.url.pathname.endsWith("/messages") && s.token === "Bearer tok-home");
+    assert.deepEqual(lists.map((s) => [s.url.searchParams.get("pageToken"), s.url.searchParams.get("maxResults")]), [[null, "5"], ["5", "5"]]);
+    assert.equal(view.coverage, "Searched 2 inboxes: home@example.com (8), Work@Example.com (0).");
+  } finally { await db.close(); }
+});
+
 test("an inbox that needs reconnecting is named and skipped; the rest are still searched; if every inbox fails, the search fails", async () => {
   const db = await freshDb();
   try {
@@ -481,5 +506,25 @@ test("a search across inboxes is one activity entry, naming each inbox's outcome
       { id: work, label: "Work@Example.com", outcome: "needs reconnecting", count: 0 },
     ]);
     assert.ok(!JSON.stringify(payload).includes("Statement"), "no subject or text is kept");
+  } finally { await db.close(); }
+});
+
+test("an app with an older tool list reaches a service through find_tools and call_tool", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seed(db, config);
+    const net = gmail({ home: { messages: [mail("h1", "AGL <hi@agl.com.au>", "Bill", 20)] }, Work: { messages: [] } });
+    const dispatch = createMcpDispatch({ db, config, fetch: net.fetch });
+    // A fresh list request: a request's body can be read only once.
+    const listed = await readRpc(await dispatch(connectionId, mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
+    const names = (listed.result?.tools ?? []).map((t) => t.name);
+    assert.ok(names.includes("find_tools") && names.includes("call_tool"), "offered beside the service's own tools");
+    const found = await readRpc(await dispatch(connectionId, call("find_tools", { query: "gmail search" })));
+    assert.match(JSON.stringify(found), /google-gmail__search/);
+    const rpc = await readRpc(await dispatch(connectionId, call("call_tool", { name: "google-gmail__search", arguments: { query: { q: "from:agl" } } })));
+    assert.equal(viewOf(rpc).messages.length, 1, "the search ran through the same gate");
+    const refused = await readRpc(await dispatch(connectionId, call("call_tool", { name: "notion__search", arguments: {} })));
+    assert.equal(status(refused), "refused", "a tool the agent wasn't given stays out of reach");
   } finally { await db.close(); }
 });

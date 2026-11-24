@@ -128,7 +128,7 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 
 ## Usability guardrails (every PR in this series)
 
-- **No new settings, toggles, rule conditions or setup, and no new approvals for agents that ask first** (the default). Only an agent the person lets act alone is ever asked something new.
+- **No new settings, toggles, rule conditions or setup, and no new approvals for agents that ask first** (the default). Only an agent the person lets act alone is ever asked something new. (Superseded for one setting, "What agents see", by the amendment of 24 November 2026 below.)
 - **Results get smaller and readable.** A typical marketing email goes from about 34k tokens of
   escaped base64 JSON to about 1k.
 - **Nothing an agent needs for a normal task is hidden:** booking, tracking, BPAY, Zoom and
@@ -260,3 +260,67 @@ to another. Every memory and task an agent reads now says who saved it (`src/ser
   - search summaries and readable text output;
   - a heads-up after reading strangers' content;
   - "saved by" labels on memories and tasks.
+
+## Amendment 24 November 2026: the person chooses what agents see
+
+The founder, on 24 November 2026: "the user in warthog should be able to set those limits themselves
+in settings, for me personally, im happy for everything to be brought through, others may want to
+filter … perhaps 3 or 4 tiers … without them writing the rules just selecting from an option set."
+
+**Decision.** Settings › Agent defaults gains one panel, "What agents see in your email and files",
+with three choices. It applies to every agent, including ones already connected, from the agent's
+next request. It is the one exception to the "no new settings" usability guardrail above, which this
+amendment supersedes for this setting only. There are no rules to write and nothing else to set up.
+
+| Level | What it does |
+|---|---|
+| **Private** | Everything Standard hides, plus the numbers that identify the person or their accounts when the text names them: tax file number (TFN), Medicare, passport, licence, BSB, account number (also "no.", "acct", "a/c"), and member, policy, customer and card numbers. Only the number is masked, as `[number hidden by Warthog]`, and counted as `identifiers`. |
+| **Standard** (recommended, the default) | What this decision describes: sign-in codes and temporary passwords, sign-in and password-reset links, card numbers and download links are hidden, and sign-in and password emails become stubs. |
+| **Everything** | Nothing is hidden. Sign-in and password emails are read in full, and links, codes, passwords, card numbers and download links come through as written. |
+
+**At every level:**
+- Invisible characters are removed, and so are elements the sender's own styles hid and image
+  addresses. None of these is anything the person sees, and they are how hidden instructions and
+  tracking get in.
+- The notice comes first: content is marked as written by others.
+- The "recently read" window opens and the ask-first check runs exactly as before.
+- Content an agent can't be shown safely (a cut-short mail reply, a provider's image) is still
+  withheld.
+
+**Private is keyword-driven and conservative.**
+- A number is masked only when one of those words is written just before it, on the same line,
+  with at most a few joining words ("number", "no.", "#", ":", "is").
+- The number needs at least three digits. It may have up to four letters in front ("PA1234567",
+  "POL-00123456").
+- Member, policy, customer and card need "number" (or "no.", "#", "ID") too, so "member since 2019"
+  is left alone. So are "account balance $1,234" and "account ending in 1234".
+- In a service's JSON reply, a value is masked when its key names one of these numbers
+  (`accountNumber`, `bsb`, `memberNo`), but never an id the service needs back (`accountId`).
+- The cost, said plainly on the setting: agents can't fill account numbers in for the person.
+
+**Where the level lives.**
+- `read_settings` (migration 0124) holds one row per person (`private | standard | open`). It's
+  plaintext metadata like the approval expiry: no row means Standard. It cascades with the account
+  and is removed by the purge.
+- `loadAgentContext` reads it as `context.readLevel`. The pipeline puts it on the call
+  (`AgentCall.readLevel`, server-owned, never from agent arguments) right after loading the
+  context. A search across inboxes copies it to each inbox's call.
+- The result guard reads `call.readLevel`. An approved hold drops the level it was held at, and is
+  checked at the person's level when it runs.
+- The level reaches every cleaning path: `cleanText` (`CleanOptions.level`), the Gmail and Outlook
+  views (Everything skips the sign-in mail stub), the mail body, invitations, the JSON check and
+  every result-guard path.
+- Changing the level is recorded as the person's own change ("What agents see changed"), by field
+  name only.
+- A result checked at a level other than Standard says so in its activity evidence (`level`). For
+  example: "Shown as written: your setting is Everything", or "Kept from the agent: 2 account or ID
+  numbers (your setting is Private)".
+
+**Everything comes with a warning.** Choosing it shows, before saving: "With Everything, an agent,
+or an email written to trick one, could use a sign-in code or password-reset link to get into one of
+your accounts." There is no confirmation dialog. The choice is the person's, and it's reversible.
+
+**Fixed at the same time: a code stands on its own.** An AGL email read "Login to My Account …
+ACCOUNT 7126 417 273", and "417 273" was masked as a sign-in code because "login" was nearby. A
+code-shaped number is now never part of a longer spaced digit group: nothing like "7126 " can come
+before it, and nothing like " 273" after it. This applies at every level.
