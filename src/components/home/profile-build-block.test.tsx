@@ -46,7 +46,7 @@ test("waiting: how many things wait, with a way to check each kind", () => {
   assert.equal(primaries(one), 1, "About you becomes the primary when it's the only one");
 });
 
-test("Home shows the block inside Finish setting up, and not before an agent is connected", () => {
+test("Home shows the block inside Finish setting up, in every state, so the step's row always lands on it", () => {
   const props = {
     personName: "Sam",
     checklist: computeSetupChecklist({ agentConnected: true }),
@@ -60,6 +60,22 @@ test("Home shows the block inside Finish setting up, and not before an agent is 
   );
   assert.match(withAgent, /id="build-profile"/);
   assert.match(withAgent, /href="\/home#build-profile"/, "the step's row leads to it");
-  const noAgent = renderToStaticMarkup(<DashboardView {...props} agents={[]} />);
-  assert.doesNotMatch(noAgent, /id="build-profile"/);
+  const noAgent = renderToStaticMarkup(<DashboardView {...props} checklist={computeSetupChecklist({})} agents={[]} profileBuild={{ state: "no_agent" }} />);
+  assert.match(noAgent, /id="build-profile"/, "before an agent too: the row still lands somewhere");
+  assert.match(text(noAgent), /Connect an agent to build your profile/);
+  assert.equal(primaries(noAgent), 1, "only Connect your first agent is primary");
+});
+
+test("the block outlines itself when a link lands on it", () => {
+  const markup = renderToStaticMarkup(<ProfileBuildBlock view={{ state: "no_agent" }} />);
+  assert.match(markup, /<section id="build-profile"[^>]*class="[^"]*target:outline/);
+});
+
+test("on Life admin the block is quiet: every button secondary, with a way to connect an agent", () => {
+  const ready = renderToStaticMarkup(<ProfileBuildBlock view={{ state: "ready", agentName: "Claude", sources: ["Gmail"] }} quiet />);
+  assert.equal(primaries(ready), 0);
+  assert.match(ready, /Copy for Claude/);
+  const none = renderToStaticMarkup(<ProfileBuildBlock view={{ state: "no_agent" }} quiet />);
+  assert.match(none, /href="\/agents\/connect"[^>]*>[\s\S]*?Connect an agent/);
+  assert.equal(primaries(none), 0);
 });

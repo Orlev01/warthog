@@ -24,6 +24,7 @@ import {
 } from "./form-inputs";
 import { OutcomeNotice, toNotice, type Notice } from "./notices";
 import { buildActions, resolveSession, run, type Outcome } from "./wiring";
+import { loadProfileBuildChoice } from "@/server/home/profile-build";
 
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
@@ -264,6 +265,8 @@ export default async function LifeAdminPage({
           categories: data.categories,
           suggestedCategories: data.suggestedCategories,
           nextSteps: data.nextSteps,
+          // Build your whole profile, on the Add tab (docs/adr/profile-build.md).
+          profileBuild: await loadProfileBuildChoice(db, session.userId),
           recordFilter,
           historyFilter,
           // A kind from the person's own catalogue (their categories included), else none.

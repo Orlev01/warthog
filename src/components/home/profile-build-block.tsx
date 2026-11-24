@@ -26,12 +26,30 @@ function listWords(words: readonly string[]): string {
   return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
-export function ProfileBuildBlock({ view }: { view: ProfileBuildView }): React.ReactElement | null {
+// `quiet` (Life admin's Add tab, which has its own primary action): every button is secondary.
+export function ProfileBuildBlock({ view, quiet = false }: { view: ProfileBuildView; quiet?: boolean }): React.ReactElement {
   const headingId = React.useId();
-  if (view.state === "no_agent") return null;
+  const main = quiet ? "secondary" : "primary";
   let heading: string;
   let body: React.ReactNode;
   switch (view.state) {
+    case "no_agent":
+      heading = "Connect an agent to build your profile";
+      body = (
+        <>
+          <p className="max-w-prose text-sm leading-relaxed text-fg">
+            Once an agent you use, such as Claude or ChatGPT, is connected and can read your email, calendar or files,
+            it can build your profile for you to check.
+          </p>
+          {quiet ? (
+            <ButtonLink href="/agents/connect" variant="secondary">
+              Connect an agent
+              <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+            </ButtonLink>
+          ) : null}
+        </>
+      );
+      break;
     case "no_records":
       heading = `${view.agentName} can't save to your Life admin yet`;
       body = (
@@ -39,7 +57,7 @@ export function ProfileBuildBlock({ view }: { view: ProfileBuildView }): React.R
           <p className="max-w-prose text-sm leading-relaxed text-fg">
             Let {view.agentName} use your life-admin records, and it can build your profile from what it can read.
           </p>
-          <ButtonLink href={view.agentHref} variant="primary">
+          <ButtonLink href={view.agentHref} variant={main}>
             Let {view.agentName} use Life admin
             <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
           </ButtonLink>
@@ -53,7 +71,7 @@ export function ProfileBuildBlock({ view }: { view: ProfileBuildView }): React.R
           <p className="max-w-prose text-sm leading-relaxed text-fg">
             Let {view.agentName} read your email, calendar or files through Warthog, and it can build your profile for you.
           </p>
-          <ButtonLink href={view.agentHref} variant="primary">
+          <ButtonLink href={view.agentHref} variant={main}>
             Choose what {view.agentName} can read
             <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
           </ButtonLink>
@@ -70,12 +88,12 @@ export function ProfileBuildBlock({ view }: { view: ProfileBuildView }): React.R
           </p>
           <div className="flex flex-wrap gap-2">
             {view.records > 0 ? (
-              <ButtonLink href="/life-admin" variant="primary">
+              <ButtonLink href="/life-admin" variant={main}>
                 Check {plural(view.records, "record", "records")} in Life admin
               </ButtonLink>
             ) : null}
             {view.aboutYou > 0 ? (
-              <ButtonLink href="/vault" variant={view.records > 0 ? "secondary" : "primary"}>
+              <ButtonLink href="/vault" variant={view.records > 0 ? "secondary" : main}>
                 Check {plural(view.aboutYou, "detail", "details")} in About you
               </ButtonLink>
             ) : null}
@@ -97,14 +115,20 @@ export function ProfileBuildBlock({ view }: { view: ProfileBuildView }): React.R
           </p>
           <div className="flex min-w-0 flex-col gap-3 rounded-[var(--wh-radius-inset)] bg-surface-muted p-4 sm:flex-row sm:items-start">
             <p className="min-w-0 flex-1 whitespace-pre-line text-sm text-fg [overflow-wrap:anywhere]">{PROFILE_PROMPT}</p>
-            <CopyButton value={PROFILE_PROMPT} variant="primary" text={`Copy for ${view.agentName}`} label="the prompt to build your profile" />
+            <CopyButton value={PROFILE_PROMPT} variant={main} text={`Copy for ${view.agentName}`} label="the prompt to build your profile" />
           </div>
         </>
       );
       break;
   }
   return (
-    <section id={BUILD_PROFILE_ANCHOR} aria-labelledby={headingId} className="flex min-w-0 scroll-mt-32 flex-col items-start gap-3">
+    // A link to it (the set-up row, Life admin) lands here and outlines it for a moment, so the click
+    // visibly does something even when the block is already in view.
+    <section
+      id={BUILD_PROFILE_ANCHOR}
+      aria-labelledby={headingId}
+      className="flex min-w-0 scroll-mt-32 flex-col items-start gap-3 rounded-[var(--wh-radius-inset)] target:outline target:outline-2 target:outline-offset-8 target:outline-focus"
+    >
       <h3 id={headingId} className="wh-group-title">
         {heading}
       </h3>

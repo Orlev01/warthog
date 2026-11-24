@@ -14,6 +14,8 @@ import { ButtonLink } from "@/components/ui/button-link";
 import { CopyButton } from "@/components/ui/copy-button";
 import { EmptyState } from "@/components/ui/empty";
 import { ViewTabLink } from "@/components/ui/view-tabs";
+import { ProfileBuildBlock } from "@/components/home/profile-build-block";
+import type { ProfileBuildView } from "@/domain/home/profile-build";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import type { CategoryDef, RecordTypeDef } from "@/domain/life-admin/record-types";
 import { categoryIcon } from "./category-icons";
@@ -680,14 +682,6 @@ function FillInPanel({
             <CopyButton value={prompt} label="prompt for your agent" />
           </div>
         ) : null}
-        {!hasRecords ? (
-          <p className="text-sm text-fg">
-            Or let your agent build your whole profile at once, from Home.{" "}
-            <a href="/home#build-profile" className="font-medium text-fg underline underline-offset-2">
-              Build your profile
-            </a>
-          </p>
-        ) : null}
         {notForMe.length ? (
           <details className="group/hidden min-w-0">
             <summary className={summaryClass("ghost", "sm")}>
@@ -819,6 +813,7 @@ export function AddView({
   zone = "UTC",
   addType,
   assets,
+  profileBuild,
   actions,
 }: {
   records: readonly LifeAdminRecordView[];
@@ -828,11 +823,22 @@ export function AddView({
   addType?: string | null;
   // The "belongs to" choices, when the caller already worked them out.
   assets?: readonly AssetOption[];
+  // Who can build the person's whole profile (docs/adr/profile-build.md): its permanent place.
+  profileBuild?: ProfileBuildView;
   actions: RecordActions;
 }) {
   const { available, notForMe } = fillInChoices(catalogue, categories);
   return (
     <RecordReturnProvider value={{ tab: "add", filter: { categories: [], statuses: [] } }}>
+      {profileBuild ? (
+        <WorkspacePanel
+          title="Build your whole profile"
+          description="Your agent goes through what it can read and fills in every category, and suggests your details for About you, for you to check. Run it again any time: it fills the gaps."
+          icon={MailSearch}
+        >
+          <ProfileBuildBlock view={profileBuild} quiet />
+        </WorkspacePanel>
+      ) : null}
       {available.length || notForMe.length ? (
         <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
       ) : null}

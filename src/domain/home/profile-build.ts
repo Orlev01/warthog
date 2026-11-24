@@ -24,20 +24,28 @@ export interface ProfileBuildAgent {
 }
 
 /**
- * What the block shows, or null when the step is done. Waiting comes first (there's something to
- * check); otherwise the first agent (most recently active) that can both read and save is named,
- * else what's missing for the most recently active agent.
+ * What Home's block shows, or null when the step is done. Waiting comes first (there's something to
+ * check); otherwise as `profileBuildChoice`.
  */
 export function profileBuildView(
   input: { readonly done: boolean; readonly agents: readonly ProfileBuildAgent[]; readonly waitingRecords: number; readonly waitingAboutYou: number },
 ): ProfileBuildView | null {
   if (input.done) return null;
   if (input.waitingRecords + input.waitingAboutYou > 0) return { state: "waiting", records: input.waitingRecords, aboutYou: input.waitingAboutYou };
-  const [first] = input.agents;
+  return profileBuildChoice(input.agents);
+}
+
+/**
+ * Who can build the profile, for Life admin's permanent block (and Home's): the first agent (most
+ * recently active) that can both read and save is named, else what's missing for the most recently
+ * active agent, else that no agent is connected.
+ */
+export function profileBuildChoice(agents: readonly ProfileBuildAgent[]): Exclude<ProfileBuildView, { state: "waiting" }> {
+  const [first] = agents;
   if (!first) return { state: "no_agent" };
-  const ready = input.agents.find((agent) => agent.savesRecords && agent.sources.length > 0);
+  const ready = agents.find((agent) => agent.savesRecords && agent.sources.length > 0);
   if (ready) return { state: "ready", agentName: ready.name, sources: ready.sources };
-  const saver = input.agents.find((agent) => agent.savesRecords);
+  const saver = agents.find((agent) => agent.savesRecords);
   if (saver) return { state: "no_sources", agentName: saver.name, agentHref: `/agents/${encodeURIComponent(saver.id)}?section=connectors` };
   return { state: "no_records", agentName: first.name, agentHref: `/agents/${encodeURIComponent(first.id)}?section=settings` };
 }

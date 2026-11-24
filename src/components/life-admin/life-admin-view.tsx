@@ -6,6 +6,7 @@ import { ViewPanels, type ViewPanelsHeading } from "@/components/ui/view-tabs";
 import { BUILT_IN, catalogueFromData, type CatalogueData } from "@/domain/life-admin/catalogue";
 import { DEFAULT_LIST_STATUSES, listedRecords } from "./record-groups";
 import { AddView, RecordsView, assetsOf, nothingOnFile } from "./records-view";
+import type { ProfileBuildView } from "@/domain/home/profile-build";
 import { UpcomingView } from "./upcoming-view";
 import { HistoryView } from "./history-view";
 import { addFormRedirect, shownLifeAdminAddress } from "./tab-address";
@@ -90,6 +91,8 @@ export type LifeAdminViewProps = RecordActions & {
   initialTab?: LifeAdminTab;
   // The type picked in the Add panel's first step (`?add=`), already validated by the page.
   addType?: string | null;
+  // Who can build the person's whole profile, for the Add tab (docs/adr/profile-build.md).
+  profileBuild?: ProfileBuildView;
   // The page heading over the tabs, the outcome of the last action (shown in the tab first
   // shown), and the Tasks tab's content.
   heading?: ViewPanelsHeading;
@@ -168,6 +171,7 @@ export function LifeAdminView({
   records,
   initialTab,
   addType,
+  profileBuild,
   heading,
   notice,
   tasks,
@@ -236,6 +240,7 @@ export function LifeAdminView({
               zone={zone}
               addType={addType}
               assets={assets}
+              profileBuild={profileBuild}
               actions={actions}
             />,
           ),

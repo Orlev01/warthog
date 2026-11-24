@@ -3,7 +3,7 @@
 // admin), and what waits for the person to check. Counts and names only: nothing is decrypted.
 // Every read is member-scoped by the session's `userId`.
 
-import { profileBuildView, type ProfileBuildAgent, type ProfileBuildView } from "../../domain/home/profile-build";
+import { profileBuildChoice, profileBuildView, type ProfileBuildAgent, type ProfileBuildView } from "../../domain/home/profile-build";
 import { readableSourceNames } from "../../domain/life-admin/profile-sources";
 import { accountPolicy } from "../../domain/permissions/account-access";
 import { getConnectionPermissions } from "../db/agent-permissions";
@@ -15,8 +15,22 @@ import type { Db } from "../db/index";
 
 const time = (value: Date | string | null): number => (value === null ? 0 : new Date(value).getTime());
 
+// Home's block: null once the step is done.
 export async function loadProfileBuild(db: Db, userId: string, done: boolean): Promise<ProfileBuildView | null> {
   if (done) return null;
+  const views = await profileBuildAgents(db, userId);
+  const records = await countRecordReview(db, userId);
+  return profileBuildView({ done, agents: views, waitingRecords: records.waiting, waitingAboutYou: await countIdentitySuggestions(db, userId) });
+}
+
+// Life admin's permanent block: who can build the profile, whatever has been built already.
+export async function loadProfileBuildChoice(db: Db, userId: string): Promise<ProfileBuildView> {
+  return profileBuildChoice(await profileBuildAgents(db, userId));
+}
+
+// The person's connected agents, most recently active first, each with whether it can save to Life
+// admin and which of their services it can read.
+async function profileBuildAgents(db: Db, userId: string): Promise<ProfileBuildAgent[]> {
   const connections = await listConnectionsForUser(db, userId);
   const connected = new Map(connections.map((account) => [account.id, account] as const));
   const agents = (await listAgentsForUser(db, userId))
@@ -33,6 +47,5 @@ export async function loadProfileBuild(db: Db, userId: string, done: boolean): P
     })));
     views.push({ id: agent.id, name: agent.displayName, savesRecords: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, sources });
   }
-  const records = await countRecordReview(db, userId);
-  return profileBuildView({ done, agents: views, waitingRecords: records.waiting, waitingAboutYou: await countIdentitySuggestions(db, userId) });
+  return views;
 }

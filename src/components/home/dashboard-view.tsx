@@ -257,7 +257,7 @@ function SetupPanel({
             </ButtonLink>
           </div>
         )}
-        {hasAgents && profileBuild ? <ProfileBuildBlock view={profileBuild} /> : null}
+        {profileBuild ? <ProfileBuildBlock view={profileBuild} /> : null}
         <SetupChecklist items={checklist} />
         <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
       </div>
