@@ -356,7 +356,15 @@ function searchLimits(call: AgentCall): { asked: string | undefined; limits: { d
   return { asked: top ? query[top] : undefined, limits: { default: DEFAULT_OUTLOOK_TOP, max: MAX_OUTLOOK_TOP } };
 }
 
-// One inbox's next page of a search, `size` results long (Gmail's pageToken; Outlook's $skip).
+// A read the service answered with an error: nothing came back and nothing changed, so the
+// agent can fix the request and ask again (a change's failure may still have done something).
+function readFailed(status: unknown): string {
+  const answer = typeof status === "number" ? `answered with an error (HTTP ${status})` : "didn't answer";
+  return `The service ${answer}, so there is nothing to show. This was a read, so nothing changed: check the request and try again.`;
+}
+
+// One inbox's next page of a search, `size` results long (Gmail's pageToken; Outlook's
+// $skiptoken for a search, $skip for a listing).
 function withNextPage(call: AgentCall, fill: PageFill): AgentCall {
   const params = (call.params ?? {}) as { query?: Record<string, string> };
   const query = { ...(params.query ?? {}) };
@@ -364,9 +372,10 @@ function withNextPage(call: AgentCall, fill: PageFill): AgentCall {
     query.maxResults = String(fill.size);
     if (fill.pageToken) query.pageToken = fill.pageToken;
   } else {
-    for (const key of Object.keys(query)) if (/^\$?(?:top|skip)$/i.test(key)) delete query[key];
+    for (const key of Object.keys(query)) if (/^\$?(?:top|skip|skiptoken)$/i.test(key)) delete query[key];
     query.$top = String(fill.size);
-    if (fill.skip) query.$skip = fill.skip;
+    if (fill.skipToken) query.$skiptoken = fill.skipToken;
+    else if (fill.skip) query.$skip = fill.skip;
   }
   return { ...call, params: { ...params, query } };
 }
@@ -949,7 +958,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     const guarded = observed.outcome === "executed" ? await guardResult(call, result, connection) : { result };
     await record(connection, call, observed.outcome, result, recorder, true, guarded.evidence);
     if (observed.outcome === "failed" || observed.outcome === "unknown") {
-      return { result: { status: observed.outcome, reason: "The service did not confirm success. Check the activity record before retrying a change." }, errorCategory: CATEGORY_TOOL_ERROR };
+      const reason = call.makesChange ? "The service did not confirm success. Check the activity record before retrying a change." : readFailed(observed.evidence.status);
+      return { result: { status: observed.outcome, reason }, errorCategory: CATEGORY_TOOL_ERROR };
     }
     return { result: { status: "executed", result: guarded.result } };
   }

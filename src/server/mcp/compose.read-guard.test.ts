@@ -207,6 +207,73 @@ test("an Outlook read can't reach around the checked view", async () => {
   } finally { await db.close(); }
 });
 
+test("an Outlook search sends its words quoted, pages with Graph's token and says what can't combine", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seed(db, config, {}, "microsoft-outlook-mail", { access_token: "eyJ0" });
+    const sent: URL[] = [];
+    const next = "https://graph.microsoft.com/v1.0/me/messages?%24search=%22bill%22&%24top=10&%24skiptoken=MSZZVlF3%3d%3d";
+    const fetch = (async (input: RequestInfo | URL) => {
+      sent.push(new URL(String(input)));
+      return Response.json({ value: [{ id: "AAMk1=", subject: "Bill", from: { emailAddress: { address: "x@agl.com.au" } }, receivedDateTime: "2026-11-20T00:00:00Z", bodyPreview: "Hi" }], "@odata.nextLink": next });
+    }) as typeof globalThis.fetch;
+    const dispatch = createMcpDispatch({ db, config, fetch });
+    const search = async (query: Record<string, string>) => readRpc(await dispatch(connectionId, call("microsoft-outlook-mail__search", { query })));
+
+    // Unquoted or partly quoted words would make Graph list the newest mail instead of searching.
+    await search({ $search: "tax invoice OR receipt" });
+    assert.equal(sent.at(-1)!.searchParams.get("$search"), "\"tax invoice OR receipt\"");
+    await search({ $search: "\"tax invoice\" OR receipt" });
+    assert.equal(sent.at(-1)!.searchParams.get("$search"), "\"\\\"tax invoice\\\" OR receipt\"");
+    const first = await search({ $search: "\"bill\"" });
+    assert.equal(sent.at(-1)!.searchParams.get("$search"), "\"bill\"", "words already quoted are sent as they are");
+
+    // The next page is named in the view and the text, and its token reaches Graph.
+    assert.equal(first.result?.structuredContent?.nextSkipToken, "MSZZVlF3==");
+    assert.match(String(first.result?.content?.[0]?.text), /More results: search again with the same account, query and query\.\$skiptoken=MSZZVlF3==/);
+    for (const token of ["MSZZVlF3==", "MSZZVlF3%3d%3d"]) {
+      await search({ $search: "\"bill\"", $skiptoken: token });
+      assert.equal(sent.at(-1)!.searchParams.get("$skiptoken"), "MSZZVlF3==", token);
+    }
+
+    // Graph refuses a search with a filter, a sort or $skip: the agent hears what works, and
+    // nothing is sent.
+    const before = sent.length;
+    for (const [query, said] of [
+      [{ $search: "\"bill\"", $filter: "receivedDateTime ge 2026-11-01T00:00:00Z" }, /Put a date in the search words instead/],
+      [{ $search: "\"bill\"", orderby: "receivedDateTime desc" }, /can't combine \$search with \$filter or \$orderby/],
+      [{ $search: "\"bill\"", $skip: "10" }, /pages a search with \$skiptoken, not \$skip/],
+      [{ $search: "\"bill\"", $skiptoken: "not a token!" }, /must be the \$skiptoken an Outlook search returned/],
+    ] as const) {
+      const refused = await search(query);
+      assert.equal(refused.result?.isError, true);
+      assert.match(String(refused.result?.content?.[0]?.text), said);
+    }
+    assert.equal(sent.length, before, "a refused search sends nothing");
+
+    // Without words, a listing still filters, sorts and pages with $skip.
+    await search({ $filter: "isRead eq false", $orderby: "receivedDateTime desc", $skip: "10" });
+    assert.equal(sent.at(-1)!.searchParams.get("$skip"), "10");
+    assert.equal(sent.at(-1)!.searchParams.get("$search"), null);
+  } finally { await db.close(); }
+});
+
+test("a read the service answers with an error says nothing changed", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seed(db, config, {}, "microsoft-outlook-mail", { access_token: "eyJ0" });
+    const fetch = (async () => Response.json({ error: { code: "BadRequest" } }, { status: 400 })) as typeof globalThis.fetch;
+    const rpc = await readRpc(await createMcpDispatch({ db, config, fetch })(connectionId, call("microsoft-outlook-mail__search", { query: { $search: "\"bill\"" } })));
+    assert.equal(rpc.result?.isError, true);
+    const said = String(rpc.result?.content?.[0]?.text);
+    assert.match(said, /answered with an error \(HTTP 400\)/);
+    assert.match(said, /This was a read, so nothing changed/);
+    assert.doesNotMatch(said, /retrying a change/);
+  } finally { await db.close(); }
+});
+
 test("an ntfy GET publishes, so it counts as a change and follows the change setting", async () => {
   const db = await freshDb();
   try {

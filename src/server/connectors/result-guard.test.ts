@@ -122,11 +122,17 @@ describe("createResultGuard", () => {
         { id: "m2", subject: "Your Microsoft account security code", body: { contentType: "text", content: "Security code: 558812" } },
       ], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skip=25" }),
     });
-    const result = guarded.result as { messages: Record<string, unknown>[]; nextLink: string };
+    const result = guarded.result as { messages: Record<string, unknown>[]; nextLink: string; nextSkip?: string };
     assert.equal(result.messages[0]!.text, "Lunch at 12?");
     assert.equal(result.messages[1]!.withheld, true);
     assert.ok(!JSON.stringify(result).includes("558812"));
     assert.match(result.nextLink, /\$skip=25/);
+    assert.equal(result.nextSkip, "25", "the view says how to ask for the next page");
+    const searched = guard.review(call("microsoft-outlook-mail__search"), {
+      status: 200, truncated: false,
+      body: JSON.stringify({ value: [], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?%24search=%22lunch%22&%24skiptoken=MSZZ%3d%3d" }),
+    });
+    assert.equal((searched.result as { nextSkipToken?: string }).nextSkipToken, "MSZZ==", "a search pages with Graph's token");
   });
 
   it("opens the recently-read window for what someone else wrote, and only that", () => {

@@ -100,6 +100,13 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **Outlook:** query options are normalised (with or without `$`, any case) and allowlisted.
   - A search may filter, sort and page. It always returns headers and previews (10 by default,
     25 at most), and the agent reads a message by id for its text.
+  - Search words are sent as one quoted string, with any quote inside escaped. Graph lists the
+    newest mail, with no error, when words with a space aren't wholly quoted, so the agent would
+    take every message for a match (found 24 Nov 2026).
+  - Graph refuses a search with `$filter`, `$orderby` or `$skip`, so Warthog refuses those first
+    and says what works: a date in the search words (`received>=2026-11-01`), and `$skiptoken`
+    for the next page. The view gives that page as `nextSkipToken` (a search) or `nextSkip` (a
+    listing), since the agent can't fetch Graph's own `nextLink`.
   - A read takes no options, so no `$select` can drop the subject the sign-in check reads, and no
     `$expand` can inline attachments.
   - Ids that are really sub-paths (`/$value`) are refused.

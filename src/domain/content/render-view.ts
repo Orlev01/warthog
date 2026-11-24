@@ -128,6 +128,7 @@ function morePages(accounts: unknown): string[] {
     const account = str(entry.account);
     if (!account) return [];
     if (str(entry.nextPageToken)) return [`More from ${account}: search again with account ${account}, the same query.q and query.pageToken=${str(entry.nextPageToken)}`];
+    if (str(entry.nextSkipToken)) return [`More from ${account}: search again with account ${account}, the same query and query.$skiptoken=${str(entry.nextSkipToken)}`];
     if (str(entry.nextSkip)) return [`More from ${account}: search again with account ${account}, the same query and query.$skip=${str(entry.nextSkip)}`];
     return [];
   });
@@ -160,7 +161,9 @@ export function renderCheckedView(result: unknown): string | null {
     const acrossInboxes = Array.isArray(view.accounts);
     messages.forEach((message, index) => lines.push(summaryLine(message, index, acrossInboxes)));
     if (str(view.nextPageToken)) lines.push(`More results: search again with the same account, query.q and query.pageToken=${str(view.nextPageToken)}`);
-    if (str(view.nextLink)) lines.push(`More results: ${str(view.nextLink)}`);
+    if (str(view.nextSkipToken)) lines.push(`More results: search again with the same account, query and query.$skiptoken=${str(view.nextSkipToken)}`);
+    else if (str(view.nextSkip)) lines.push(`More results: search again with the same account, query and query.$skip=${str(view.nextSkip)}`);
+    else if (str(view.nextLink)) lines.push(`More results: ${str(view.nextLink)}`);
     lines.push(...morePages(view.accounts));
     if (str(view.note) && messages.length) lines.push(str(view.note)!);
     return lines.join("\n");

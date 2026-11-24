@@ -45,6 +45,7 @@ describe("renderCheckedView", () => {
       { account: "home@example.com", status: "searched", count: 1, nextPageToken: "p2" },
       { account: "work@example.com", status: "searched", count: 1 },
       { account: "a@outlook.com", status: "searched", count: 0, nextSkip: "5" },
+      { account: "b@outlook.com", status: "searched", count: 0, nextSkipToken: "MSZZ==" },
     ], coverage: "Searched 2 inboxes: home@example.com (1), work@example.com (1).", note: "Previews only: read a message by its id for its full text." })!;
     const lines = text.split("\n");
     assert.equal(lines[1], "Searched 2 inboxes: home@example.com (1), work@example.com (1).");
@@ -52,6 +53,7 @@ describe("renderCheckedView", () => {
     assert.match(lines[3]!, /^2\. In work@example\.com · Withheld sign-in code from Google/);
     assert.match(text, /More from home@example\.com: search again with account home@example\.com, the same query\.q and query\.pageToken=p2/);
     assert.match(text, /More from a@outlook\.com: search again with account a@outlook\.com, the same query and query\.\$skip=5/);
+    assert.match(text, /More from b@outlook\.com: search again with account b@outlook\.com, the same query and query\.\$skiptoken=MSZZ==/);
     // Nothing found still says what was searched.
     const none = renderCheckedView({ notice: "n", messages: [], accounts: [], coverage: "Searched 2 inboxes: a (0), b (0)." })!;
     assert.equal(none, "n\nSearched 2 inboxes: a (0), b (0).\nNo messages found.");
