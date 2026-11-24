@@ -6,10 +6,9 @@ import { SkillsView } from "./skills-view";
 import { PackageEditor } from "./package-editor";
 import { makeSkillFile, parsePackage } from "../../domain/skills/package";
 
-const houseSkill = { title: "Using Warthog", useThisWhen: "Use Warthog", alwaysIncluded: true as const };
 test("library leads with search and readable private package cards; creating comes before importing", () => {
   const p = { ...parsePackage([{ path: "SKILL.md", content: makeSkillFile("Travel", "Plan trips", "Compare routes") }]), id: "p", revision: 1, members: [] };
-  const html = renderToStaticMarkup(<SkillsView skills={[]} packages={[p]} preferences={null} houseSkill={houseSkill} />);
+  const html = renderToStaticMarkup(<SkillsView skills={[]} packages={[p]} preferences={null} />);
   assert.match(html, /<h1>Skills<\/h1>/, "the page is called Skills, like its tab and the sidebar");
   assert.match(html, /Search your library/);
   assert.match(html, /Import/);
@@ -21,7 +20,7 @@ test("library leads with search and readable private package cards; creating com
 });
 
 test("an empty library offers one next step and no dead search or filters", () => {
-  const html = renderToStaticMarkup(<SkillsView skills={[]} packages={[]} preferences={null} houseSkill={houseSkill} />);
+  const html = renderToStaticMarkup(<SkillsView skills={[]} packages={[]} preferences={null} />);
   assert.match(html, /No skills of your own yet/);
   assert.match(html, /href="\/skills\?view=add"[^>]*>Create or import a skill/);
   assert.doesNotMatch(html, /aria-label="Find skills"/, "no toolbar around an empty library");

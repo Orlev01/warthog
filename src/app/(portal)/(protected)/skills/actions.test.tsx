@@ -44,8 +44,8 @@
 //   createSkillsActions(deps: { db: Db; keyWrapper: KeyWrapper }): {
 //     // the owner's skills + preferences, read member-scoped by session.userId and
 //     // shaped into the props <SkillsView/> is mounted over (skills decrypted, the
-//     // preferences profile decrypted or null, plus the always-included house skill).
-//     load(session): Promise<{ skills; preferences; houseSkill }>
+//     // preferences profile decrypted or null, plus Warthog's own skills).
+//     load(session): Promise<{ skills; preferences; warthogSkills }>
 //
 //     // upsert the session user's ONE communication-style profile (owner = session,
 //     // never a userId smuggled in the input).
@@ -318,8 +318,8 @@ test("the loader returns the session user's skills + preferences and mounts Skil
 
     const data = await makeActions(db, keyWrapper).load(sessionFor(userId));
 
-    // The loader hands back the owner's decrypted skill + preferences and the
-    // always-included house skill (not one of the person's skills).
+    // The loader hands back the owner's decrypted skill + preferences and Warthog's own
+    // skills (not the person's).
     assert.ok(
       data.skills.some((s: { title?: string }) => s.title === SKILL_TITLE),
       `the loader returns the owner's skill; got ${JSON.stringify(data.skills)}`,
@@ -330,17 +330,17 @@ test("the loader returns the session user's skills + preferences and mounts Skil
       "Warm and plain",
       "the preferences profile is decrypted",
     );
-    assert.equal(data.houseSkill.title, HOUSE_SKILL.title, "the always-included house skill is carried");
+    assert.ok(data.warthogSkills.some((skill) => skill.title === HOUSE_SKILL.title), "Warthog's house skill is carried");
 
     // "mounts SkillsView": the loader's output IS the screen's data — feeding it
     // straight into the already-render-tested view renders the owner's skills screen.
     const markup = renderToStaticMarkup(
-      <SkillsView skills={data.skills} preferences={data.preferences} houseSkill={data.houseSkill} />,
+      <SkillsView skills={data.skills} preferences={data.preferences} warthogSkills={data.warthogSkills} />,
     );
     const text = strip(markup);
     assert.ok(text.includes(SKILL_TITLE), "mounting SkillsView renders the owner's skill title");
     assert.ok(text.includes(SKILL_WHEN), "the owner's use-this-when line renders");
-    assert.ok(text.includes(HOUSE_SKILL.title), "the house skill renders, always included");
+    assert.ok(text.includes(HOUSE_SKILL.title), "the house skill renders, among Warthog's skills");
     assert.ok(markup.includes("Warm and plain"), "the owner's saved tone renders as an editable control");
   } finally {
     await db.close();
@@ -357,13 +357,13 @@ test("the loader returns a null preferences profile and no skills for a person w
 
     assert.deepEqual(data.skills, [], "a person with no skills gets an empty list");
     assert.equal(data.preferences, null, "a person with no profile gets a null profile");
-    assert.equal(data.houseSkill.title, HOUSE_SKILL.title, "the house skill is present even with nothing saved");
+    assert.ok(data.warthogSkills.some((skill) => skill.title === HOUSE_SKILL.title), "the house skill is present even with nothing saved");
 
     // The screen still renders (the house skill, the create/save controls) with no
     // person-skills — no crash on the empty case.
     const text = strip(
       renderToStaticMarkup(
-        <SkillsView skills={data.skills} preferences={data.preferences} houseSkill={data.houseSkill} />,
+        <SkillsView skills={data.skills} preferences={data.preferences} warthogSkills={data.warthogSkills} />,
       ),
     );
     assert.ok(text.includes(HOUSE_SKILL.title), "the empty screen still shows the house skill");
