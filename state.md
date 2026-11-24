@@ -1,4 +1,17 @@
-# Delivery status — 24 November 2026 (Build your profile)
+# Delivery status — 24 November 2026 (Outlook search paging)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`4351664dc661886c41c9d499b70ed25ffeb234e6` runs as `warthog--r45344965311a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- PR #63: Outlook search sends its words as one quoted search, pages with `$skiptoken` (also across
+  several inboxes), refuses the combinations Graph refuses with what works instead, and words a failed
+  read as a read.
+
+No migrations (96). See the [release record](docs/audit/outlook-search-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (Build your profile)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

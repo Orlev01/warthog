@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Outlook search paging, 24 November:** main `4351664` runs as `warthog--r45344965311a1`. PR #63
+makes Outlook search search: words that weren't wholly quoted used to return the newest emails as if
+they all matched. A search now pages with Graph's `$skiptoken`, across several inboxes too, and the
+combinations Graph refuses are refused up front with what works instead. A failed read no longer
+talks about retrying a change. No migrations (96). See the
+[release record](outlook-search-release-2026-11-24.md).
+
 **Build your profile, 24 November:** main `01d045b` runs as `warthog--r45334002203a1`. PRs #61
 and #62 replace "Add your details" with "Build your profile": the person copies one prompt into their
 own agent, which goes through their email, calendar and files through Warthog, fills in Life admin
