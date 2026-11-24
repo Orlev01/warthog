@@ -173,3 +173,10 @@ Source disable remains authoritative for both instructions and supporting files.
 Export/import retains both agent settings and encrypted package content; imported
 packages start disabled and require assignment. The 60 focused skills tests and
 TypeScript checks pass on the combined tree.
+
+## Amendment, 25 November 2026 (founder)
+
+Warthog's own skills are no longer separate from the library. They appear on the Skills page, and
+the person can edit, switch off, remove, scope and restore them, with fixed rules and generated parts
+kept out of reach. Their titles are reserved: a person's skill or an imported package can't take
+one. See docs/adr/editable-builtin-skills.md.
