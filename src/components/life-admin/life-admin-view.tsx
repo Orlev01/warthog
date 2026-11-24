@@ -5,7 +5,7 @@ import * as React from "react";
 import { ViewPanels, type ViewPanelsHeading } from "@/components/ui/view-tabs";
 import { BUILT_IN, catalogueFromData, type CatalogueData } from "@/domain/life-admin/catalogue";
 import { DEFAULT_LIST_STATUSES, listedRecords } from "./record-groups";
-import { RecordsView } from "./records-view";
+import { AddView, RecordsView } from "./records-view";
 import { UpcomingView } from "./upcoming-view";
 import { HistoryView } from "./history-view";
 import { currentLifeAdminSearch } from "./tab-address";
@@ -39,11 +39,14 @@ export type {
 } from "./record-view-types";
 
 // Life admin's tabs (src/components/life-admin/life-admin-view.tsx; docs/adr/life-admin-profile.md;
-// founder, 23 Nov 2026): one row of tabs (`?tab=`), no counts in their names —
-//   • "Records": what's ongoing in the person's life — accounts, policies, memberships,
-//     documents, the things other records belong to, matters in progress — what's active first,
-//     by category (their own catalogue, built-in and their own categories), then what's on hold,
-//     filtered by category and status (./records-view.tsx);
+// founder, 23 and 24 Nov 2026): one row of tabs (`?tab=`), no counts in their names —
+//   • "Records": what's on file and ongoing in the person's life — accounts, policies,
+//     memberships, documents, the things other records belong to, matters in progress — what's
+//     active first, by category (their own catalogue, built-in and their own categories), then
+//     what's on hold, filtered by category and status (./records-view.tsx);
+//   • "Add": what's still to fill in — the empty categories to look for (or say are not for
+//     them) — and adding a record themselves (./records-view.tsx `AddView`). It opens first while
+//     nothing is on file;
 //   • "Upcoming": what needs them or is booked — renewals and expiry dates coming up, every
 //     booking ahead, and next steps due (./upcoming-view.tsx);
 //   • "History": everything finished, strictly apart, newest first, filtered by category and
@@ -138,8 +141,9 @@ function useCurrentAddress() {
   }, []);
 }
 
-// Life admin's tabs: Records | Upcoming | History (| Tasks), then the selected tab's panels.
-// Every tab stays mounted, so a half-typed record or task survives a switch.
+// Life admin's tabs: Records | Add | Upcoming | History (| Tasks), then the selected tab's panels.
+// Every tab stays mounted, so a half-typed record or task survives a switch. With nothing on file
+// (no records and no suggested categories to check) Add is the tab an address without `?tab=` opens.
 export function LifeAdminView({
   today,
   zone = "UTC",
@@ -173,7 +177,8 @@ export function LifeAdminView({
   // A category the person said is not for them is hidden on every tab (its records are kept;
   // Records lists it under "Not for me", to undo).
   const listed = React.useMemo(() => listedRecords(records, catalogue, states), [records, catalogue, states]);
-  const shown = initialTab ?? "records";
+  const defaultTab: LifeAdminTab = records.length === 0 && suggestedCategories.length === 0 ? "add" : "records";
+  const shown = initialTab ?? defaultTab;
   const withNotice = (key: LifeAdminTab, content: React.ReactNode) => (
     <>
       {shown === key ? notice : null}
@@ -184,8 +189,8 @@ export function LifeAdminView({
     <ViewPanels
       label="Life admin"
       parameter="tab"
-      defaultTab="records"
-      initialTab={initialTab}
+      defaultTab={defaultTab}
+      initialTab={shown}
       heading={heading}
       tabs={[
         {
@@ -200,8 +205,22 @@ export function LifeAdminView({
               suggestedCategories={suggestedCategories}
               today={today}
               zone={zone}
-              addType={addType}
               filter={recordFilter}
+              actions={actions}
+            />,
+          ),
+        },
+        {
+          key: "add",
+          label: "Add",
+          content: withNotice(
+            "add",
+            <AddView
+              records={records}
+              catalogue={catalogue}
+              categories={states}
+              zone={zone}
+              addType={addType}
               actions={actions}
             />,
           ),

@@ -310,11 +310,29 @@ test("a filter that matches nothing shows one empty state with Clear filters, an
   assert.match(allFinished, /href="\/life-admin\?tab=history"[^>]*>Go to History/);
 });
 
-test("with no records at all there is nothing to filter: no toolbar and no empty state, just how to fill it in", () => {
-  const panel = tabPanel(render({ records: [] }), 0);
-  assert.doesNotMatch(panel, /aria-label="Filter records"/);
-  assert.doesNotMatch(text(panel), /No records match|Nothing is active/);
-  assert.match(text(panel), /Fill in your life admin/);
+// The Add tab (founder, 24 Nov 2026): Records keeps what's on file; what's still to fill in and
+// adding a record are on Add.
+test("with no records at all, Records says nothing is on file yet and points to Add, which offers how to fill it in", () => {
+  const markup = render({ records: [] });
+  const records = tabPanel(markup, 0);
+  assert.doesNotMatch(records, /aria-label="Filter records"/);
+  assert.doesNotMatch(text(records), /No records match|Nothing is active|Fill in your life admin|Add something yourself/);
+  assert.match(text(records), /Nothing on file yet\./);
+  assert.match(records, /href="\/life-admin\?tab=add"[^>]*>[\s\S]*?Add a record/);
+  const add = tabPanel(markup, 1);
+  assert.match(text(add), /Fill in your life admin/);
+  assert.match(text(add), /Add something yourself/);
+});
+
+test("Records holds only what's on file, with a way to Add; Fill in the rest and Add something yourself are on Add", () => {
+  const markup = render();
+  const records = tabPanel(markup, 0);
+  assert.doesNotMatch(text(records), /Fill in the rest|Add something yourself|Not for me \(/);
+  assert.match(records, /href="\/life-admin\?tab=add"[^>]*>[\s\S]*?Add a record/);
+  const add = tabPanel(markup, 1);
+  assert.match(text(add), /Fill in the rest/);
+  assert.match(text(add), /Add something yourself/);
+  assert.match(add, /<input type="hidden" name="returnTab" value="add"\/>/, "what's done on Add comes back to Add");
 });
 
 test("each row is compact: its name linking to its page, where it stands, one muted line and who's handling it; the rest is one click away in Details", () => {
@@ -339,10 +357,10 @@ test("each row is compact: its name linking to its page, where it stands, one mu
 test("a booking reads its start in its own zone, and a phase is words and an icon, never colour alone", () => {
   const pastLunch = rec("lunch", "outings.restaurant", { provider: "Bennelong", starts_at: "2026-09-12T12:30+10:00[Australia/Sydney]", party_size: "4" }, { dueDate: "2026-09-12" });
   const markup = render({ records: [...ALL, pastLunch] });
-  const upcoming = tabPanel(markup, 1);
+  const upcoming = tabPanel(markup, 2);
   assert.match(text(upcoming), /Sixpenny Upcoming Restaurant · Starts Wed 25 Nov, 7:30 pm AEDT · in 2 days/, "one ahead, in Upcoming");
   assert.match(upcoming.slice(upcoming.indexOf('href="/life-admin/items/dinner"')), /^[^]*?class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Upcoming/);
-  const past = rowOf(tabPanel(markup, 2), "lunch");
+  const past = rowOf(tabPanel(markup, 3), "lunch");
   assert.match(text(past), /Bennelong Completed Going out · Restaurant · Starts Sat 12 Sept, 12:30 pm AEST Details/, "one that's over, in History, in the zone of its own date");
   assert.match(text(past), /How many 4 people/);
   assert.match(past, /class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Completed/);
@@ -357,7 +375,7 @@ test("a legacy record reads through its kind's type: a subscription renews, its 
 test("Upcoming: happening now, overdue, this week and later, each line linking to its item, and next steps due", () => {
   const upcoming = tabPanel(render({
     nextSteps: [{ id: "n1", recordId: "rego", recordName: "Registration · BX12AB", text: "Book the roadworthy", due: "2026-11-28" }],
-  }), 1);
+  }), 2);
   assert.deepEqual(headings(upcoming, 3), ["Overdue", "This week", "Later (next 60 days)"]);
   const lines = [...upcoming.matchAll(/<a href="\/life-admin\/items\/([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], text(m[2]!)]);
   assert.deepEqual(lines, [
@@ -373,9 +391,9 @@ test("Upcoming: happening now, overdue, this week and later, each line linking t
 });
 
 test("Upcoming says so when nothing is due or booked, with a way to add a booking", () => {
-  const upcoming = tabPanel(render({ records: [PASSPORT] }), 1);
+  const upcoming = tabPanel(render({ records: [PASSPORT] }), 2);
   assert.match(text(upcoming), /Nothing coming up\. Bookings, and renewals and expiry dates in the next 60 days, show here\. Past ones move to History\./);
-  assert.match(upcoming, /href="\/life-admin#new-record"[^>]*>Add a booking/);
+  assert.match(upcoming, /href="\/life-admin\?tab=add#new-record"[^>]*>Add a booking/);
   assert.match(text(upcoming), /No next steps with a date\./);
 });
 

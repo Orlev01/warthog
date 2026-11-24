@@ -91,7 +91,7 @@ export type LifeAdminRecordView = {
 // Life admin's tabs (`?tab=`): Records (what's ongoing), Upcoming (what needs the person, and
 // every booking ahead), History (everything finished) and Tasks. The page maps older addresses
 // (`?view=tasks`, `?view=life&tab=…`, the Bookings tab, older reminder links) onto these.
-export type LifeAdminTab = "records" | "upcoming" | "history" | "tasks";
+export type LifeAdminTab = "records" | "add" | "upcoming" | "history" | "tasks";
 
 // Where a record stands, worked out from its phase (`listStatusOf`): active (live) or on hold
 // (paused) on Records; finished (ended, completed, resolved) or cancelled (cancelled, missed,

@@ -77,7 +77,7 @@ export function UpcomingView({
             icon={CalendarCheck}
             heading="Nothing coming up."
             description="Bookings, and renewals and expiry dates in the next 60 days, show here. Past ones move to History."
-            action={<ButtonLink href="/life-admin#new-record" size="sm">Add a booking</ButtonLink>}
+            action={<ButtonLink href="/life-admin?tab=add#new-record" size="sm">Add a booking</ButtonLink>}
           />
         ) : (
           groups.map((group) => (

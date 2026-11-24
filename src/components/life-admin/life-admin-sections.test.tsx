@@ -1,4 +1,4 @@
-// Life admin's four tabs (founder, 23 Nov 2026): "Records", "Upcoming", "History" and "Tasks", one
+// Life admin's tabs (founder, 23 and 24 Nov 2026): "Records", "Add", "Upcoming", "History" and "Tasks", one
 // row of tabs under the page heading, no counts in their names, one `?tab=` parameter.
 //
 //   • Records is what's ongoing in the person's life: accounts, policies, memberships, documents,
@@ -76,8 +76,8 @@ function text(markup: string): string {
 }
 
 // One tab panel's markup, by its tab's key.
-function panel(markup: string, key: "records" | "upcoming" | "history" | "tasks"): string {
-  const order = ["records", "upcoming", "history", "tasks"];
+function panel(markup: string, key: "records" | "add" | "upcoming" | "history" | "tasks"): string {
+  const order = ["records", "add", "upcoming", "history", "tasks"];
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   const index = order.indexOf(key);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
@@ -110,7 +110,7 @@ test("sectionOf: finished things are History's, live bookings Upcoming's, everyt
 
 // ─── the tabs ────────────────────────────────────────────────────────────────────────
 
-test("the page has one row of four tabs, Records, Upcoming, History and Tasks, with no counts; Records opens first", () => {
+test("the page has one row of five tabs, Records, Add, Upcoming, History and Tasks, with no counts; Records opens first", () => {
   const markup = renderToStaticMarkup(
     <LifeAdminScreen
       initialTab="records"
@@ -118,7 +118,7 @@ test("the page has one row of four tabs, Records, Upcoming, History and Tasks, w
       tasks={{ tasks: [], agents: [] }}
     />,
   );
-  assert.deepEqual(tabNames(markup), ["Records", "Upcoming", "History", "Tasks"]);
+  assert.deepEqual(tabNames(markup), ["Records", "Add", "Upcoming", "History", "Tasks"]);
   assert.equal([...markup.matchAll(/role="tablist"/g)].length, 1, "one row of tabs, not tabs inside tabs");
   const selected = /<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(markup);
   assert.equal(text(selected![1]!), "Records");

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ClipboardCheck, EyeOff, MailSearch, SearchX, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ClipboardCheck, EyeOff, FolderOpen, MailSearch, Plus, SearchX, Sparkles, Trash2 } from "lucide-react";
 
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
@@ -70,9 +70,13 @@ export { fillInPrompt } from "./record-groups";
 //      within a group the most urgent comes first. Rows are compact; their details are one click
 //      away. No category panel is ever empty.
 //   4. On hold, when chosen, as its own quieter list across categories.
-//   5. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
+//   5. "Add a record", to the Add tab; with nothing on file, an empty state saying so instead.
+//
+// The Add tab (`AddView`; founder, 24 Nov 2026) keeps what's still to fill in apart from what's on
+// file:
+//   1. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
 //      a prompt to copy into an agent, and the ones already marked "not for me", to undo.
-//   6. Add something yourself — pick a kind, then fill in its form.
+//   2. Add something yourself — pick a kind, then fill in its form.
 
 type Typed = { record: LifeAdminRecordView; type: RecordTypeDef; name: string; titleKey: string | null };
 
@@ -703,6 +707,68 @@ function NothingOngoing({ upcoming, history }: { upcoming: boolean; history: boo
   );
 }
 
+// Nothing on file yet (or only in categories the person said are not for them).
+function NothingOnFile() {
+  return (
+    <EmptyState
+      icon={FolderOpen}
+      heading="Nothing on file yet."
+      description="Your accounts, policies, memberships and things show here once you add them, or your agent finds them and you confirm."
+      action={<AddLink />}
+    />
+  );
+}
+
+// To the Add tab: what's still to fill in, and adding a record.
+const ADD_HREF = "/life-admin?tab=add";
+function AddLink() {
+  return (
+    <ButtonLink href={ADD_HREF} size="sm">
+      <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
+      Add a record
+    </ButtonLink>
+  );
+}
+
+// The things other records belong to (a vehicle, home, pet, or a thing of a category of their own),
+// as the "belongs to" choices in the record forms.
+function assetsOf(records: readonly LifeAdminRecordView[], catalogue: Catalogue): AssetOption[] {
+  return records.flatMap((record) => {
+    const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
+    if (!type.anchor) return [];
+    const { name } = recordName(type, record.fields, Boolean(record.type));
+    return [{ id: record.id, name, typeId: type.id, typeLabel: type.label }];
+  });
+}
+
+// ─── the Add tab ─────────────────────────────────────────────────────────────────────
+
+export function AddView({
+  records,
+  catalogue,
+  categories,
+  zone = "UTC",
+  addType,
+  actions,
+}: {
+  records: readonly LifeAdminRecordView[];
+  catalogue: Catalogue;
+  categories: readonly CategoryStateView[];
+  zone?: string;
+  addType?: string | null;
+  actions: RecordActions;
+}) {
+  const { available, notForMe } = fillInChoices(catalogue, categories);
+  return (
+    <RecordReturnProvider value={{ tab: "add", filter: { categories: [], statuses: [] } }}>
+      {available.length || notForMe.length ? (
+        <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
+      ) : null}
+      <AddRecordPanel catalogue={catalogue} addType={addType} assets={assetsOf(records, catalogue)} zone={zone} addRecordAction={actions.addRecordAction} />
+    </RecordReturnProvider>
+  );
+}
+
 // ─── the Records tab ─────────────────────────────────────────────────────────────────
 
 export function RecordsView({
@@ -712,7 +778,6 @@ export function RecordsView({
   suggestedCategories = [],
   today,
   zone = "UTC",
-  addType,
   filter = DEFAULT_FILTER,
   actions,
 }: {
@@ -722,7 +787,6 @@ export function RecordsView({
   suggestedCategories?: readonly SuggestedCategoryView[];
   today: string;
   zone?: string;
-  addType?: string | null;
   // The filters the page validated; Active in every category when absent.
   filter?: RecordFilter;
   actions: RecordActions;
@@ -733,9 +797,7 @@ export function RecordsView({
     return { record, type, name, titleKey: key };
   });
   const names = new Map(all.map((item) => [item.record.id, item.name] as const));
-  const assets: AssetOption[] = all
-    .filter((item) => item.type.anchor)
-    .map((item) => ({ id: item.record.id, name: item.name, typeId: item.type.id, typeLabel: item.type.label }));
+  const assets = assetsOf(records, catalogue);
   const listed = listedRecords(records, catalogue, categories);
   const ongoing = listed.filter((record) => sectionOf(record, catalogue) === "records");
   const chosen = new Set(filter.categories);
@@ -751,12 +813,11 @@ export function RecordsView({
   const ctx: Context = { catalogue, assets, zone, currentYear: today.slice(0, 4), actions, names, visible };
   const suggestions = all.filter((item) => item.record.reviewState === "suggested");
   const changes = all.filter((item) => item.record.pending && item.record.reviewState !== "suggested");
-  const { available, notForMe } = fillInChoices(catalogue, categories);
+  const toCheck = suggestions.length > 0 || changes.length > 0 || suggestedCategories.length > 0;
   return (
     <RecordReturnProvider value={{ tab: "records", filter }}>
-      {suggestions.length || changes.length || suggestedCategories.length ? (
-        <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} />
-      ) : null}
+      {toCheck ? <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} /> : null}
+      {!listed.length && !toCheck ? <NothingOnFile /> : null}
       {ongoing.length ? <RecordsToolbar view={view} filter={filter} inHistory={inHistory} /> : null}
       {listed.length && !ongoing.length ? <NothingOngoing upcoming={upcomingOnly} history={inHistory > 0} /> : null}
       {view.active.map((section) => (
@@ -766,10 +827,11 @@ export function RecordsView({
         <StatusList key={section.status} section={section} ctx={ctx} />
       ))}
       {ongoing.length && view.shown === 0 ? <NoMatches filter={filter} view={view} /> : null}
-      {available.length || notForMe.length ? (
-        <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
+      {listed.length || toCheck ? (
+        <div className="flex">
+          <AddLink />
+        </div>
       ) : null}
-      <AddRecordPanel catalogue={catalogue} addType={addType} assets={assets} zone={zone} addRecordAction={actions.addRecordAction} />
     </RecordReturnProvider>
   );
 }

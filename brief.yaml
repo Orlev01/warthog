@@ -446,9 +446,11 @@ features:
     someone else (a first name or relationship only). An account, policy or membership keeps what
     identifies it to the person: the name it's in, its account, member or policy number (a bank
     account or card only by its last 4 digits) and the email address it's registered to (amended
-    23 November 2026). Life admin has four tabs (amended 23 November 2026): Records (what is
-    ongoing: accounts, policies, memberships, documents, things and matters in progress, active
-    first), Upcoming (what needs the person or is booked), History (everything finished, kept
+    23 November 2026). Life admin has five tabs (amended 23 and 24 November 2026): Records (what
+    is on file and ongoing: accounts, policies, memberships, documents, things and matters in
+    progress, active first), Add (what is still to fill in: the empty categories to look for or
+    say are not for the person, and adding a record themselves; it opens first while nothing is
+    on file), Upcoming (what needs the person or is booked), History (everything finished, kept
     apart) and Tasks. Reminders by notification before due dates
     (default 14 days and 1 day before, or the kind's own schedule, adjustable per record; none for
     anything finished, paused or long past due). Agents add and update records through Warthog: a

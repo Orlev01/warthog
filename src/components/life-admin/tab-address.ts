@@ -1,5 +1,6 @@
-// Life admin's tabs in the address (founder, 23 Nov 2026): `?tab=records|upcoming|history|tasks`
-// (Records, the first, has no parameter), and older addresses mapped onto them — the two-level
+// Life admin's tabs in the address (founder, 23 and 24 Nov 2026): `?tab=records|add|upcoming|history|tasks`
+// (the page's default tab has no parameter: Records, or Add while nothing is on file), and older
+// addresses mapped onto them — the two-level
 // `?view=life|tasks&tab=…`, the Bookings tab (its bookings are Upcoming's now), the moving
 // checklist (gone), the Records tab's old name ("things") and the tabs Life admin had before typed
 // records (subscriptions, receipts, renewals), still in reminder notifications, whose links the
@@ -11,7 +12,7 @@ import type { LifeAdminTab } from "./record-view-types";
 
 type Params = Readonly<Record<string, string | readonly string[] | undefined>>;
 
-const PAGE_TABS: readonly LifeAdminTab[] = ["records", "upcoming", "history", "tasks"];
+const PAGE_TABS: readonly LifeAdminTab[] = ["records", "add", "upcoming", "history", "tasks"];
 const OLDER_TABS: Readonly<Record<string, LifeAdminTab>> = {
   bookings: "upcoming",
   checklist: "records",
@@ -34,6 +35,15 @@ export function lifeAdminTab(params: Params): LifeAdminTab {
   if (first(params.view) === "tasks") return "tasks";
   const tab = first(params.tab);
   return (tab !== undefined && tabNamed(tab)) || "records";
+}
+
+/**
+ * The tab an address asks for, or undefined when it asks for none (the page then opens Records,
+ * or Add while nothing is on file). A kind picked to add (`?add=`) asks for Add.
+ */
+export function requestedLifeAdminTab(params: Params): LifeAdminTab | undefined {
+  if (params.view === undefined && params.tab === undefined) return params.add === undefined ? undefined : "add";
+  return lifeAdminTab(params);
 }
 
 /**

@@ -32,7 +32,7 @@ function tabpanels(markup: string): { attrs: string; body: string }[] {
   }));
 }
 
-test("one heading band holds the page title, its purpose and the four tabs", () => {
+test("one heading band holds the page title, its purpose and the five tabs", () => {
   const markup = render();
   const h1s = [...markup.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/g)];
   assert.equal(h1s.length, 1);
@@ -42,18 +42,18 @@ test("one heading band holds the page title, its purpose and the four tabs", () 
   assert.match(band, /class="wh-page-description"/, "the band says what the page is for");
   assert.match(band, /role="tablist" aria-label="Life admin"/, "the tabs are the band's nav row");
   const tabs = [...band.matchAll(/role="tab"[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
-  assert.deepEqual(tabs, ["Records", "Upcoming", "History", "Tasks"]);
+  assert.deepEqual(tabs, ["Records", "Add", "Upcoming", "History", "Tasks"]);
   assert.equal([...markup.matchAll(/role="tablist"/g)].length, 1, "one row of tabs, none nested");
 });
 
-test("every tab stays mounted, so a half-typed task survives switching to Records and back", () => {
-  const order = ["records", "upcoming", "history", "tasks"] as const;
+test("every tab stays mounted, so a half-typed record or task survives switching tabs and back", () => {
+  const order = ["records", "add", "upcoming", "history", "tasks"] as const;
   for (const initialTab of order) {
     const panels = tabpanels(render({ initialTab }));
-    assert.equal(panels.length, 4, "a panel per tab");
-    const records = panels.find((panel) => /What are you adding\?/.test(panel.body));
+    assert.equal(panels.length, 5, "a panel per tab");
+    const adding = panels.find((panel) => /What are you adding\?/.test(panel.body));
     const tasks = panels.find((panel) => /placeholder="Describe the task"/.test(panel.body));
-    assert.ok(records && tasks, `Records and Tasks are both rendered when ${initialTab} is shown first`);
+    assert.ok(adding && tasks, `Add and Tasks are both rendered when ${initialTab} is shown first`);
     assert.deepEqual(panels.map((panel) => /\bhidden=""/.test(panel.attrs)), order.map((key) => key !== initialTab), "only the chosen tab is visible");
   }
 });
@@ -63,7 +63,12 @@ test("the outcome notice is the first thing under the band, in the tab the actio
   const markup = render({ initialTab: "tasks", notice });
   assert.equal(markup.match(/data-testid="outcome"/g)?.length, 1, "shown once");
   assert.ok(markup.indexOf("</header>") < markup.indexOf('data-testid="outcome"'), "below the heading band");
-  const tasks = tabpanels(markup)[3]!.body;
+  const tasks = tabpanels(markup)[4]!.body;
   assert.match(tasks, /data-testid="outcome"/, "inside the Tasks tab");
   assert.ok(tasks.indexOf('data-testid="outcome"') < tasks.indexOf("Create a task"), "above the tab's first panel");
+});
+
+test("the page's purpose says what each tab is for, Add included", () => {
+  const band = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(render({}))?.[1] ?? "";
+  assert.match(band.replace(/&#x27;/g, "'"), /Records are the accounts, policies and things you have now\. Add is what's still to fill in\./);
 });
