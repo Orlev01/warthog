@@ -134,6 +134,7 @@ import { saveWrappedKey, listMethods } from "@/server/db/vault-unlock-methods";
 import { HttpError } from "@/server/http/validate";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { freshDb } from "@/test/db";
+import { addCard as storeAddCard } from "@/server/db/cards";
 import type { Db } from "@/server/db/index";
 import type { Session } from "@/server/auth/session";
 
@@ -955,6 +956,32 @@ test("updateLowTierField rejects a malformed id, an empty or oversized value and
     );
     const field = (await listIdentityFields(db, userId, dek)).find((f) => f.id === seeded.id);
     assert.equal(field?.value, "Ada Banks", "nothing was changed by a rejected edit");
+  } finally {
+    await db.close();
+  }
+});
+
+
+// Card billing addresses (docs/adr/card-billing-addresses.md): making a postal address protected
+// removes it from About you, so while a card uses it as its billing address the raise is refused
+// (nothing created or removed) and the person is told to change the card's address first.
+test("a postal address a card uses as its billing address can't be made protected until the card moves", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "raise-billing");
+    await seedUnlockMethod(db, userId);
+    const actions = makeActions(db, keyWrapper);
+    const home = await saveIdentityField(db, { userId, kind: "postal_address", value: "1 Home St" }, dek);
+    const card = await storeAddCard(db, { userId, brand: "Visa", lastFour: "4242", expiryMonth: 1, expiryYear: 2031, nickname: "Everyday", billingAddressId: home.id, numberCiphertext: "v1:card" });
+    const raise = () => actions.raiseFieldToHighTier(sessionFor(userId), raiseInput({ fieldId: home.id, type: "custom", label: "Home", ciphertext: "v1:RAISE_HOME" }));
+
+    assert.deepEqual(await raise(), { ok: false, reason: "billing_address_in_use" });
+    assert.ok((await listIdentityFields(db, userId, dek)).some((f) => f.id === home.id), "the address is still in About you");
+    assert.ok(!(await listHighTierFields(db, userId)).some((f) => f.label === "Home"), "nothing protected was created");
+
+    await db.query("UPDATE cards SET billing_address_id = NULL WHERE id = $1", [card.id]);
+    assert.equal((await raise() as { ok: boolean }).ok, true, "once no card uses it, it can be made protected");
   } finally {
     await db.close();
   }

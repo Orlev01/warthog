@@ -19,6 +19,7 @@ import { createExportHandler } from "./handler";
 
 import { createUser } from "@/server/db/users";
 import { createMemory } from "@/server/db/memories";
+import { saveCardBillingAddress } from "@/server/db/card-billing-addresses";
 import { createSession, recordStepUp, COOKIE_NAME } from "@/server/auth/session";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { exportDocumentSchema } from "@/server/export/schema";
@@ -48,11 +49,11 @@ async function cookieFor(db: Db, userId: string, opts: { steppedUp: boolean }): 
   return `${COOKIE_NAME}=${created.token}`;
 }
 
-function post(cookie: string | null, origin: string | null = ORIGIN): Request {
+function post(cookie: string | null, origin: string | null = ORIGIN, path = "/settings/data/export"): Request {
   const headers = new Headers();
   if (cookie) headers.set("cookie", cookie);
   if (origin) headers.set("origin", origin);
-  return new Request(`${ORIGIN}/settings/data/export`, { method: "POST", headers });
+  return new Request(`${ORIGIN}${path}`, { method: "POST", headers });
 }
 
 test("a freshly stepped-up person gets their export as a no-store JSON attachment holding only their own data", async () => {
@@ -122,6 +123,35 @@ test("a cross-site or Origin-less POST is refused and a signed-out request is se
     assert.equal(signedOut.headers.get("location"), "/signin");
     const bogus = await handle(post(`${COOKIE_NAME}=not-a-real-token`));
     assert.equal(bogus.headers.get("location"), "/signin");
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/card-billing-addresses.md: the device export carries each card-only billing address
+// with its id, so the cards in the same file can be re-linked to it on import; the plain
+// download carries the values alone. Only the person's own ever appear.
+test("the device export lists the person's own card-only billing addresses with their ids; the download carries values alone", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const people: { userId: string; billingId: string }[] = [];
+    for (const who of ["ada-billing", "bob-billing"]) {
+      const dek = randomBytes(32);
+      const user = await createUser(db, { email: `${who}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
+      const billing = await saveCardBillingAddress(db, { userId: user.id, value: `${who} card-only address` }, dek);
+      people.push({ userId: user.id, billingId: billing.id });
+    }
+    const ada = people[0]!;
+    const handle = createExportHandler({ db, clock, keyWrapper, publicOrigin: ORIGIN });
+    const cookie = await cookieFor(db, ada.userId, { steppedUp: true });
+
+    const device = await (await handle(post(cookie, ORIGIN, "/settings/data/export?device=1"))).json();
+    assert.deepEqual(device.document.profile.cardBillingAddresses, [{ id: ada.billingId, value: "ada-billing card-only address" }]);
+    assert.ok(!JSON.stringify(device).includes("bob-billing card-only address"), "another person's address is never exported");
+
+    const download = JSON.parse(await (await handle(post(cookie))).text());
+    assert.deepEqual(download.profile.cardBillingAddresses, [{ value: "ada-billing card-only address" }]);
   } finally {
     await db.close();
   }

@@ -9,10 +9,12 @@ import { verifySession } from "@/server/auth/session";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
+import { safeReturnPath } from "@/server/auth/return-path";
 import { createCardsActions } from "./actions";
 import { CardsView } from "@/components/vault/cards-view";
 import { PageContainer } from "@/components/shell/page-container";
 import type { CardSubmission } from "@/components/vault/cards-view";
+import type { BillingSelection } from "@/components/vault/billing-address-choice";
 import type { Metadata } from "next";
 
 // The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
@@ -35,7 +37,19 @@ export const metadata: Metadata = { title: "Cards" };
 
 const SESSION_COOKIE = "__Host-wh_session";
 
-export default async function CardsPage() {
+// "Back to your request": a person sent here from a card request in the Inbox goes back to it
+// after saving a card. Only an Inbox path on this site is kept.
+function inboxReturnPath(raw: string | string[] | undefined): string | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  const path = safeReturnPath(raw);
+  return path === "/inbox" || path.startsWith("/inbox?") ? path : undefined;
+}
+
+export default async function CardsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   // Read the request first: touching the cookie marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
@@ -49,7 +63,8 @@ export default async function CardsPage() {
   // The KeyWrapper (local AES outside production, Key Vault in production) lets the
   // seam unwrap the session person's own DEK to decrypt their postal addresses.
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const data = await createCardsActions({ db, keyWrapper }).load(session);
+  const data = await createCardsActions({ db, keyWrapper, clock: systemClock }).load(session);
+  const returnTo = inboxReturnPath((await searchParams).returnTo);
 
   // The live add-card flow's submit seam: a server action that re-verifies the session and
   // stores ONLY the device-sealed submission (ciphertext + metadata) through the tested
@@ -72,10 +87,17 @@ export default async function CardsPage() {
       nodeEnv: requestConfig.nodeEnv,
       localKek: requestConfig.devKek,
     });
-    const result = await createCardsActions({
-      db: requestDb,
-      keyWrapper: requestKeyWrapper,
-    }).addCard(requestSession, submission);
+    // A boundary 4xx (a malformed submission) comes back as a plain refusal, not a crash.
+    let result: { ok: boolean; reason?: string };
+    try {
+      result = await createCardsActions({
+        db: requestDb,
+        keyWrapper: requestKeyWrapper,
+      }).addCard(requestSession, submission);
+    } catch (error) {
+      if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
+      throw error;
+    }
     if (result.ok) {
       // Re-run this page's loader so the newly saved card lists (with its last four)
       // right after the device flow submits — no manual reload.
@@ -117,6 +139,41 @@ export default async function CardsPage() {
     return result;
   }
 
+  // Give one of the session person's own cards a different billing address
+  // (docs/adr/card-billing-addresses.md). Re-resolves the session per request like removeCard;
+  // the seam checks the card and the address are the person's own.
+  async function changeBillingAddress(input: {
+    cardId: string;
+    billing: BillingSelection;
+  }): Promise<{ ok: boolean; reason?: string }> {
+    "use server";
+    const requestToken = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+    const requestConfig = loadConfig();
+    const requestDb = await getServerDb();
+    const requestSession = requestToken
+      ? await verifySession(requestDb, requestToken, { clock: systemClock })
+      : null;
+    if (!requestSession) {
+      return { ok: false, reason: "unauthenticated" };
+    }
+    const requestKeyWrapper = selectKeyWrapper({
+      nodeEnv: requestConfig.nodeEnv,
+      localKek: requestConfig.devKek,
+    });
+    let result: { ok: boolean; reason?: string };
+    try {
+      result = await createCardsActions({ db: requestDb, keyWrapper: requestKeyWrapper }).changeBillingAddress(
+        requestSession,
+        input,
+      );
+    } catch (error) {
+      if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
+      throw error;
+    }
+    if (result.ok) revalidatePath("/vault/cards");
+    return result;
+  }
+
   return (
     <PageContainer>
       <CardsView
@@ -125,6 +182,9 @@ export default async function CardsPage() {
         defaultCardholderName={data.defaultCardholderName}
         addCard={addCard}
         removeCard={removeCard}
+        changeBillingAddress={changeBillingAddress}
+        addingCard={returnTo !== undefined}
+        returnTo={returnTo}
       />
     </PageContainer>
   );

@@ -85,6 +85,8 @@ import { buildExportDocument } from "./build";
 import { exportDocumentSchema, type ExportDocument } from "./schema";
 import { createUser } from "../db/users";
 import { saveIdentityField } from "../db/identity-fields";
+import { saveCardBillingAddress } from "../db/card-billing-addresses";
+import { addCard } from "../db/cards";
 import { savePreferences } from "../db/preferences";
 import { createSkill, disableSkill } from "../db/skills";
 import { createMemory } from "../db/memories";
@@ -554,6 +556,34 @@ test("buildExportDocument exports only the owner's rows — never another person
     for (const other of [sb.name, sb.memory, sb.ruleAddress, sb.taskTitle, sb.lifeField, sb.connLabel, sb.activityNote]) {
       assert.ok(!aliceDoc.includes(other), `Alice's export never carries Bob's value ${other}`);
     }
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/card-billing-addresses.md: a billing address kept with the cards only is the
+// person's data, so the plain export carries it — under the profile's own
+// `cardBillingAddresses`, never mixed into the identity fields, and never another person's.
+test("buildExportDocument carries the person's card-only billing addresses apart from their identity fields", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "alice-billing");
+    const bob = await makeUser(db, "bob-billing");
+    const dekA = freshDek();
+    const dekB = freshDek();
+    await saveIdentityField(db, { userId: alice, kind: "postal_address", value: "1 Home St, Sydney NSW 2000" }, dekA);
+    const aliceBilling = await saveCardBillingAddress(db, { userId: alice, value: "PO Box 12, Sydney NSW 2001" }, dekA);
+    await addCard(db, { userId: alice, brand: "visa", lastFour: "4242", expiryMonth: 12, expiryYear: 2030, nickname: "Work", billingEntryId: aliceBilling.id, numberCiphertext: "v1:device-only" });
+    await saveCardBillingAddress(db, { userId: bob, value: "Bob's card-only address" }, dekB);
+
+    const doc = await buildExportDocument(db, alice, dekA, clockAt(EXPORTED_AT));
+    assert.deepEqual(doc.profile.cardBillingAddresses, [{ value: "PO Box 12, Sydney NSW 2001" }], "the plain export carries the value alone");
+    assert.ok(!sectionText(asRecord(doc.profile).fields).includes("PO Box 12"), "a card-only address is never exported as an identity field");
+    assert.ok(!JSON.stringify(doc).includes("Bob's card-only address"), "another person's card-only address never appears");
+    assert.equal(exportDocumentSchema.safeParse(doc).success, true, "the document is still schema-valid");
+
+    const carolDoc = await buildExportDocument(db, await makeUser(db, "carol-billing"), freshDek(), clockAt(EXPORTED_AT));
+    assert.equal("cardBillingAddresses" in carolDoc.profile, false, "a person with none exports no list");
   } finally {
     await db.close();
   }

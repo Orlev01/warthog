@@ -929,3 +929,165 @@ test("W6 — addCard refuses a missing, blank or oversized name on the card with
     await db.close();
   }
 });
+
+// =====================================================================================
+// Card billing addresses (docs/adr/card-billing-addresses.md). A person reported they couldn't
+// give a card a billing address that isn't one of their About you addresses. A card's billing
+// address is now one of their postal addresses OR an address kept with their cards only; the
+// reference must be the person's own, and card-only addresses never land in About you.
+// =====================================================================================
+
+async function billingRows(db: Db, userId: string): Promise<number> {
+  return (await db.query("SELECT 1 FROM card_billing_addresses WHERE user_id = $1", [userId])).rows.length;
+}
+
+test("a card can be saved with a billing address typed for cards only, which never lands in About you", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "billing-new");
+    await seedUnlockMethod(db, userId);
+    const actions = makeActions(db, keyWrapper);
+    const { billingAddressId: _drop, ...base } = submission("unused");
+    const result = await actions.addCard(sessionFor(userId), addInput({ ...base, billing: { source: "new", value: "  PO Box 12, Bondi Junction NSW 1355 " } }));
+    assert.deepEqual(result, { ok: true });
+
+    const loaded = await actions.load(sessionFor(userId));
+    assert.equal(loaded.cards.length, 1);
+    assert.deepEqual(loaded.cards[0]!.billing, { text: "PO Box 12, Bondi Junction NSW 1355", source: "billing" }, "trimmed and resolved");
+    assert.deepEqual(loaded.billingAddresses.map((c) => [c.value, c.source, c.usedBy]), [["PO Box 12, Bondi Junction NSW 1355", "billing", ["Everyday spending"]]]);
+    const about = await db.query("SELECT 1 FROM identity_fields WHERE user_id = $1", [userId]);
+    assert.equal(about.rows.length, 0, "nothing was added to About you");
+    void dek;
+  } finally {
+    await db.close();
+  }
+});
+
+test("a billing reference that isn't the person's own postal or card-only address saves nothing", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const me = await makeUserWithDek(db, keyWrapper, "billing-me");
+    const them = await makeUserWithDek(db, keyWrapper, "billing-them");
+    await seedUnlockMethod(db, me.userId);
+    const theirHome = await seedBillingAddress(db, them.userId, them.dek, "2 Their St");
+    const myName = (await saveIdentityField(db, { userId: me.userId, kind: "name", value: "Phil" }, me.dek)).id;
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(me.userId);
+    const { billingAddressId: _drop, ...base } = submission("unused");
+
+    for (const [label, billing] of [
+      ["another person's postal address", { source: "postal", id: theirHome }],
+      ["my name field", { source: "postal", id: myName }],
+      ["an unknown address", { source: "postal", id: randomUUID() }],
+      ["an unknown card-only address", { source: "billing", id: randomUUID() }],
+    ] as const) {
+      const result = await actions.addCard(session, addInput({ ...base, billing }));
+      assert.deepEqual(result, { ok: false, reason: "billing_address_not_found" }, label);
+    }
+    // The older form (a bare postal id) is checked the same way.
+    assert.deepEqual(await actions.addCard(session, addInput(submission(theirHome))), { ok: false, reason: "billing_address_not_found" });
+    assert.equal((await actions.load(session)).cards.length, 0, "no card was saved");
+    await assertRejects4xx("both forms at once", () => actions.addCard(session, addInput({ ...submission(randomUUID()), billing: { source: "new", value: "x" } })));
+    await assertRejects4xx("neither form", () => actions.addCard(session, addInput(base)));
+    await assertRejects4xx("a blank new address", () => actions.addCard(session, addInput({ ...base, billing: { source: "new", value: "   " } })));
+    await assertRejects4xx("an oversized new address", () => actions.addCard(session, addInput({ ...base, billing: { source: "new", value: "x".repeat(4097) } })));
+  } finally {
+    await db.close();
+  }
+});
+
+test("if saving the card fails, a new billing address typed with it is not kept either", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId } = await makeUserWithDek(db, keyWrapper, "billing-rollback");
+    await seedUnlockMethod(db, userId);
+    await db.query("ALTER TABLE cards ADD CONSTRAINT test_no_nickname_boom CHECK (nickname <> 'Boom')");
+    const { billingAddressId: _drop, ...base } = submission("unused");
+    await assert.rejects(makeActions(db, keyWrapper).addCard(sessionFor(userId), addInput({ ...base, nickname: "Boom", billing: { source: "new", value: "PO Box 1" } })));
+    assert.equal(await billingRows(db, userId), 0, "the new address rolled back with the card");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a saved card's billing address can be changed, and a card-only address no card uses is deleted", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "billing-change");
+    const them = await makeUserWithDek(db, keyWrapper, "billing-change-them");
+    await seedUnlockMethod(db, userId);
+    const home = await seedBillingAddress(db, userId, dek, "1 Home St");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    const { billingAddressId: _drop, ...base } = submission("unused");
+    assert.deepEqual(await actions.addCard(session, addInput({ ...base, billing: { source: "postal", id: home } })), { ok: true });
+    const cardId = (await actions.load(session)).cards[0]!.id;
+
+    // Home address → a typed card-only address.
+    assert.deepEqual(await actions.changeBillingAddress(session, { cardId, billing: { source: "new", value: "PO Box 5" } }), { ok: true });
+    let loaded = await actions.load(session);
+    assert.deepEqual(loaded.cards[0]!.billing, { text: "PO Box 5", source: "billing" });
+    assert.equal(await billingRows(db, userId), 1);
+
+    // Back to the home address: the card-only address no card uses is deleted, the postal one is never touched.
+    assert.deepEqual(await actions.changeBillingAddress(session, { cardId, billing: { source: "postal", id: home } }), { ok: true });
+    loaded = await actions.load(session);
+    assert.deepEqual(loaded.cards[0]!.billing, { text: "1 Home St", source: "postal" });
+    assert.equal(await billingRows(db, userId), 0, "the unused card-only address is gone");
+    assert.equal((await db.query("SELECT 1 FROM identity_fields WHERE id = $1", [home])).rows.length, 1, "a postal address is never deleted");
+
+    // Someone else can't change this card, and a reference that isn't mine changes nothing.
+    assert.deepEqual(await actions.changeBillingAddress(sessionFor(them.userId), { cardId, billing: { source: "new", value: "PO Box 666" } }), { ok: false, reason: "not_found" });
+    assert.equal(await billingRows(db, them.userId), 0, "nothing was kept for the other person either");
+    const theirHome = await seedBillingAddress(db, them.userId, them.dek, "2 Their St");
+    assert.deepEqual(await actions.changeBillingAddress(session, { cardId, billing: { source: "postal", id: theirHome } }), { ok: false, reason: "billing_address_not_found" });
+    await assertRejects4xx("a malformed card id", () => actions.changeBillingAddress(session, { cardId: "nope", billing: { source: "postal", id: home } }));
+  } finally {
+    await db.close();
+  }
+});
+
+test("removing a card deletes its card-only billing address unless another card still uses it", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId } = await makeUserWithDek(db, keyWrapper, "billing-remove");
+    await seedUnlockMethod(db, userId);
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    const { billingAddressId: _drop, ...base } = submission("unused");
+    await actions.addCard(session, addInput({ ...base, nickname: "One", billing: { source: "new", value: "PO Box 8" } }));
+    await actions.addCard(session, addInput({ ...base, nickname: "Two", billing: { source: "new", value: "PO Box 8" } }));
+    assert.equal(await billingRows(db, userId), 1, "identical text is one shared card-only address");
+    const [one, two] = (await actions.load(session)).cards;
+    assert.deepEqual(await actions.removeCard(session, removeInput({ cardId: one!.id })), { ok: true });
+    assert.equal(await billingRows(db, userId), 1, "still used by the other card");
+    assert.deepEqual(await actions.removeCard(session, removeInput({ cardId: two!.id })), { ok: true });
+    assert.equal(await billingRows(db, userId), 0, "deleted with its last card");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the page loads each card's billing address and every address the person can choose, upcoming moves last", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "billing-load");
+    await saveIdentityField(db, { userId, kind: "postal_address", value: "9 New Rd", movingOn: "2099-03-01" }, dek);
+    const home = await seedBillingAddress(db, userId, dek, "1 Home St");
+    await seedCard(db, userId, { nickname: "Home card", billingAddressId: home });
+    await seedCard(db, userId, { nickname: "Broken", billingAddressId: null });
+    const loaded = await makeActions(db, keyWrapper).load(sessionFor(userId));
+    const byNick = Object.fromEntries(loaded.cards.map((c) => [c.nickname, c.billing]));
+    assert.deepEqual(byNick["Home card"], { text: "1 Home St", source: "postal" });
+    assert.equal(byNick["Broken"], null, "a card with no billing address says so");
+    assert.deepEqual(loaded.billingAddresses.map((c) => [c.value, c.upcoming]), [["1 Home St", false], ["9 New Rd", true]]);
+  } finally {
+    await db.close();
+  }
+});

@@ -56,6 +56,7 @@ import { completeAccountReset, RESET_WAIT_MS } from "../auth/account-reset";
 
 import { createUser } from "../db/users";
 import { addCard, listCards } from "../db/cards";
+import { saveCardBillingAddress, listCardBillingAddresses } from "../db/card-billing-addresses";
 import { saveHighTierField, listHighTierFields } from "../db/high-tier-fields";
 import {
   saveWrappedKey,
@@ -413,6 +414,32 @@ test("eraseVaultData also clears the PRF salt and the recovery verifier, so the 
     assert.deepEqual((await listMethods(db, bystander)).sort(), ["passphrase", "recovery"]);
     assert.equal(await getOrCreatePrfSalt(db, bystander, { random: systemRandom }), salts.get(bystander));
     assert.equal(await verifyRecoveryAuth(db, bystander, "OLD-RECOVERY-CODE"), true);
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/card-billing-addresses.md: a card-only billing address exists only while a card uses
+// it, so erasing the cards erases those addresses too — the person's own, never anyone else's —
+// while their About you postal addresses (low-tier identity) are kept.
+test("eraseVaultData erases the person's card-only billing addresses with their cards, and only theirs", async () => {
+  const db = await freshDb();
+  try {
+    const victim = await makeUser(db);
+    const bystander = await makeUser(db);
+    for (const userId of [victim, bystander]) {
+      await saveIdentityField(db, { userId, kind: "postal_address", value: "1 Home St, Sydney NSW 2000" }, DEK);
+      const billing = await saveCardBillingAddress(db, { userId, value: "PO Box 12, Sydney NSW 2001" }, DEK);
+      await addCard(db, { userId, brand: "visa", lastFour: "4242", expiryMonth: 12, expiryYear: 2030, nickname: "work", billingEntryId: billing.id, numberCiphertext: "vk-ct-card" });
+    }
+
+    await createResetExecutor(db).eraseVaultData(victim);
+
+    assert.deepEqual(await listCards(db, victim), [], "the victim's cards are erased");
+    assert.deepEqual(await listCardBillingAddresses(db, victim, DEK), [], "the victim's card-only billing addresses are erased");
+    assert.equal((await listIdentityFields(db, victim, DEK)).length, 1, "the victim's postal address in About you is kept");
+    assert.equal((await listCards(db, bystander)).length, 1, "the bystander's cards are untouched");
+    assert.equal((await listCardBillingAddresses(db, bystander, DEK)).length, 1, "the bystander's card-only address is untouched");
   } finally {
     await db.close();
   }

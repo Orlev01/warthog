@@ -85,6 +85,7 @@ import { createHeldRequest, getByApproval } from "@/server/db/held-requests";
 import { listActivity } from "@/server/activity/list";
 import { loadConfig, type Config } from "@/server/config";
 import { addCard } from "@/server/db/cards";
+import { saveCardBillingAddress } from "@/server/db/card-billing-addresses";
 import { saveHighTierField } from "@/server/db/high-tier-fields";
 import { saveIdentityField } from "@/server/db/identity-fields";
 import { isUnopened } from "@/server/approvals/opened";
@@ -1318,6 +1319,37 @@ test("a request's time left reads in hours once the person's expiry runs past an
     assert.equal(left.get(day), "24 hours left");
     assert.equal(left.get(longer), "1 hour 30 minutes left");
     assert.equal(left.get(short), "2 minutes left");
+  } finally {
+    await db.close();
+  }
+});
+
+// Card billing addresses (docs/adr/card-billing-addresses.md): a card whose billing address is
+// kept with the person's cards only (never in About you) releases that address, and a card with
+// no billing address releases none.
+test("a card with a card-only billing address releases that address", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-billing-entry");
+    const bob = await makePerson(db, keyWrapper, "bob-billing-entry");
+    const BOX = "PO Box 12, Bondi Junction NSW 1355";
+    const entry = await saveCardBillingAddress(db, { userId: alice.userId, value: BOX }, alice.dek);
+    const bobEntry = await saveCardBillingAddress(db, { userId: bob.userId, value: "Bob's PO Box" }, bob.dek);
+    const withEntry = await addCard(db, { userId: alice.userId, brand: "Visa", lastFour: "1111", expiryMonth: 1, expiryYear: 2031, nickname: "Box", billingEntryId: entry.id, numberCiphertext: "v1:box" });
+    const none = await addCard(db, { userId: alice.userId, brand: "Visa", lastFour: "2222", expiryMonth: 1, expiryYear: 2031, nickname: "None", billingAddressId: null, numberCiphertext: "v1:none" });
+    await seedPending(db, {
+      userId: alice.userId,
+      dek: alice.dek,
+      detail: detailFor({ sentence: "wants to use your card for $42.00 at BoxCo", request: "card", amount: "42.00 AUD" }),
+      at: T_NEW,
+    });
+    const view = await makeActions(db, keyWrapper, fixedClock(NOW)).load(await sessionFor(db, alice.userId));
+    const byId = new Map((view.savedCards ?? []).map((card) => [card.id, card]));
+    assert.equal(byId.get(withEntry.id)!.billingAddress, BOX);
+    assert.equal(byId.get(none.id)!.billingAddress, null);
+    assert.ok(!JSON.stringify(view).includes("Bob's PO Box"), "another person's card-only address never appears");
+    void bobEntry;
   } finally {
     await db.close();
   }

@@ -33,8 +33,9 @@
 //   • INJECTED DEPS ONLY: the db, the person's already-unwrapped DEK and the clock are all
 //     passed in; this module reads no `process.env` and holds no key (AC7, INV-103).
 
-import { sealedVaultSchema, type SealedVault } from "../../domain/data-transfer";
+import { cardBillingAddressesSchema, sealedVaultSchema, type SealedVault } from "../../domain/data-transfer";
 import { addCard } from "../db/cards";
+import { applyBillingSelection, lockCardBilling } from "../vault/card-billing";
 import { saveHighTierField } from "../db/high-tier-fields";
 import { listMethods } from "../db/vault-unlock-methods";
 import { HttpError } from "../http/validate";
@@ -78,6 +79,9 @@ interface ProfileFieldDoc {
 }
 interface ProfileDoc {
   readonly fields?: ProfileFieldDoc[];
+  // The person's card-only billing addresses (docs/adr/card-billing-addresses.md), validated
+  // against `cardBillingAddressesSchema` before any write.
+  readonly cardBillingAddresses?: unknown;
 }
 interface PreferencesDoc {
   readonly tone?: string;
@@ -193,6 +197,9 @@ export interface ImportSummary {
   readonly lifeAdmin: number;
   // Records whose own category wasn't in the file, restored as "Something else".
   readonly lifeAdminRetyped?: number;
+  // Restored cards that have no billing address — none in the file, or one the file doesn't
+  // carry (docs/adr/card-billing-addresses.md). The person can give each one an address.
+  readonly cardsWithoutBillingAddress?: number;
   readonly archivedActivity: number;
 }
 
@@ -215,6 +222,22 @@ function splitSkillText(text: string): { useThisWhen: string; fullText: string }
   return { useThisWhen: text.slice(afterMarker, bodyAt), fullText: text.slice(bodyAt + 2) };
 }
 
+// What a multi-part import (`./parts`) keeps across its parts, so a card in a later part is
+// re-linked to the billing address an earlier part carried. Card-only values are held in memory
+// only, and an address is created only when a restored card uses it (a card-only address exists
+// only while a card uses it).
+export interface TransferContext {
+  // An About you postal address's id in the export → its new identity field id.
+  readonly importedAddresses: Map<string, string>;
+  // A card-only billing address's id in the export → its (trimmed) value.
+  readonly cardBillingValues: Map<string, string>;
+  // A card-only billing address's id in the export → its new id, once a card has used it.
+  readonly importedCardBilling: Map<string, string>;
+}
+export function newTransferContext(): TransferContext {
+  return { importedAddresses: new Map(), cardBillingValues: new Map(), importedCardBilling: new Map() };
+}
+
 // Validate `document` (the uploaded export) and write it into the signed-in account
 // `userId`. The `dek` is the session person's already-unwrapped DEK; the `clock` supplies
 // the created-at the dated stores stamp. Rejects with a plain validation error (writing
@@ -226,7 +249,7 @@ export async function importExportDocument(
   dek: Uint8Array,
   clock: Clock,
   protectedVault?: SealedVault,
-  transferContext?: { importedAddresses: Map<string, string> },
+  transferContext?: TransferContext,
 ): Promise<ImportSummary> {
   // Validate BEFORE any write: a malformed / wrong-version document is rejected here, so
   // nothing is ever persisted for it (AC4). The envelope's `version: literal(1)` and the
@@ -234,12 +257,25 @@ export async function importExportDocument(
   if (document && typeof document === "object" && Object.hasOwn(document, "deviceProtected")) {
     throw new HttpError(400, "Protected values must be encrypted on your device before import");
   }
-  const sealed = protectedVault === undefined ? undefined : sealedVaultSchema.parse(protectedVault);
+  const sealedParsed = protectedVault === undefined ? undefined : sealedVaultSchema.safeParse(protectedVault);
+  if (sealedParsed && !sealedParsed.success) throw new HttpError(400, "The export file's protected details are invalid.");
+  const sealed = sealedParsed?.data;
   const parsed = exportDocumentSchema.safeParse(document);
   if (!parsed.success) {
     throw new Error("Invalid export document");
   }
   const doc = parsed.data;
+  const context = transferContext ?? newTransferContext();
+
+  // Card-only billing addresses: checked before any write (a malformed value or a repeated id
+  // is a bad file), then held in memory until a restored card uses one.
+  const cardBilling = cardBillingAddressesSchema.optional().safeParse((doc.profile as ProfileDoc).cardBillingAddresses);
+  if (!cardBilling.success) throw new HttpError(400, "The export file has an invalid card billing address.");
+  for (const entry of cardBilling.data ?? []) {
+    if (entry.id === undefined) continue; // the plain export carries values alone; no card can use them
+    if (context.cardBillingValues.has(entry.id)) throw new HttpError(400, "Duplicate card billing address reference");
+    context.cardBillingValues.set(entry.id, entry.value);
+  }
   const packages = (doc.skillPackages ?? []).map((p) => parsePackage(p.files, p.name));
 
   // Read each section back from the kind-checked document.
@@ -260,7 +296,7 @@ export async function importExportDocument(
   const restore = async (tx: Db): Promise<ImportSummary> => {
     // Profile — the full low-tier identity field list (the authoritative profile data),
     // each a fresh row owned by `userId`.
-    const importedAddresses = transferContext?.importedAddresses ?? new Map<string, string>();
+    const importedAddresses = context.importedAddresses;
     for (const field of profileFields) {
       const saved = await saveIdentityField(
         tx,
@@ -273,16 +309,47 @@ export async function importExportDocument(
       }
     }
 
+    let cardsWithoutBillingAddress = 0;
     if (sealed && (sealed.cards.length || sealed.highTierFields.length)) {
       const methods = await listMethods(tx, userId);
       if ((!methods.includes("passphrase") && !methods.includes("passkey_prf")) || !methods.includes("recovery")) {
         throw new HttpError(409, "Set up your vault and save its recovery phrase before importing protected details");
       }
       for (const field of sealed.highTierFields) await saveHighTierField(tx, { ...field, userId });
+      // Serialised with the person's card billing changes, like every other billing write.
+      if (sealed.cards.length) await lockCardBilling(tx, userId);
+      // Each card is re-linked to its billing address under its NEW id: an About you postal
+      // address restored above, or a card-only address created now (once, however many cards
+      // share it), re-encrypted under the importing person's DEK. A reference the export doesn't
+      // carry (another person's address, one made protected, one that's gone) imports as no
+      // billing address rather than failing the whole import (docs/adr/card-billing-addresses.md).
+      // Both references are set explicitly; an id from the file is never stored.
       for (const card of sealed.cards) {
-        const billingAddressId = importedAddresses.get(card.billingAddressId);
-        if (!billingAddressId) throw new HttpError(400, "A card billing address is missing from the export");
-        await addCard(tx, { ...card, userId, billingAddressId });
+        const billingAddressId = card.billingAddressId === undefined ? null : importedAddresses.get(card.billingAddressId) ?? null;
+        let billingEntryId: string | null = null;
+        if (card.billingEntryId !== undefined) {
+          billingEntryId = context.importedCardBilling.get(card.billingEntryId) ?? null;
+          const value = context.cardBillingValues.get(card.billingEntryId);
+          if (billingEntryId === null && value !== undefined) {
+            // An identical address the person already keeps (or one this file already restored
+            // under another id) is reused, as when adding a card.
+            billingEntryId = (await applyBillingSelection(tx, userId, { source: "new", value }, dek))?.billingEntryId ?? null;
+            if (billingEntryId !== null) context.importedCardBilling.set(card.billingEntryId, billingEntryId);
+          }
+        }
+        if (billingAddressId === null && billingEntryId === null) cardsWithoutBillingAddress += 1;
+        await addCard(tx, {
+          userId,
+          brand: card.brand,
+          lastFour: card.lastFour,
+          expiryMonth: card.expiryMonth,
+          expiryYear: card.expiryYear,
+          nickname: card.nickname,
+          cardholderName: card.cardholderName ?? null,
+          billingAddressId,
+          billingEntryId,
+          numberCiphertext: card.numberCiphertext,
+        });
       }
     }
 
@@ -460,6 +527,7 @@ export async function importExportDocument(
       tasks: tasks.length,
       lifeAdmin: lifeAdmin.length,
       ...(lifeAdminRetyped > 0 ? { lifeAdminRetyped } : {}),
+      ...(cardsWithoutBillingAddress > 0 ? { cardsWithoutBillingAddress } : {}),
       archivedActivity: activity.length,
     };
   };

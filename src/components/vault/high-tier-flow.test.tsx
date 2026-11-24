@@ -1002,3 +1002,22 @@ test("W1 — the open panel offers the recovery phrase as a way to unlock", () =
   assert.match(html, /recovery phrase/i);
   assert.match(html, /vault passphrase/i);
 });
+
+// Card billing addresses (docs/adr/card-billing-addresses.md): a refused raise because a card uses
+// the address says what to do, not a generic "couldn't save".
+test("a raise refused because a card uses the address says to change the card's billing address first", async () => {
+  const { BILLING_IN_USE_COPY } = await import("./high-tier-flow");
+  const ctx = makeFlow({
+    mode: "raise",
+    field: { id: RAISE_FIELD_ID, value: RAISE_VALUE, label: "Home" },
+    server: makeServer(),
+    passkey: makePasskey(),
+    createKey: makeCreateKey(),
+    save: makeSave(),
+    raise: makeRaise({ ok: false, reason: "billing_address_in_use" }),
+  });
+  await submitThroughPhrase(ctx.flow);
+  assert.equal(ctx.flow.getState().status, "error");
+  assert.equal(ctx.flow.getState().error, BILLING_IN_USE_COPY);
+  assert.equal(ctx.savedCount, 0);
+});

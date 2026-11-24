@@ -221,6 +221,25 @@ test("re-protects every field and card, in the order given, each decrypting back
   assert.deepEqual(result.failed, [], "every value re-protected → nothing reported as failed");
 });
 
+// docs/adr/card-billing-addresses.md: whichever billing reference a card has (a postal address,
+// a card-only address or none) must reach the upload, or the server can't re-link it.
+test("carries each card's billing reference through — postal, card-only or none", async () => {
+  const importingKey = freshVaultKey();
+
+  const result = await reprotectDeviceProtected(importingKey, section([], [
+    { ...CARD_EVERYDAY, billingAddressId: "postal-1" } as PlainCard,
+    { ...CARD_TRAVEL, billingEntryId: "billing-1" } as PlainCard,
+    CARD_EVERYDAY,
+  ]));
+
+  const [postal, cardOnly, none] = result.sealed.cards;
+  assert.equal(postal!.billingAddressId, "postal-1", "a postal reference is carried through");
+  assert.equal("billingEntryId" in postal!, false, "a postal card gains no card-only reference");
+  assert.equal(cardOnly!.billingEntryId, "billing-1", "a card-only reference is carried through");
+  assert.equal("billingAddressId" in cardOnly!, false, "a card-only card gains no postal reference");
+  assert.equal("billingAddressId" in none! || "billingEntryId" in none!, false, "a card with no address carries no reference");
+});
+
 test("uses a fresh nonce per value — the same plaintext seals to DIFFERENT ciphertext each time (AES-256-GCM)", async () => {
   const importingKey = freshVaultKey();
   // Two high-tier fields carrying the SAME value; AES-GCM with a fresh random nonce

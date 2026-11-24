@@ -5,14 +5,23 @@ import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Field, SelectField } from "@/components/ui/field";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SensitiveNotice } from "@/components/ui/sensitive-notice";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { createVaultKey } from "@/client/vault/key";
 import { createDeviceVault, StepUpRequiredError } from "@/client/vault/device-vault";
 import { startVaultAuthentication } from "@/client/vault/prf-ceremony";
-import { sealCard, type CardSubmission, type VaultAddress } from "./cards-view";
+import { sealCard, type CardSubmission } from "./cards-view";
+import {
+  BILLING_GONE_COPY,
+  BillingAddressChoice,
+  billingSelection,
+  choiceKey,
+  initialBillingKey,
+  NEW_BILLING_KEY,
+  type BillingChoiceView,
+} from "./billing-address-choice";
 import {
   createVaultKeyStep,
   PHRASE_NOT_SAVED_COPY,
@@ -72,11 +81,16 @@ export interface AddCardState {
   cardholderName: string;
   expiryMonth: string;
   expiryYear: string;
-  billingAddressId: string;
+  // The billing address chosen for the card (a choice key, "new" for a typed address, or "" for
+  // none yet) and the typed address (docs/adr/card-billing-addresses.md).
+  billingKey: string;
+  newBillingAddress: string;
   usePassphrase: boolean;
   passphrase: string;
   status: AddCardStatus;
   error?: string;
+  // Which field the error belongs to: a billing-address problem is shown on the billing choice.
+  errorField?: "billing";
   // True when replacing the vault passphrase was refused for a lapsed step-up: the panel
   // then offers "Confirm it's you" inline.
   confirmRequired: boolean;
@@ -89,8 +103,8 @@ export type PasskeyAssertion = {
 };
 
 export interface AddCardFlowDeps {
-  // The billing-address picker's choices (used to default the chosen address).
-  readonly billingAddresses?: readonly VaultAddress[];
+  // The addresses the person can choose for the card's billing address.
+  readonly billingAddresses?: readonly BillingChoiceView[];
   // The person's saved name from About you: the "Name on card" field starts with it.
   readonly defaultCardholderName?: string;
   // GET /api/vault/unlock-material/<method>, POST /api/vault/unlock-method.
@@ -115,7 +129,12 @@ export interface AddCardController {
   setCardholderName(value: string): void;
   setExpiryMonth(value: string): void;
   setExpiryYear(value: string): void;
+  // Choose a saved address by its id (kept for callers that pick by id), or by choice key.
   setBillingAddressId(value: string): void;
+  chooseBilling(key: string): void;
+  setNewBillingAddress(value: string): void;
+  // The page refreshed its billing choices (e.g. after a save).
+  setBillingChoices(choices: readonly BillingChoiceView[]): void;
   setUsePassphrase(value: boolean): void;
   setPassphrase(value: string): void;
   submit(): Promise<void>;
@@ -155,7 +174,6 @@ const NICKNAME_COPY = "Give this card a name so you can tell it apart, then conf
 // The name on the card, capped like the server's check (CARDHOLDER_NAME_MAX).
 const CARDHOLDER_NAME_MAX = 256;
 const CARDHOLDER_COPY = "Type the name on the card as it's printed, then confirm.";
-const BILLING_COPY = "Choose a billing address for this card, then confirm.";
 const PASSPHRASE_COPY = `Choose a vault passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters, or untick the passphrase option.`;
 
 // The card brand, derived from the number's leading digits (the issuer BIN ranges). The
@@ -169,9 +187,18 @@ function brandFromNumber(number: string): string {
   return "Card";
 }
 
-// The first problem with the person's entries, in plain words, or null when the card can
-// be sealed and saved.
-function entryProblem(state: AddCardState): string | null {
+// The first problem with the person's entries, in plain words (and the field it belongs to), or
+// null when the card can be sealed and saved.
+function entryProblem(state: AddCardState, choices: readonly BillingChoiceView[]): { copy: string; field?: "billing" } | null {
+  const copy = otherProblem(state);
+  if (copy) return { copy };
+  const billing = billingSelection(state.billingKey, state.newBillingAddress, choices);
+  if (!billing.ok) return { copy: billing.error, field: "billing" };
+  if (state.usePassphrase && state.passphrase.length < MIN_PASSPHRASE_LENGTH) return { copy: PASSPHRASE_COPY };
+  return null;
+}
+
+function otherProblem(state: AddCardState): string | null {
   const digits = state.number.replace(/[\s-]/g, "");
   if (!/^\d{12,19}$/.test(digits)) return NUMBER_COPY;
   const month = Number(state.expiryMonth);
@@ -181,19 +208,22 @@ function entryProblem(state: AddCardState): string | null {
   if (state.nickname.trim().length === 0) return NICKNAME_COPY;
   const cardholderName = state.cardholderName.trim();
   if (cardholderName.length === 0 || cardholderName.length > CARDHOLDER_NAME_MAX) return CARDHOLDER_COPY;
-  if (state.billingAddressId.length === 0) return BILLING_COPY;
-  if (state.usePassphrase && state.passphrase.length < MIN_PASSPHRASE_LENGTH) return PASSPHRASE_COPY;
   return null;
 }
 
 export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
+  let choices: readonly BillingChoiceView[] = deps.billingAddresses ?? [];
+  // True once the person picks "A different billing address" themselves (with nothing saved the
+  // field is simply the only way in, which a refresh with saved addresses replaces with a choice).
+  let typedChosen = false;
   let state: AddCardState = {
     number: "",
     nickname: "",
     cardholderName: deps.defaultCardholderName ?? "",
     expiryMonth: "",
     expiryYear: "",
-    billingAddressId: deps.billingAddresses?.[0]?.id ?? "",
+    billingKey: initialBillingKey(choices),
+    newBillingAddress: "",
     usePassphrase: false,
     passphrase: "",
     status: "idle",
@@ -231,6 +261,11 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
   // metadata. The chosen vault passphrase (if any) is saved first, wrapping the SAME key,
   // so "Use your vault passphrase" opens the vault the passkey does (review fix G12).
   async function sealAndSubmit(vaultKey: Uint8Array<ArrayBuffer>): Promise<void> {
+    const billing = billingSelection(state.billingKey, state.newBillingAddress, choices);
+    if (!billing.ok) {
+      set({ status: "error", error: billing.error, errorField: "billing", passphrase: "" });
+      return;
+    }
     let submission: CardSubmission;
     try {
       if (state.usePassphrase) await vault.savePassphrase(vaultKey, state.passphrase);
@@ -241,7 +276,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         expiryYear: state.expiryYear,
         nickname: state.nickname,
         cardholderName: state.cardholderName.trim(),
-        billingAddressId: state.billingAddressId,
+        billing: billing.selection,
       });
     } catch (error) {
       setupFailed(error, SETUP_FAILED_COPY);
@@ -264,6 +299,8 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
       set({
         status: "added",
         error: undefined,
+        errorField: undefined,
+        newBillingAddress: "",
         number: "",
         nickname: "",
         cardholderName: deps.defaultCardholderName ?? "",
@@ -272,20 +309,33 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         usePassphrase: false,
         passphrase: "",
       });
+      // The next card starts afresh: nothing chosen (or the field, with nothing saved). The page's
+      // refresh then brings the saved address in as a choice.
+      typedChosen = false;
+      set({ billingKey: initialBillingKey(choices) });
       deps.onAdded?.();
+    } else if (result.reason === "billing_address_not_found") {
+      set({ status: "error", error: BILLING_GONE_COPY, errorField: "billing", passphrase: "" });
     } else {
       set({ status: "error", error: SAVE_FAILED_COPY, passphrase: "" });
     }
   }
 
+  // Choosing an address answers a billing problem, so it goes (it isn't moved to the general alert).
+  function chooseBilling(key: string): void {
+    if (key === NEW_BILLING_KEY) typedChosen = true;
+    const answered = state.errorField === "billing" ? { error: undefined, errorField: undefined, status: "idle" as const } : {};
+    set({ billingKey: key, ...answered });
+  }
+
   async function submit(): Promise<void> {
     if (state.status === "working" || state.status === "phrase") return; // no double confirm
-    const problem = entryProblem(state);
+    const problem = entryProblem(state, choices);
     if (problem) {
-      set({ status: "error", error: problem });
+      set({ status: "error", error: problem.copy, errorField: problem.field });
       return;
     }
-    set({ status: "working", error: undefined, confirmRequired: false });
+    set({ status: "working", error: undefined, errorField: undefined, confirmRequired: false });
 
     // 1. Unlock (or set up) the vault key on this device. A cancelled prompt, an
     //    unreachable endpoint, a wrong secret or a tampered envelope lands here: the
@@ -334,7 +384,22 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     setCardholderName: (value) => set({ cardholderName: value }),
     setExpiryMonth: (value) => set({ expiryMonth: value }),
     setExpiryYear: (value) => set({ expiryYear: value }),
-    setBillingAddressId: (value) => set({ billingAddressId: value }),
+    setBillingAddressId: (value) => {
+      const match = choices.find((choice) => choice.id === value);
+      chooseBilling(match ? choiceKey(match) : "");
+    },
+    chooseBilling,
+    setNewBillingAddress: (value) => set({ newBillingAddress: value }),
+    setBillingChoices: (next) => {
+      choices = next;
+      // A chosen address that is no longer offered is unchosen, and so is the typed-address field
+      // the person didn't pick themselves once there are saved addresses to choose from.
+      const key = state.billingKey;
+      const keep =
+        key === NEW_BILLING_KEY ? typedChosen || next.length === 0 || state.newBillingAddress.trim() !== "" : key === "" || next.some((choice) => choiceKey(choice) === key);
+      const nextKey = keep ? key : initialBillingKey(next);
+      if (nextKey !== key) set({ billingKey: nextKey });
+    },
     setUsePassphrase: (value) => set({ usePassphrase: value }),
     setPassphrase: (value) => set({ passphrase: value }),
     submit,
@@ -375,7 +440,7 @@ const SECURITY_CODE_NOTE =
 // ─── the client component (a thin binding over the controller) ─────────────────────────
 
 export interface AddCardFlowProps {
-  billingAddresses: readonly VaultAddress[];
+  billingAddresses: readonly BillingChoiceView[];
   // The person's saved name from About you, which pre-fills "Name on card".
   defaultCardholderName?: string;
   // The page's addCard server action that stores the sealed submission.
@@ -390,6 +455,8 @@ export interface AddCardFlowProps {
   createVaultKey?: () => Uint8Array;
   // Called once on a completed save (the page refreshes the list).
   onAdded?: () => void;
+  // Where to go back to after saving, when the person came here from a request in the Inbox.
+  returnTo?: string;
 }
 
 export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
@@ -411,6 +478,11 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
   const flow = flowRef.current;
   const state = flow.getState();
   const unlock = flow.getUnlockState();
+  // Keep the choices current when the page refreshes them (e.g. a card-only address saved with
+  // the last card now appears as a choice).
+  React.useEffect(() => {
+    flowRef.current?.setBillingChoices(props.billingAddresses);
+  }, [props.billingAddresses]);
 
   // Call every hook unconditionally (rules of hooks), even though the closed panel uses none.
   const numberId = React.useId();
@@ -418,7 +490,6 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
   const cardholderNameId = React.useId();
   const monthId = React.useId();
   const yearId = React.useId();
-  const billingId = React.useId();
   const passphraseToggleId = React.useId();
   const passphraseId = React.useId();
 
@@ -493,19 +564,14 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         />
       </div>
 
-      <SelectField
-        label="Billing address"
-        id={billingId}
-        width="text"
-        value={state.billingAddressId}
-        onChange={(event) => flow.setBillingAddressId(event.target.value)}
-      >
-        {props.billingAddresses.map((address) => (
-          <option key={address.id} value={address.id}>
-            {address.value}
-          </option>
-        ))}
-      </SelectField>
+      <BillingAddressChoice
+        choices={props.billingAddresses}
+        selectedKey={state.billingKey}
+        newValue={state.newBillingAddress}
+        onSelect={(key) => flow.chooseBilling(key)}
+        onNewValue={(value) => flow.setNewBillingAddress(value)}
+        error={state.errorField === "billing" && state.status === "error" ? state.error : undefined}
+      />
 
       <p className="text-sm text-fg-muted">{SECURITY_CODE_NOTE}</p>
 
@@ -550,7 +616,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
           {unlock.notice}
         </p>
       ) : null}
-      {state.error && state.status !== "phrase" ? (
+      {state.error && state.status !== "phrase" && state.errorField !== "billing" ? (
         <p role="alert" className="text-sm text-danger">
           {state.error}
         </p>
@@ -558,6 +624,14 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
       {state.status === "added" ? (
         <p role="status" className="text-sm text-success">
           Your card is saved.
+          {props.returnTo ? (
+            <>
+              {" "}
+              <a href={props.returnTo} className="font-medium text-fg underline underline-offset-2">
+                Back to your request
+              </a>
+            </>
+          ) : null}
         </p>
       ) : null}
       {state.confirmRequired ? (
@@ -579,15 +653,6 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
           error={state.status === "phrase" ? state.error : undefined}
           continueLabel="Save the phrase and my card"
         />
-      ) : props.billingAddresses.length === 0 ? (
-        // No dead Confirm: a card needs a billing address, so say why and where to add one.
-        <p className="text-sm text-fg">
-          A card needs a billing address, and you haven&apos;t saved a postal address yet.{" "}
-          <a href="/vault" className="font-medium text-accent underline underline-offset-2">
-            Add a postal address in About you
-          </a>
-          , then come back to add your card.
-        </p>
       ) : (
         <SensitiveNotice
           explanation={SEAL_EXPLAINER}

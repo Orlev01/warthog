@@ -154,6 +154,10 @@ const DEFAULT_TYPE: HighTierFieldType = "custom";
 const SETUP_FAILED_COPY =
   "We couldn't unlock your vault on this device, so your detail wasn't saved. Check your passkey and try again.";
 const SAVE_FAILED_COPY = "We couldn't save your detail just now. Please try again.";
+// Making a postal address protected removes it from About you, so a card that uses it as its
+// billing address must be given another one first (docs/adr/card-billing-addresses.md).
+export const BILLING_IN_USE_COPY =
+  "This address is a card's billing address. Change the card's billing address in Cards first, then try again.";
 const LABEL_MISSING_COPY = "Say what this detail is, for example Passport.";
 const VALUE_MISSING_COPY = "Type the detail you want to protect.";
 const PHRASE_FAILED_COPY =
@@ -227,7 +231,7 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
       set({ status: "saved", error: undefined });
       deps.onSaved?.();
     } else {
-      set({ status: "error", error: SAVE_FAILED_COPY });
+      set({ status: "error", error: result.reason === "billing_address_in_use" ? BILLING_IN_USE_COPY : SAVE_FAILED_COPY });
     }
   }
 

@@ -6,7 +6,7 @@ import { listImportedEntriesForUser } from "../db/imported-history";
 // so they can take EVERYTHING THEY KEEP to another account or provider (brief "Export
 // and portability"; design: data portability; constitution 20 "every person can export
 // all of their data"). It is built ENTIRELY by COMPOSING the already-built, tested
-// list-all reads and stores — `listIdentityFields`, `getPreferences`,
+// list-all reads and stores — `listIdentityFields`, `listCardBillingAddresses`, `getPreferences`,
 // `listSkillsForUser`, `listMemoriesForUser`, `listAllRules`, `listTasksForUser`,
 // `listRecordsForUser`, `listConnectionsForUser`, and the activity read — rather than
 // re-running SQL or re-implementing decryption, so there is ONE source of truth for
@@ -32,6 +32,7 @@ import { listImportedEntriesForUser } from "../db/imported-history";
 //     arbitrarily long chain is never held — nor decrypted — all at once.
 
 import { listIdentityFields, type IdentityField, type IdentityFieldKind } from "../db/identity-fields";
+import { listCardBillingAddresses, type CardBillingAddress } from "../db/card-billing-addresses";
 import { getPreferences } from "../db/preferences";
 import { getAgentDefaults } from "../db/agent-defaults";
 import { listAgentsForUser } from "../db/agents";
@@ -70,7 +71,11 @@ function renderSkillText(skill: Skill): string {
 // The person's LOW-TIER identity as the schema's `profile` object: the documented
 // `name` / `email` scalars (the first field of each kind) plus the full list of
 // low-tier fields, so a person who holds several emails/phones loses none on export.
-function buildProfile(fields: IdentityField[]): ExportDocument["profile"] {
+// Their card-only billing addresses (docs/adr/card-billing-addresses.md) travel apart
+// from the identity fields, as `cardBillingAddresses`, only when they have any; this
+// plain export carries the values alone (the device export adds their ids, so cards
+// can be re-linked to them).
+function buildProfile(fields: IdentityField[], billing: CardBillingAddress[]): ExportDocument["profile"] {
   const firstValue = (kind: IdentityFieldKind): string | undefined =>
     fields.find((field) => field.kind === kind)?.value;
   return {
@@ -81,6 +86,7 @@ function buildProfile(fields: IdentityField[]): ExportDocument["profile"] {
       value: field.value,
       movingOn: field.movingOn ?? null,
     })),
+    ...(billing.length ? { cardBillingAddresses: billing.map(({ value }) => ({ value })) } : {}),
   };
 }
 
@@ -116,6 +122,7 @@ export async function buildExportDocument(
   clock: Clock,
 ): Promise<ExportDocument> {
   const identityFields = await listIdentityFields(db, userId, dek);
+  const cardBillingAddresses = await listCardBillingAddresses(db, userId, dek);
   const preferences = await getPreferences(db, userId, dek);
   const skills = await listSkillsForUser(db, userId, dek);
   const packages = await listPackages(db, userId, dek);
@@ -162,7 +169,7 @@ export async function buildExportDocument(
   return {
     version: EXPORT_VERSION,
     exportedAt: clock.now().toISOString(),
-    profile: buildProfile(identityFields),
+    profile: buildProfile(identityFields, cardBillingAddresses),
     preferences: preferences
       ? {
           tone: preferences.tone,

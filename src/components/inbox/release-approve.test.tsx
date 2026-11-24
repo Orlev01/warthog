@@ -909,7 +909,11 @@ test("with nothing to hand over, the release asks for nothing it can't use and l
   assert.equal(findAll(markup, "select").length, 0, "no empty card picker");
   assert.ok(!SECURITY_CODE_RE.test(controlLabelText(markup)), "no security code to type for nothing");
   assert.doesNotMatch(visibleText(markup), /How would you like to unlock/, "no unlock choice");
-  assert.match(markup, /href="\/vault\/cards"[^>]*>Add a card/, "a way to add the missing card");
+  assert.match(
+    markup,
+    /href="\/vault\/cards\?returnTo=%2Finbox%3Fapproval%3D[^"]+"[^>]*>Add a card/,
+    "a way to add the missing card that comes back to this request",
+  );
   const control = findAll(markup, "button").find((b) => /^Approve and release/.test(controlFace(b)))!;
   const reasonId = attr(control.attrs, "aria-describedby");
   assert.ok(reasonId && markup.includes(`id="${reasonId}"`), "the reason is tied to the unavailable control");
@@ -988,4 +992,33 @@ test("W-02 — a refused release never settles", async () => {
   await flow.submit();
   assert.equal(flow.getState().status, "error");
   assert.equal(flow.getState().settled, false);
+});
+
+// A vault set up on a device saves its passkey envelope under that passkey's credential id
+// (client/vault/device-vault.ts), so the unlock material's top-level `wrapped` is empty. The Inbox
+// unlock used to require it and refused every such vault ("We couldn't unlock your vault on this
+// device"). It now uses the envelope of the passkey that answered, or an unlabelled pre-upgrade
+// envelope, and never another passkey's.
+test("the Inbox passkey unlock uses the envelope saved for the passkey that answered", async () => {
+  const { passkeyUnlockRequest } = await import("./release-approve");
+  const prf = Buffer.from("p".repeat(32)).toString("base64url");
+  const assertion = (id: string) => ({ id, clientExtensionResults: { prf: { results: { first: prf } } } });
+  const material = {
+    wrapped: null,
+    credentials: [
+      { credentialId: "cred-phone", wrapped: "v1:PHONE" },
+      { credentialId: "cred-laptop", wrapped: "v1:LAPTOP" },
+    ],
+  };
+  const phone = passkeyUnlockRequest(material, assertion("cred-laptop"));
+  assert.equal(phone.method, "prf");
+  assert.deepEqual(phone.material, { wrapped: "v1:LAPTOP" });
+  assert.equal((phone.secret as Uint8Array).length, 32);
+
+  // A pre-upgrade vault: one unlabelled envelope.
+  assert.deepEqual(passkeyUnlockRequest({ wrapped: "v1:OLD" }, assertion("cred-any")).material, { wrapped: "v1:OLD" });
+  // A passkey with no envelope of its own never borrows another's.
+  assert.throws(() => passkeyUnlockRequest(material, assertion("cred-other")), /can't unlock your vault/);
+  // No PRF output: this passkey can't unlock the vault.
+  assert.throws(() => passkeyUnlockRequest(material, { id: "cred-phone", clientExtensionResults: {} }), /can't unlock your vault/);
 });

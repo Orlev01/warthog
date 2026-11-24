@@ -125,10 +125,14 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
   column name as associated data): every personal-content column — low-tier vault fields, preferences,
   skills, memories, tasks, life-admin records, connector credentials (OAuth tokens, API keys), activity
   details (redacted parameters, result summary, reason), dispute notes, household shared address,
-  receipt files (encrypted before upload).
+  receipt files (encrypted before upload), card-only billing addresses (`card_billing_addresses`:
+  a billing address the person keeps with their cards only — never listed as an identity field and
+  never in agent context; an agent receives it only inside an approved card release; see
+  [card billing addresses](../adr/card-billing-addresses.md)).
 - Plaintext metadata (needed for filtering, never personal content): ids, timestamps, kinds, agent id,
   connector id, tool name, outcome, amounts + currency + merchant name for card releases (needed for
-  budgets), card brand + last four. Life-admin records keep their due date, a coarse status, the
+  budgets), and for a card: card brand, last four, expiry, nickname, name on card and the
+  billing-address reference (an id). Life-admin records keep their due date, a coarse status, the
   last day they may remind (`remind_until`), review state (suggested / confirmed / dismissed),
   parent link, who last changed them, who is handling them and opaque match keys (HMACs under a key
   derived from the DEK) in plaintext; their KIND, a booking's or case's detailed state, provenance

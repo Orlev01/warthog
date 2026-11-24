@@ -416,7 +416,7 @@ Type sizes of 12–14px for metadata are small for a phone-first product (W-33).
 - **Impact:** Every first card request, and every release.
 - **Recommendation:**
   1. Carry `returnTo=/inbox?approval=<id>` on every detour, and show "Card saved. Back to Claude's request" after saving.
-  2. Collect a billing address inline when none exists.
+  2. Collect a billing address inline when none exists, and keep it with the card only — never save it as a postal address in About you, where agents read it as an everyday detail (done 24 November 2026; see [../../adr/card-billing-addresses.md](../../adr/card-billing-addresses.md)).
   3. Check step-up freshness when the control mounts, before the unlock. Keep the security code across a refusal.
   4. Default to the passkey and put the other unlock methods under "Other ways to unlock".
   5. Use a `<form>` with a validated code (`[0-9]{3,4}`).
