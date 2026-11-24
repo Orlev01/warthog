@@ -190,9 +190,19 @@ describe("maskLikelyCards", () => {
       "Tracking 99900123456789012345",   // 20 digits
       "internalDate 1731712345678",      // epoch millis, prefix 1
       "BPAY reference 4111111111111111", // reference wording before it
+      "QBE CTP INSURANCE 36-0107901349-8", // a policy number: Diners prefix and Luhn-valid, but not grouped like a card
+      "QBE CTP INSURANCE 3601079013498",   // the same policy number written without dashes, after insurance wording
+      "Order 4111-111111-111111",          // grouped as no card is printed
     ]) {
       assert.equal(mask(text), text, text);
     }
+  });
+
+  it("masks a card however it is printed: in fours, run together, or in the Amex and Diners groups", () => {
+    assert.equal(mask("Paid with 4111-1111-1111-1111."), "Paid with [card ••••1111].");
+    assert.equal(mask("Paid with 4111111111111111."), "Paid with [card ••••1111].");
+    assert.equal(mask("Amex 3782 822463 10005 on file"), "Amex [card ••••0005] on file");
+    assert.equal(mask("Diners 3056 930902 5904 on file"), "Diners [card ••••5904] on file");
   });
 });
 

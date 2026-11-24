@@ -101,7 +101,15 @@ test("a finding's message names the field but never the value", () => {
 
 test("card numbers are masked to their last four", () => {
   assert.deepEqual(maskCards("Paid with 4242 4242 4242 4242 today"), { value: "Paid with ••••4242 today", masked: true });
+  assert.deepEqual(maskCards("Paid with 4242424242424242 today"), { value: "Paid with ••••4242 today", masked: true });
   assert.deepEqual(maskCards("Policy 1234567890123"), { value: "Policy 1234567890123", masked: false });
+});
+
+test("a long number grouped as no card is printed, or with no card's prefix, is kept", () => {
+  // A QBE CTP policy number: Luhn-valid with a Diners prefix, but grouped 2-10-1.
+  assert.deepEqual(maskCards("36-0107901349-8"), { value: "36-0107901349-8", masked: false });
+  // Luhn-valid, but no card scheme starts with 9.
+  assert.deepEqual(maskCards("9000000000008"), { value: "9000000000008", masked: false });
 });
 
 test("links become their site name", () => {

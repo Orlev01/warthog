@@ -140,3 +140,15 @@ test("a booking's fields: aliases, zones, people and details", () => {
   const refused = normaliseFields(type("outings.restaurant"), { for: "mum@example.com" }, false, { fromAgent: true });
   assert.deepEqual(refused.fields, {});
 });
+
+test("a policy, account or member number an agent saves is kept as written, even when it looks like a card", () => {
+  const policy = normaliseFields(type("vehicles.insurance"), { provider: "QBE", reference: "3601079013498" }, false, agent);
+  assert.equal(policy.fields.reference, "3601079013498");
+  assert.deepEqual(policy.problems, []);
+  // A card number in free text is still cut to its last four.
+  const notes = normaliseFields(type("vehicles.insurance"), { provider: "QBE", notes: "Paid with 4111 1111 1111 1111" }, false, agent);
+  assert.equal(notes.fields.notes, "Paid with ••••1111");
+  // And on a card record, a full number in its reference is cut too.
+  const card = normaliseFields(type("banking.card"), { provider: "NAB", reference: "4111111111111111" }, false, agent);
+  assert.equal(card.fields.reference, "••••1111");
+});
