@@ -55,9 +55,13 @@ export type CopyButtonProps = {
   label?: string;
   // Override the toast's lifetime in ms (null keeps it until dismissed).
   dismissAfter?: number | null;
+  // The screen's one primary action (Home's "Copy for Claude"); secondary otherwise.
+  variant?: "primary" | "secondary";
+  // The button's words before copying ("Copy for Claude"); "Copy" by default.
+  text?: string;
 };
 
-export function CopyButton({ value, successMessage, label, dismissAfter }: CopyButtonProps) {
+export function CopyButton({ value, successMessage, label, dismissAfter, variant = "secondary", text = "Copy" }: CopyButtonProps) {
   const [, redraw] = React.useReducer((n: number) => n + 1, 0);
   const button = React.useRef<HTMLButtonElement>(null);
   const errorId = React.useId();
@@ -74,12 +78,12 @@ export function CopyButton({ value, successMessage, label, dismissAfter }: CopyB
   // An expired toast hides while the button keeps saying "Copied"; the next copy shows it again.
   const [toastExpired, setToastExpired] = React.useState(false);
   return <div className="flex min-w-0 shrink-0 flex-col gap-2 sm:max-w-56">
-    <Button ref={button} variant="secondary" aria-disabled={state === "copying" || undefined}
+    <Button ref={button} variant={variant} aria-disabled={state === "copying" || undefined}
       aria-busy={state === "copying" || undefined}
       aria-describedby={state === "failed" ? errorId : undefined}
       onClick={() => { setToastExpired(false); void copy.copy(value); }}>
       {state === "copied" ? <Check aria-hidden={true} className="h-4 w-4 shrink-0" /> : <Copy aria-hidden={true} className="h-4 w-4 shrink-0" />}
-      {state === "copying" ? "Copying…" : state === "copied" ? "Copied" : "Copy"}
+      {state === "copying" ? "Copying…" : state === "copied" ? "Copied" : text}
       {label ? <span className="sr-only"> {label}</span> : null}
     </Button>
     {state === "failed" ? <p id={errorId} role="alert" className="flex items-start gap-2 text-sm text-danger">

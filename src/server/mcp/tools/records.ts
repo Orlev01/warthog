@@ -75,6 +75,8 @@ import { requestObservation } from "../client-observation";
 import type { AgentConnection } from "../context";
 import type { Db } from "../../db/index";
 import { liftOlderClientInput } from "./older-clients";
+import { neverKeptMessage, neverKeptRule } from "../../../domain/content/never-kept";
+import { countIdentitySuggestions, IDENTITY_SUGGESTION_KINDS, pruneSavedSuggestions, suggestIdentityDetail } from "../../db/identity-suggestions";
 import { monthlyCost } from "../../../domain/life-admin/costs";
 
 const MAX_STATUS = 200;
@@ -198,14 +200,39 @@ export const listRecordsSchema = z.object({
   if (input.journal === "full" && !input.id) ctx.addIssue({ code: "custom", path: ["journal"], message: 'journal: "full" needs the record\'s id.' });
 });
 
+// About you suggestions (docs/adr/profile-build.md): the person's own low-tier details an agent
+// found, each waiting for the person to add. Never a name, a general preference or anything for
+// the Vault; never what Warthog never keeps; always with a dated source.
+export const MAX_ABOUT_YOU_PER_CALL = 5;
+// Suggestions waiting for the person at once: enough for a whole build, not a flood.
+export const MAX_ABOUT_YOU_WAITING = 20;
+const aboutYouItem = z.object({
+  kind: z.enum(IDENTITY_SUGGESTION_KINDS).describe("preferred_name, email (another of their own addresses), phone, postal_address, language or time_zone."),
+  value: z.string().trim().min(1).max(300).superRefine((value, ctx) => {
+    const rule = neverKeptRule(value);
+    if (rule) ctx.addIssue({ code: "custom", message: neverKeptMessage("The detail", rule) });
+  }),
+  movingOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("For a postal address they're moving to: the date, YYYY-MM-DD."),
+  source: z.object({
+    service: z.string().min(1).max(60),
+    messageId: z.string().max(200).optional(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("The date on the email, event or file, YYYY-MM-DD: within the last 12 months."),
+    sender: z.string().max(200).optional(),
+  }).describe("Where you found it: required."),
+});
+
 export const saveRecordSchema = recordInput
   .partial()
   .extend({
+    aboutYou: z.array(aboutYouItem).min(1).max(MAX_ABOUT_YOU_PER_CALL).optional().describe(`The person's own details for About you (see the "Building a profile" skill): up to ${MAX_ABOUT_YOU_PER_CALL}, each waiting for them to add. Only their own, from recent sources addressed to them; never replaces what's there.`),
     records: z.array(recordInput).min(1).max(MAX_BATCH).optional().describe(`Up to ${MAX_BATCH} records saved together, for example everything one email scan found. A trip and its flights, or a vehicle and its rego, can be saved together using ref and parentRef.`),
     newCategory: newCategorySchema.optional().describe('Only when nothing built-in fits (see the "Life admin records" skill): a category of the person\'s own, suggested to them, whose kinds this call\'s records use as "new.<kind key>". One per call.'),
     reason,
   })
   .superRefine((input, ctx) => {
+    const single = Boolean(input.fields || input.type || input.kind);
+    // A call can carry only About you suggestions.
+    if (!input.records && !single && input.aboutYou) return;
     const all = input.records ?? [input as RecordInput];
     if (input.records) {
       if (input.fields || input.type || input.kind) ctx.addIssue({ code: "custom", path: ["records"], message: "Give records, or one record's type and fields, not both." });
@@ -313,9 +340,9 @@ export interface SaveResultItem {
 }
 
 export type SaveRecordResult =
-  | { status: "saved"; id: string; action: SaveResultItem["action"]; type: string; problems?: readonly string[]; message?: string; journal?: SaveResultItem["journal"]; category?: unknown }
+  | { status: "saved"; id: string; action: SaveResultItem["action"]; type: string; problems?: readonly string[]; message?: string; journal?: SaveResultItem["journal"]; category?: unknown; aboutYou?: unknown }
   | { status: "proposed" | "skipped"; id?: string; action: SaveResultItem["action"]; type: string; message: string; problems?: readonly string[]; journal?: SaveResultItem["journal"] }
-  | { status: "ok"; results: readonly SaveResultItem[]; note: string; category?: unknown }
+  | { status: "ok"; results: readonly SaveResultItem[]; note: string; category?: unknown; aboutYou?: unknown }
   | { status: "refused"; reason: string };
 
 export type UpdateRecordResult =
@@ -621,7 +648,8 @@ export function createSaveRecordTool(deps: RecordsToolDeps): SaveRecordTool {
       const actor = { kind: "agent" as const, agentId: connection.agentId };
       const canSee = visibleTo(permissions, connection.agentId);
       const exposure = await activeReadExposure(db, connection.userId, connection.agentId, clock.now(), dek).catch(() => null);
-      const batch: RecordInput[] = parsed.records ?? [parsed as RecordInput];
+      const onlyAboutYou = !parsed.records && !parsed.fields && !parsed.type && !parsed.kind;
+      const batch: RecordInput[] = parsed.records ?? (onlyAboutYou ? [] : [parsed as RecordInput]);
 
       // A category of the person's own, suggested in this call: refused when it was declined
       // before or the person has as many as they can take; an existing one like it is reused.
@@ -707,14 +735,62 @@ export function createSaveRecordTool(deps: RecordsToolDeps): SaveRecordTool {
       }
 
       const category = categoryOutcome ? { category: categoryOutcome } : {};
-      if (parsed.records) return { status: "ok", results, note: SUGGESTED_NOTE, ...category };
+      const aboutYou = parsed.aboutYou ? { aboutYou: await suggestAboutYou(db, connection, permissions, parsed.aboutYou, dek, clock) } : {};
+      if (parsed.records || onlyAboutYou) return { status: "ok", results, note: SUGGESTED_NOTE, ...category, ...aboutYou };
       const [only] = results;
       if (only!.action === "proposed" || only!.action === "skipped") {
         return { status: only!.action, ...(only!.id ? { id: only!.id } : {}), action: only!.action, type: only!.type!, message: only!.message!, ...(only!.problems ? { problems: only!.problems } : {}), ...(only!.journal ? { journal: only!.journal } : {}) };
       }
-      return { status: "saved", id: only!.id!, action: only!.action, type: only!.type!, ...(only!.problems ? { problems: only!.problems } : {}), message: SUGGESTED_NOTE, ...(only!.journal ? { journal: only!.journal } : {}), ...category };
+      return { status: "saved", id: only!.id!, action: only!.action, type: only!.type!, ...(only!.problems ? { problems: only!.problems } : {}), message: SUGGESTED_NOTE, ...(only!.journal ? { journal: only!.journal } : {}), ...category, ...aboutYou };
     },
   };
+}
+
+const ABOUT_YOU_NOTE = "About you suggestions wait for the person to add them in Warthog → About you. Tell them what you suggested.";
+const YEAR_MS = 366 * 24 * 60 * 60 * 1000;
+
+// About you suggestions (docs/adr/profile-build.md): only from an agent that can read the person's
+// About you (so it can see what's already there), only from a source in the last 12 months, and
+// at most MAX_ABOUT_YOU_WAITING waiting at once. The agent gets one neutral answer whatever
+// happened to each (new, already saved, already waiting or declined before), so a suggestion
+// never reveals a detail this agent can't read or what the person declined.
+async function suggestAboutYou(
+  db: Db,
+  connection: AgentConnection,
+  permissions: ConnectionPermissions,
+  items: readonly z.infer<typeof aboutYouItem>[],
+  dek: Uint8Array,
+  clock: Clock,
+): Promise<{ received: number; skipped?: readonly string[]; note: string } | { refused: string }> {
+  if (!permissions.identityAccess) return { refused: "This agent can't read the person's About you details, so it can't suggest them." };
+  const skipped: string[] = [];
+  const now = clock.now().getTime();
+  // Waiting suggestions the person has since saved themselves don't count toward the limit.
+  await pruneSavedSuggestions(db, connection.userId, dek);
+  let waiting = await countIdentitySuggestions(db, connection.userId);
+  let received = 0;
+  for (const [index, item] of items.entries()) {
+    const when = Date.parse(`${item.source.date}T00:00:00Z`);
+    if (!Number.isFinite(when) || when < now - YEAR_MS || when > now + 24 * 60 * 60 * 1000) {
+      skipped.push(`aboutYou[${index}]: its source must be dated within the last 12 months.`);
+      continue;
+    }
+    if (waiting >= MAX_ABOUT_YOU_WAITING) {
+      skipped.push(`aboutYou[${index}]: ${MAX_ABOUT_YOU_WAITING} suggestions are already waiting for the person. Ask them to check About you first.`);
+      continue;
+    }
+    const outcome = await suggestIdentityDetail(db, {
+      userId: connection.userId,
+      kind: item.kind,
+      value: item.value,
+      ...(item.movingOn ? { movingOn: item.movingOn } : {}),
+      source: { service: item.source.service, ...(item.source.messageId ? { messageId: item.source.messageId } : {}), date: item.source.date, ...(item.source.sender ? { sender: item.source.sender } : {}) },
+      agentId: connection.agentId,
+    }, dek);
+    if (outcome.outcome === "suggested") waiting += 1;
+    received += 1;
+  }
+  return { received, ...(skipped.length ? { skipped } : {}), note: ABOUT_YOU_NOTE };
 }
 
 export function createUpdateRecordTool(deps: RecordsToolDeps): UpdateRecordTool {

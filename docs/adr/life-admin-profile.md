@@ -429,3 +429,16 @@ Each item's journal and hand-over between agents is in [the journal ADR](life-ad
   activity entry for the call, like memory content does. Activity entries that keep only the
   fields' names, not their values, are a follow-up.
 - **Reminder email fallback.** People without a push device get no reminder by email yet.
+
+## Building a profile (amended 24 November 2026)
+
+The full fill-in moved to Home as "Build your profile" ([decision](profile-build.md)). A second
+built-in skill, "Building a profile", is the playbook for it: it leans on "Life admin records", names
+only the sources the agent can read (email, calendar and files through Warthog's own connectors), and
+lifts three limits only for that job (every category in batches of up to 4, up to 3 new categories,
+keep going between batches). `get_context` now offers the build to an agent that can read email,
+calendar or files and save records, not only mail; the bookings offer needs email or calendar. Fill in
+the rest's prompt works across services and points to the "Life admin records" skill; with nothing on
+file it links to Home's build. `save_record` also takes `aboutYou` (About you suggestions). Still 16
+core tools; the build is also an MCP prompt, `build_profile`, which isn't a tool. To check groups a
+build's suggestions by category, each with its own "Confirm all".

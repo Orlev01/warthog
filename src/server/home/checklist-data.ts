@@ -3,12 +3,12 @@
 // a client value).
 //
 // The home loader needs ONE owner-scoped read that turns the person's REAL set-up
-// state into the checklist. It gathers the five first-run signals — an identity
-// detail beyond the sign-up name, a saved card, a connected service, a connected agent, a
-// registered push device — by REUSING the already-built stores (`identity-fields`,
-// `cards`, `connections`, `agents`, `push-subscriptions`) rather than re-querying
-// ad hoc, and turns them into the checklist through the ONE pure source of the five
-// items, `computeSetupChecklist` (E18-S03).
+// state into the checklist. It gathers the five first-run signals — a built profile (something
+// an agent found that the person checked, or enough in Life admin), a saved card, a service an
+// agent can read, a connected agent, a registered push device — by REUSING the already-built
+// stores (`life-admin-records`, `identity-suggestions`, `cards`, `connections`,
+// `agent-permissions`, `agents`, `push-subscriptions`) rather than re-querying ad hoc, and turns
+// them into the checklist through the ONE pure source of the five items, `computeSetupChecklist`.
 //
 // It adds NO SQL and NO crypto of its own. Like the vault page-data read it
 // resolves the person's DEK through the injected `KeyWrapper` seam (read the
@@ -22,9 +22,12 @@ import { computeSetupChecklist, type SetupChecklistItem } from "../../domain/hom
 import { listAgentsForUser } from "../db/agents";
 import { listCards } from "../db/cards";
 import { listConnectionsForUser } from "../db/connections";
-import { listHighTierFields } from "../db/high-tier-fields";
-import { listIdentityFields } from "../db/identity-fields";
+import { getConnectionPermissions } from "../db/agent-permissions";
+import { countIdentitySuggestions } from "../db/identity-suggestions";
+import { countRecordReview } from "../db/life-admin-records";
 import type { Db } from "../db/index";
+import { accountPolicy } from "../../domain/permissions/account-access";
+import { SPARSE_RECORDS } from "../../domain/life-admin/summary";
 import { listSubscriptions } from "../db/push-subscriptions";
 import { getUserById } from "../db/users";
 import type { KeyWrapper } from "../crypto/key-wrapper";
@@ -65,21 +68,40 @@ export async function loadSetupChecklist(
   // decrypt; the member-scoped lookup also binds `userId` as a parameter).
   const dek = await dataKeyFor(db, keyWrapper, userId);
 
-  const identityFields = await listIdentityFields(db, userId, dek);
-  const protectedDetails = await listHighTierFields(db, userId);
   const cards = await listCards(db, userId);
   const connections = await listConnectionsForUser(db, userId);
   const agents = await listAgentsForUser(db, userId);
   const subscriptions = await listSubscriptions(db, userId, dek, clock);
+  const records = await countRecordReview(db, userId);
+  const aboutYouWaiting = await countIdentitySuggestions(db, userId);
 
   return computeSetupChecklist({
-    // "Add your details" is done once the person has added a detail of their own: sign-up
-    // saves their name for them, so the name alone never counts (UI/UX pass, newcomer-01).
-    // A protected detail (passport, licence…) counts too.
-    identityAdded: identityFields.some((field) => field.kind !== "name") || protectedDetails.length > 0,
+    // "Build your profile" (docs/adr/profile-build.md) is done once the person has checked
+    // something an agent found, or keeps enough in Life admin themselves (for someone who'd
+    // rather no agent read anything). Until then, what waits for them shows beside it.
+    profileBuilt: records.agentConfirmed > 0 || records.confirmed >= SPARSE_RECORDS,
+    profileWaiting: records.waiting + aboutYouWaiting,
     cardAdded: cards.length > 0,
-    serviceConnected: connections.length > 0,
+    // A service counts once an agent can read it: connected, and granted with reads to at least
+    // one agent (audit W-11). Connecting one no agent can use isn't set up yet.
+    serviceConnected: await anyServiceReadable(db, userId, connections, agents),
     agentConnected: agents.length > 0,
     notificationsEnabled: subscriptions.length > 0,
   });
+}
+
+// Whether any of the person's connected accounts is readable by at least one of their agents.
+async function anyServiceReadable(
+  db: Db,
+  userId: string,
+  connections: readonly { readonly id: string; readonly status: string }[],
+  agents: readonly { readonly connectionId: string }[],
+): Promise<boolean> {
+  const connected = new Set(connections.filter((account) => account.status === "connected").map((account) => account.id));
+  if (connected.size === 0) return false;
+  for (const agent of agents) {
+    const permissions = await getConnectionPermissions(db, userId, agent.connectionId);
+    if (permissions?.accounts.some((grant) => connected.has(grant.accountId) && accountPolicy(grant, permissions).readTools)) return true;
+  }
+  return false;
 }

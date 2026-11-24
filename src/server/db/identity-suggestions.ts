@@ -216,6 +216,21 @@ export async function listIdentitySuggestions(db: Db, userId: string, dek: Uint8
   return out;
 }
 
+// Remove the person's waiting suggestions that About you now holds (they saved the same detail
+// themselves), so they neither linger nor use up the waiting limit. Returns how many went.
+export async function pruneSavedSuggestions(db: Db, userId: string, dek: Uint8Array): Promise<number> {
+  const waiting = await listIdentitySuggestions(db, userId, dek);
+  if (waiting.length === 0) return 0;
+  const fields = await listIdentityFields(db, userId, dek);
+  const stale = waiting.filter((item) => sameDetail(fields, item.kind, normaliseDetail(item.kind, item.value))).map((item) => item.id);
+  if (stale.length === 0) return 0;
+  const removed = await db.query(
+    `DELETE FROM identity_suggestions WHERE user_id = $1 AND state = 'suggested' AND id = ANY($2::uuid[]) RETURNING id`,
+    [userId, stale],
+  );
+  return removed.rows.length;
+}
+
 // How many suggestions are waiting for the person (no decryption).
 export async function countIdentitySuggestions(db: Db, userId: string): Promise<number> {
   const result = await db.query(

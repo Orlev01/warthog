@@ -134,7 +134,9 @@ features:
   # --- Home ---
   - >-
     Home dashboard — a set-up checklist for new users (install the app and turn on notifications,
-    fill in basic identity, connect a first service, connect a first agent, add a card), then for
+    build your profile with your agent, connect a first service, connect a first agent, add a card;
+    amended 24 November 2026: "Build your profile" replaces filling in basic identity, see
+    "Building your profile from connected services"), then for
     everyone: pending approvals count with a link to the inbox, the latest activity across all
     agents, each agent's status (connected, last active, spend in its current budget period against its budget), and
     upcoming life-admin reminders.
@@ -287,7 +289,11 @@ features:
     high) is released only after the person approves each individual request with a step-up check.
     The person can raise any field to high tier, may choose not to store high-tier data at all, and
     sees, at the moment of adding a high-tier detail, a plain explanation of how it is protected and
-    who can ever read it.
+    who can ever read it. (Amended 24 November 2026: an agent that can read the person's About you
+    may suggest their own low-tier details: preferred name, other email addresses, phones, a postal
+    address and its moving date, time zone and language. Each suggestion names where it was found,
+    is invisible to every agent, and is added only when the person adds it; never a name, a general
+    preference, a high-tier detail or a card. See docs/adr/profile-build.md.)
   - >-
     Device-held protection for high-tier data and cards — high-tier identity details and card numbers
     are encrypted on the person's own device before they leave it, using a key only the person's
@@ -432,7 +438,9 @@ features:
     memory; the person can view, search, edit, re-scope and delete any memory, and add their own.
     Every memory and task an agent reads says who saved it — the person, that agent, or another
     agent by name — so a note another agent copied from an email is never mistaken for the
-    person's own wish.
+    person's own wish. (Amended 24 November 2026: memories and tasks refuse what life-admin records
+    refuse — tax file numbers, passwords and codes, bank account, government ID and Medicare numbers,
+    payment details — and card numbers in them are masked.)
 
   # --- Life admin (the use cases made concrete) ---
   - >-
@@ -493,7 +501,17 @@ features:
     may see (counts by category, what is due soon, how many wait for the person to check), and an
     agent that can read the person's mail and save records is told it may offer, once, when life
     admin is mostly empty. Life admin shows what agents found for the person to confirm, change or
-    mark "not mine", and an agent's proposed change beside the person's own values.
+    mark "not mine", and an agent's proposed change beside the person's own values. (Amended 24
+    November 2026, founder — Building your profile from connected services: Home's "Build your
+    profile" step gives the person one fixed prompt for their own agent, also offered as an MCP
+    prompt, to go through what it can read through Warthog — email, calendar and files — and fill in
+    Life admin (every category, and new ones the evidence supports) and suggest About you details,
+    following the built-in "Building a profile" skill; everything waits for the person to check. The
+    offer goes to an agent that can read email, calendar or files and save records. Services that ask
+    before every read are used only when the person agrees. The build is read-and-suggest by
+    instruction: the skill tells the agent not to send, change, pay or ask for cards or ID details,
+    and the person's approvals and rules still apply. The vault and cards stay the person's own to
+    add. See docs/adr/profile-build.md.)
   - >-
     Tasks and hand-offs — a task list the person and agents share: the person (or an agent) creates
     a task, assigns it to a specific agent or "any agent", and agents pick it up, add notes and mark
@@ -607,10 +625,13 @@ design_ux:
     HOME — a set-up checklist. Step "Get notified": on their PHONE the person opens Warthog, signs in
     (their passkey synced from the laptop, or by approving the phone's sign-in from the laptop), installs the
     app from the plain-reason prompt, allows notifications, adds and verifies a mobile number for
-    backup texts, and sends a test push. Step "About
-    you": the VAULT identity page — name, email, phone and postal address (low tier), then add a date
-    of birth and driver licence, seeing the plain explanation that these stay locked to the person's
-    device and are only released when they approve. Step "Add a card": VAULT cards — add a card, see
+    backup texts, and sends a test push. Step "Build your profile" (amended 24 November 2026,
+    replacing "About you"): HOME — copy the prompt into Claude, which goes through the person's email,
+    calendar and files through Warthog and saves what it finds to Life admin and suggests About you
+    details; the person checks each in Life admin › To check and About you › Suggested, then adds a
+    date of birth and driver licence on the VAULT identity page themselves, seeing the plain
+    explanation that these stay locked to the person's device and are only released when they
+    approve. Step "Add a card": VAULT cards — add a card, see
     only brand and last four afterwards, with the note that the security code is never stored. Step
     "Connect a service": CONNECTORS — search the catalogue, connect Google Calendar and Gmail through
     Google's own sign-in, see each tool marked "reads" or "makes changes". Step "Connect an agent":
@@ -854,7 +875,7 @@ out_of_scope:
   - Enterprise features (company workspaces, single sign-on, team administration).
   - Connectors that need a paid integration platform, a paid provider plan, or a lengthy provider security review before launch — these are parked and added as reviews complete.
   - Warthog running or paying for any AI model of its own.
-  - Warthog reading or scanning a person's email or files itself to fill in life admin; the person's own agent does it when they ask (amended 2026-11-23).
+  - Warthog reading or scanning a person's email or files itself to fill in life admin or About you; the person's own agent does it when they ask (amended 2026-11-23 and 2026-11-24).
   - Updating an address directly inside third-party services that offer no way to do it through a connector; the person does those, or hands them to an agent as a task.
 
 requires:

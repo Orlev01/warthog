@@ -106,3 +106,11 @@ Overview group by it.
 the single chosen account per service: an agent is given accounts, each with its own settings, and
 every connector call is bound to one granted account before the policy runs. "Never falls back"
 and "the server binds the account before holding it" still hold.
+
+## Onboarding: Build your profile (amended 24 November 2026)
+
+Home's set-up step "Add your details" is replaced by "Build your profile" ([decision](profile-build.md)):
+after connecting an agent and giving it a service it can read, the person copies one prompt into that
+agent, which fills in Life admin and suggests About you details for them to check. "Connect a service"
+counts only once some agent can read the service, keeping the account owned apart from what each agent
+can actually use.

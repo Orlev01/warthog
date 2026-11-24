@@ -7,6 +7,7 @@ import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-s
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { encryptValue } from "@/client/vault/values";
 import {
   HighTierFlow,
@@ -15,9 +16,15 @@ import {
 } from "./high-tier-flow";
 import {
   LowTierDetailFlow,
+  LOW_TIER_KIND_LABELS,
   type SaveLowTierFieldAction,
   type UpdateLowTierFieldAction,
 } from "./low-tier-detail-flow";
+import {
+  IdentitySuggestions,
+  type IdentitySuggestionView,
+  type SuggestionAction,
+} from "./identity-suggestions";
 
 // E11-S13 — Vault identity view component (brief "Identity vault"; design §4.1
 // low tier + §4.2 device-held vault; primary journey "About you").
@@ -36,12 +43,14 @@ import {
 //     explainer of HOW the detail is protected (sealed on the device) and WHO can
 //     ever read it (only when the person approves).
 //
-// Organisation: the page heading band, then one panel per tier — "Everyday details" and
-// "Protected details" (the two tier names used everywhere; "low/high tier" is only the
-// code's word). Within each, the details are grouped by purpose (names, contact,
-// preferences; identity, vehicle, other) under titled groups with their counts, each
-// detail a divider row rather than its own card — so an opened panel is never a card
-// inside a card. A purpose with no details is not shown. Each everyday detail's Save and
+// Organisation: the page heading band (with the outcome of the last plain-form action, if any),
+// then, only while agents have suggested details the person hasn't answered, the "Suggested by
+// your agents" panel (<IdentitySuggestions/>: each one added or declined on its own), then one
+// panel per tier — "Everyday details" and "Protected details" (the two tier names used
+// everywhere; "low/high tier" is only the code's word). Within each, the details are grouped
+// by purpose (names, contact, preferences; identity, vehicle, other) under titled groups with
+// their counts, each detail a divider row rather than its own card — so an opened panel is
+// never a card inside a card. A purpose with no details is not shown. Each everyday detail's Save and
 // "Make protected" share one action row; the tier's add control closes its panel. The
 // shell's section tabs (About you / Cards) are the Vault's one tab row; the view adds no
 // second one.
@@ -118,6 +127,14 @@ export type IdentityViewProps = {
   // updateLowTierField server actions (the value is DEK-encrypted server-side).
   saveLowTierField?: SaveLowTierFieldAction;
   updateLowTierField?: UpdateLowTierFieldAction;
+  // The details agents have suggested and the person hasn't answered yet, and the page's
+  // plain-form server actions that add or decline one. The panel shows only when there are
+  // suggestions and both actions are supplied (a preview without them shows none).
+  suggestions?: ReadonlyArray<IdentitySuggestionView>;
+  acceptSuggestion?: SuggestionAction;
+  declineSuggestion?: SuggestionAction;
+  // The outcome of the last plain-form action, in plain words (the page maps `?notice=`).
+  notice?: { readonly tone: NoticeTone; readonly text: string } | null;
 };
 
 // The high-tier detail a person enters, before it is sealed on the device.
@@ -151,17 +168,9 @@ export async function sealHighTierDetail(
 
 // --- plain copy --------------------------------------------------------------------
 
-// Each low-tier field's plain label (Australian English, no jargon).
-const LOW_TIER_LABELS: Record<LowTierFieldKind, string> = {
-  name: "Name",
-  preferred_name: "Preferred name",
-  email: "Email",
-  phone: "Phone",
-  postal_address: "Postal address",
-  language: "Language",
-  time_zone: "Time zone",
-  preference: "Preference",
-};
+// Each low-tier field's plain label (Australian English, no jargon): the add form's picker
+// labels, so a kind reads the same everywhere on the page (the suggestions panel uses them too).
+const LOW_TIER_LABELS = Object.fromEntries(LOW_TIER_KIND_LABELS) as Record<LowTierFieldKind, string>;
 
 // --- purpose groups ----------------------------------------------------------------
 
@@ -258,6 +267,10 @@ export function IdentityView({
   raiseFieldToHighTier,
   saveLowTierField,
   updateLowTierField,
+  suggestions = [],
+  acceptSuggestion,
+  declineSuggestion,
+  notice,
 }: IdentityViewProps) {
   const lowGroups = groupLowTier(lowTierFields);
   const highGroups = groupHighTier(highTierFields);
@@ -267,6 +280,16 @@ export function IdentityView({
         title="About you"
         description="Everyday details your agents can use, and protected details they have to ask you for each time."
       />
+      {notice ? <PageNotice tone={notice.tone}>{notice.text}</PageNotice> : null}
+
+      {/* ----- Suggested by your agents: each added or declined on its own ----- */}
+      {suggestions.length > 0 && acceptSuggestion && declineSuggestion ? (
+        <IdentitySuggestions
+          suggestions={suggestions}
+          acceptSuggestion={acceptSuggestion}
+          declineSuggestion={declineSuggestion}
+        />
+      ) : null}
 
       {/* ----- Everyday details: editable in place, by purpose ----- */}
       <WorkspacePanel

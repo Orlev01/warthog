@@ -92,7 +92,7 @@ const clock: Clock = fixedClock(T0);
 const SET_UP_TITLES = [
   "Connect an agent",
   "Connect a service",
-  "Add your details",
+  "Build your profile",
   "Get notified",
   "Add a card",
 ] as const;

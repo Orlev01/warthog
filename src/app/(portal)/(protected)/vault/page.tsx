@@ -18,6 +18,7 @@ import {
   type SaveHighTierFieldInput,
   type RaiseFieldToHighTierInput,
 } from "./actions";
+import { aboutYouNotice, aboutYouReturnUrl, type AboutYouNotice } from "./notices";
 import { IdentityView } from "@/components/vault/identity-view";
 import { RecoveryPhraseSettings } from "@/components/vault/recovery-phrase-settings";
 import { listMethods } from "@/server/db/vault-unlock-methods";
@@ -96,6 +97,37 @@ async function saveLowTierField(
   return result;
 }
 
+// Add or decline one of the session person's suggestions (docs/adr/profile-build.md): the
+// panel's plain forms post the suggestion's id, so they work before the page's JavaScript
+// loads. The session is re-verified per request (no session goes to sign-in), the owner is
+// the session's, and the outcome comes back as a `?notice=` in plain words: a suggestion
+// that isn't waiting (another person's id, or one already answered) or a malformed id is a
+// plain refusal, never a crash and never a silent success.
+async function answerSuggestion(
+  formData: FormData,
+  success: AboutYouNotice,
+  answer: (actions: IdentityActions, session: Session, input: { id: string }) => Promise<{ ok: boolean; reason?: string }>,
+): Promise<never> {
+  const request = await requestIdentityActions();
+  if (!request) redirect("/signin");
+  const raw = formData.get("id");
+  const input = { id: typeof raw === "string" ? raw : "" };
+  const result = await reportRefusals(() => answer(request.actions, request.session, input));
+  const notice: AboutYouNotice = result.ok ? success : result.reason === "not_found" ? "suggestion_gone" : "problem";
+  revalidatePath("/vault");
+  redirect(aboutYouReturnUrl(notice));
+}
+
+async function acceptSuggestion(formData: FormData): Promise<void> {
+  "use server";
+  await answerSuggestion(formData, "suggestion_added", (actions, session, input) => actions.acceptSuggestion(session, input));
+}
+
+async function declineSuggestion(formData: FormData): Promise<void> {
+  "use server";
+  await answerSuggestion(formData, "suggestion_declined", (actions, session, input) => actions.declineSuggestion(session, input));
+}
+
 // Re-save one of the session person's OWN everyday details (review fix G1 — the per-field
 // Save), including a postal address's moving-on date.
 async function updateLowTierField(
@@ -113,9 +145,14 @@ async function updateLowTierField(
   return result;
 }
 
-export default async function VaultPage() {
+export default async function VaultPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   // Read the request first: touching the cookie marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
+  const notice = aboutYouNotice((await searchParams).notice);
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
   const config = loadConfig();
   const db = await getServerDb();
@@ -205,6 +242,10 @@ export default async function VaultPage() {
         raiseFieldToHighTier={raiseFieldToHighTier}
         saveLowTierField={saveLowTierField}
         updateLowTierField={updateLowTierField}
+        suggestions={data.suggestions}
+        acceptSuggestion={acceptSuggestion}
+        declineSuggestion={declineSuggestion}
+        notice={notice}
       />
       <RecoveryPhraseSettings
         hasRecoveryPhrase={unlockMethods.includes("recovery")}

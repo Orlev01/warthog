@@ -134,3 +134,17 @@ test("the profile skill is listed for an agent that may save records, and names 
     assert.equal((await without.skill.handle({ title: PROFILE_SKILL.title }, without.connection)).status, "not_available");
   } finally { await without.db.close(); }
 });
+
+test("the profile skill tells an agent that can read About you how to suggest details, and one that can't to name what's missing", async () => {
+  const reads = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail"] });
+  try {
+    const text = ((await reads.skill.handle({ title: PROFILE_SKILL.title }, reads.connection)) as { text: string }).text;
+    assert.match(text, /save_record aboutYou/);
+  } finally { await reads.db.close(); }
+  const blind = await setup({ recordsAccess: true, grantedConnectors: ["google-gmail"] });
+  try {
+    await blind.db.query("UPDATE agent_permissions SET identity_access = false WHERE user_id = $1", [blind.userId]);
+    const text = ((await blind.skill.handle({ title: PROFILE_SKILL.title }, blind.connection)) as { text: string }).text;
+    assert.match(text, /You can't suggest About you details/);
+  } finally { await blind.db.close(); }
+});

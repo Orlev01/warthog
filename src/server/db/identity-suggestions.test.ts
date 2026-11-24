@@ -450,3 +450,25 @@ test("migration 0125 is part of the project", async () => {
   const all = await loadMigrations();
   assert.ok(all.some((m) => m.name === "0125_identity_suggestions"), "0125_identity_suggestions is a project migration");
 });
+
+test("a waiting suggestion the person has since saved themselves is removed, not left waiting", async () => {
+  const db = await freshDb();
+  try {
+    const { createUser } = await import("./users");
+    const { saveIdentityField } = await import("./identity-fields");
+    const { pruneSavedSuggestions, suggestIdentityDetail, listIdentitySuggestions, countIdentitySuggestions } = await import("./identity-suggestions");
+    const { randomBytes, randomUUID } = await import("node:crypto");
+    const dek = randomBytes(32);
+    const user = await createUser(db, { email: `${randomUUID()}@warthog.com.au`, wrappedDek: "w" });
+    const source = { service: "gmail", date: "2026-10-01" };
+    await suggestIdentityDetail(db, { userId: user.id, kind: "phone", value: "0412 345 678", source, agentId: "a" }, dek);
+    await suggestIdentityDetail(db, { userId: user.id, kind: "email", value: "me@work.example", source, agentId: "a" }, dek);
+    await saveIdentityField(db, { userId: user.id, kind: "phone", value: "+0412345678".replace("+", "") }, dek);
+    assert.equal(await pruneSavedSuggestions(db, user.id, dek), 1);
+    assert.deepEqual((await listIdentitySuggestions(db, user.id, dek)).map((item) => item.kind), ["email"]);
+    assert.equal(await countIdentitySuggestions(db, user.id), 1);
+    assert.equal(await pruneSavedSuggestions(db, user.id, dek), 0, "nothing else to remove");
+  } finally {
+    await db.close();
+  }
+});

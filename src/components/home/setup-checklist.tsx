@@ -39,8 +39,11 @@ export function SetupChecklist({ items }: SetupChecklistProps) {
             href={item.href}
             className="group flex min-h-12 min-w-0 items-center gap-3 py-2 text-sm text-fg"
           >
-            <span className="min-w-0 flex-1 font-medium underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere] group-hover:decoration-current">
-              {item.label}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="font-medium underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere] group-hover:decoration-current">
+                {item.label}
+              </span>
+              {item.note ? <span className="text-sm text-fg-muted">{item.note}</span> : null}
             </span>
             <span className="sr-only">: </span>
             <ChecklistState done={item.done} />

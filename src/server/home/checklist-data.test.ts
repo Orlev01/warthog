@@ -68,7 +68,9 @@ import { loadSetupChecklist } from "./checklist-data";
 import { computeSetupChecklist, type SetupSignals } from "../../domain/home/checklist";
 import { createUser } from "../db/users";
 import { saveIdentityField } from "../db/identity-fields";
-import { saveHighTierField } from "../db/high-tier-fields";
+import { createRecord } from "../db/life-admin-records";
+import { suggestIdentityDetail } from "../db/identity-suggestions";
+import { upsertPermissions } from "../db/agent-permissions";
 import { addCard } from "../db/cards";
 import { createConnection } from "../db/connections";
 import { createAgent } from "../db/agents";
@@ -120,15 +122,14 @@ interface SeedCtx {
   readonly dek: Uint8Array;
 }
 
-// A detail the person added themselves. Sign-up saves their name for them, so the name
-// alone never marks "Add your details" done (see the sign-up-name case below).
-async function seedIdentity({ db, userId, dek }: SeedCtx): Promise<void> {
-  await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
+// Something an agent found that the person checked: "Build your profile" is done
+// (docs/adr/profile-build.md).
+async function seedAgentRecord({ db, userId, dek }: SeedCtx, confirmed = true): Promise<string> {
+  const record = await createRecord(db, { userId, kind: "item", type: "vehicles.registration", fields: { plate: "BX12AB" }, status: "active", source: { kind: "agent", agentId: randomUUID() } }, dek);
+  if (confirmed) await db.query("UPDATE life_admin_records SET review_state = 'confirmed' WHERE id = $1 AND user_id = $2", [record.id, userId]);
+  return record.id;
 }
-
-async function seedProtectedDetail({ db, userId }: SeedCtx): Promise<void> {
-  await saveHighTierField(db, { userId, type: "passport", label: "Passport", ciphertext: "v1:passport-ciphertext" });
-}
+const seedProfile = (ctx: SeedCtx) => seedAgentRecord(ctx).then(() => undefined);
 
 async function seedCard({ db, userId }: SeedCtx): Promise<void> {
   await addCard(db, {
@@ -157,6 +158,20 @@ async function seedConnection({ db, userId, dek }: SeedCtx): Promise<void> {
   );
 }
 
+// A connected service an agent can read: the agent and its grant come with it, since a service no
+// agent can use isn't set up yet (audit W-11).
+async function seedReadableService(ctx: SeedCtx): Promise<void> {
+  const { db, userId, dek } = ctx;
+  const account = await createConnection(db, { userId, connectorId: "google-gmail", accountLabel: "person@gmail.com", credentials: { accessToken: "atok" } }, dek, clock);
+  const connectionId = randomUUID();
+  await createAgent(db, { userId, connectionId, displayName: "Claude", platform: "claude" }, clock);
+  await upsertPermissions(db, {
+    userId, connectionId, grantedConnectors: [], readTools: true, changeTools: "off", identityAccess: false, highTierAccess: false,
+    cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: false, sharing: false, rulesScope: [], rateLimit: 120,
+    accounts: [{ accountId: account.id }],
+  } as Parameters<typeof upsertPermissions>[1]);
+}
+
 async function seedAgent({ db, userId }: SeedCtx): Promise<void> {
   await createAgent(
     db,
@@ -182,10 +197,9 @@ const CASES: ReadonlyArray<{
   readonly expected: SetupSignals;
   readonly seed: (ctx: SeedCtx) => Promise<void>;
 }> = [
-  { name: "a saved everyday detail → \"Add your details\"", expected: { identityAdded: true }, seed: seedIdentity },
-  { name: "a saved protected detail → \"Add your details\"", expected: { identityAdded: true }, seed: seedProtectedDetail },
+  { name: "something an agent found, checked by the person → \"Build your profile\"", expected: { profileBuilt: true }, seed: seedProfile },
   { name: "a saved card → \"Add a card\"", expected: { cardAdded: true }, seed: seedCard },
-  { name: "a connected service → \"Connect a service\"", expected: { serviceConnected: true }, seed: seedConnection },
+  { name: "a service an agent can read → \"Connect a service\" (with its agent)", expected: { serviceConnected: true, agentConnected: true }, seed: seedReadableService },
   { name: "a connected agent → \"Connect an agent\"", expected: { agentConnected: true }, seed: seedAgent },
   { name: "a registered push device → \"Get notified\"", expected: { notificationsEnabled: true }, seed: seedPush },
 ];
@@ -216,21 +230,48 @@ test("a user who has only signed up reads as the five items, every one NOT done"
   }
 });
 
-// UI/UX pass, newcomer-01: sign-up saves the person's name for them, so a brand-new member
-// who has only signed up must not see "Add your details · Done" (and "1 of 5 steps").
-test("the name saved at sign-up alone leaves \"Add your details\" not done", async () => {
+// docs/adr/profile-build.md: "Build your profile" is done once the person has checked something an
+// agent found, or keeps 5 records themselves; until then what waits for them shows beside it.
+// The name saved at sign-up, or a detail they type, doesn't complete it.
+test("Build your profile: done when the person checks what an agent found, or keeps 5 records; waiting shows meanwhile", async () => {
   const db = await freshDb();
   try {
-    const { userId, dek } = await makeUserWithDek(db, "signup-name");
+    const { userId, dek } = await makeUserWithDek(db, "profile");
+    const ctx = { db, userId, dek };
     await saveIdentityField(db, { userId, kind: "name", value: "Quokka Xylophone" }, dek);
-    assert.deepEqual(await load(db, userId), computeSetupChecklist({}), "the sign-up name marks nothing done");
+    await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
+    assert.deepEqual(await load(db, userId), computeSetupChecklist({}), "details alone mark nothing done");
 
-    await saveIdentityField(db, { userId, kind: "preferred_name", value: "Quokka" }, dek);
-    assert.deepEqual(
-      await load(db, userId),
-      computeSetupChecklist({ identityAdded: true }),
-      "a detail the person adds themselves marks it done",
-    );
+    await seedAgentRecord(ctx, false);
+    await suggestIdentityDetail(db, { userId, kind: "email", value: "q@work.example", source: { service: "gmail", date: "2026-05-01" }, agentId: randomUUID() }, dek);
+    assert.deepEqual(await load(db, userId), computeSetupChecklist({ profileWaiting: 2 }), "a suggestion and an About you detail wait");
+
+    await seedAgentRecord(ctx, true);
+    assert.deepEqual(await load(db, userId), computeSetupChecklist({ profileBuilt: true, profileWaiting: 2 }), "one checked find completes it");
+  } finally {
+    await db.close();
+  }
+  const own = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(own, "own-records");
+    for (let index = 0; index < 4; index += 1) {
+      await createRecord(own, { userId, kind: "item", type: "other.item", fields: { name: `Thing ${index}` }, status: "active", source: { kind: "person" } }, dek);
+    }
+    assert.equal((await load(own, userId))[2]!.done, false, "4 of their own isn't enough");
+    await createRecord(own, { userId, kind: "item", type: "other.item", fields: { name: "Thing 5" }, status: "active", source: { kind: "person" } }, dek);
+    assert.equal((await load(own, userId))[2]!.done, true, "5 of their own completes it without an agent");
+  } finally {
+    await own.close();
+  }
+});
+
+test("a connected service no agent can read leaves \"Connect a service\" not done", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "unused-service");
+    await seedConnection({ db, userId, dek });
+    await seedAgent({ db, userId, dek });
+    assert.deepEqual(await load(db, userId), computeSetupChecklist({ agentConnected: true }));
   } finally {
     await db.close();
   }
@@ -265,8 +306,8 @@ for (const { name, expected, seed } of CASES) {
       );
       assert.equal(
         checklist.filter((item) => item.done).length,
-        1,
-        "exactly one of the five items is done after setting a single signal",
+        Object.values(expected).filter((value) => value === true).length,
+        "exactly the items for the signal that was set are done",
       );
     } finally {
       await db.close();
@@ -281,10 +322,9 @@ test("with all five signals set, every checklist item comes back done", async ()
   try {
     const { userId, dek } = await makeUserWithDek(db, "all-signals");
     const ctx: SeedCtx = { db, userId, dek };
-    await seedIdentity(ctx);
+    await seedProfile(ctx);
     await seedCard(ctx);
-    await seedConnection(ctx);
-    await seedAgent(ctx);
+    await seedReadableService(ctx);
     await seedPush(ctx);
 
     const checklist = await load(db, userId);
@@ -293,7 +333,7 @@ test("with all five signals set, every checklist item comes back done", async ()
       checklist,
       computeSetupChecklist({
         notificationsEnabled: true,
-        identityAdded: true,
+        profileBuilt: true,
         cardAdded: true,
         serviceConnected: true,
         agentConnected: true,
@@ -318,7 +358,7 @@ test("the read reflects only the session person's set-up state, never another pe
 
     // A has only a saved card; B has only a connected service — DIFFERENT signals.
     await seedCard({ db, userId: a.userId, dek: a.dek });
-    await seedConnection({ db, userId: b.userId, dek: b.dek });
+    await seedReadableService({ db, userId: b.userId, dek: b.dek });
 
     // The read for A shows A's state (the card done, the service NOT), never B's.
     const forA = await load(db, a.userId);
@@ -332,8 +372,8 @@ test("the read reflects only the session person's set-up state, never another pe
     const forB = await load(db, b.userId);
     assert.deepEqual(
       forB,
-      computeSetupChecklist({ serviceConnected: true }),
-      "B's checklist reflects B's service only — never A's card",
+      computeSetupChecklist({ serviceConnected: true, agentConnected: true }),
+      "B's checklist reflects B's service (and its agent) only — never A's card",
     );
   } finally {
     await db.close();
@@ -350,10 +390,9 @@ test("a fully set-up neighbour does not flip any item for a person who has nothi
     const neighbour = await makeUserWithDek(db, "neighbour-full");
 
     const nCtx: SeedCtx = { db, userId: neighbour.userId, dek: neighbour.dek };
-    await seedIdentity(nCtx);
+    await seedProfile(nCtx);
     await seedCard(nCtx);
-    await seedConnection(nCtx);
-    await seedAgent(nCtx);
+    await seedReadableService(nCtx);
     await seedPush(nCtx);
 
     const mine = await load(db, me.userId);
