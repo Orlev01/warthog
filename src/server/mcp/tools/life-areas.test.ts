@@ -87,6 +87,12 @@ test("an agent suggests a category of the person's own, with a thing other recor
     const categories = await t.list.handle({ view: "categories" }, claude);
     if (categories.status !== "ok" || !("categories" in categories)) throw new Error("refused");
     assert.ok((categories.categories as { id: string; label: string }[]).some((cat) => cat.id === category.id && cat.label === "Rowing club"));
+    // Dogfood, 25 Nov 2026: how many records each category has, so a profile build can skip
+    // the ones already filled in.
+    const counts = new Map((categories.categories as { id: string; records: number }[]).map((cat) => [cat.id, cat.records]));
+    assert.equal(counts.get(category.id), 2, "the boat and its mooring");
+    assert.equal(counts.get("insurance"), 1);
+    assert.equal(counts.get("pets"), 0);
 
     // The person declines it: a re-suggestion is refused.
     const rows = await listCategoryRows(t.db, t.userId, t.dek);

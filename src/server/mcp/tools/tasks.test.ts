@@ -100,6 +100,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   createListTasksTool,
   createCreateTaskTool,
+  createTaskSchema,
   createUpdateTaskTool,
   createCompleteTaskTool,
 } from "./tasks";
@@ -333,6 +334,48 @@ test("create_task can assign a task to a SPECIFIC agent (an agent hands work to 
   } finally {
     await db.close();
   }
+});
+
+// Dogfood 25 Nov 2026: an agent asked to make a task "for yourself" passed its own name and
+// was refused. "me", an agent's name (case aside) or its id all work; an unknown or
+// ambiguous name is refused with what does work.
+test("create_task takes \"me\" or an agent's name as well as its id, and says what works when it can't tell", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "create-by-name", keyWrapper);
+    const self = await createAgent(db, { userId, connectionId: randomUUID(), displayName: "Claude", platform: "Claude" }, fixedClock(NOW));
+    const maker = connectionFor(userId, { agentId: self.id, connectionId: self.connectionId });
+    const helper = await createAgent(db, { userId, connectionId: randomUUID(), displayName: "ChatGPT", platform: "ChatGPT" }, fixedClock(NOW));
+    await grantTasks(db, userId, maker.connectionId);
+    const tool = createCreateTaskTool(tasksDeps(db, keyWrapper, fixedClock(NOW)));
+
+    assert.equal(((await tool.handle({ title: "Mine", assignee: "me" }, maker)) as CreateTaskResult).status, "created");
+    assert.equal(((await tool.handle({ title: "Also mine", assignee: "Claude" }, maker)) as CreateTaskResult).status, "created");
+    assert.equal(((await tool.handle({ title: "Theirs", assignee: " chatgpt " }, maker)) as CreateTaskResult).status, "created");
+    const byTitle = new Map((await listTasksForUser(db, userId, dek)).map((task) => [task.title, task.assignee]));
+    assert.equal(byTitle.get("Mine"), self.id, "\"me\" is the agent making the task");
+    assert.equal(byTitle.get("Also mine"), self.id, "its own name is itself");
+    assert.equal(byTitle.get("Theirs"), helper.id, "another agent by name, case and spaces aside");
+
+    const unknown = (await tool.handle({ title: "Nobody's", assignee: "Gemini" }, maker)) as CreateTaskResult;
+    assert.equal(unknown.status, "refused");
+    assert.match((unknown as { reason: string }).reason, /"me".*"any".*name/, "says what works");
+
+    await createAgent(db, { userId, connectionId: randomUUID(), displayName: "ChatGPT", platform: "ChatGPT" }, fixedClock(NOW));
+    const twice = (await tool.handle({ title: "Which one?", assignee: "ChatGPT" }, maker)) as CreateTaskResult;
+    assert.equal(twice.status, "refused", "two agents with that name: it can't tell which");
+    assert.match((twice as { reason: string }).reason, /More than one/);
+    assert.equal((await listTasksForUser(db, userId, dek)).length, 3, "nothing written when refused");
+  } finally {
+    await db.close();
+  }
+});
+
+test("create_task's assignee says what it takes", () => {
+  const description = (createTaskSchema.shape.assignee as { description?: string }).description ?? "";
+  assert.match(description, /"me"/);
+  assert.match(description, /"any"/);
 });
 
 // ===========================================================================
@@ -763,7 +806,7 @@ test("update_task and complete_task refuse a task assigned to a different agent"
 // Building a profile (docs/adr/profile-build.md): a task's title or note can't hold what Warthog
 // never keeps; the refusal names the rule, never the value.
 test("a task title or note refuses what Warthog never keeps", async () => {
-  const { createTaskSchema, updateTaskSchema } = await import("./tasks");
+  const { updateTaskSchema } = await import("./tasks");
   const title = createTaskSchema.safeParse({ title: "Lodge with TFN 123 456 782" });
   assert.equal(title.success, false);
   assert.match(title.error!.issues[0]!.message, /^The task looks like it has a tax file number\./);

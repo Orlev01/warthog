@@ -92,3 +92,12 @@ test("the skill asks agents to carry over what identifies an account: its name, 
   assert.match(text, /kinds marked \[account\] also have account_name, account_email/);
   assert.ok(text.length < 33_000, `still small enough to fetch once (${text.length})`);
 });
+
+// Dogfood, 25 Nov 2026: "fine" matched everyday email, and Outlook can't take Gmail's syntax.
+test("the skill's searches avoid common words and say how to search Outlook", () => {
+  const text = lifeAdminSkillText(BUILT_IN);
+  const government = text.split("\n").find((line) => line.startsWith("- Tax and government:")) ?? "";
+  assert.match(government, /from:\(ato\.gov\.au OR my\.gov\.au/, "government paperwork by sender");
+  assert.doesNotMatch(government, /"fine"/);
+  assert.match(text, /in Outlook, put the same words in \$search without newer_than:.*received>=YYYY-MM-DD/);
+});

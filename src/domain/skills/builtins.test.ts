@@ -23,7 +23,7 @@ test("every Warthog skill has its own key and title, and the house skill comes f
 const PINS: Record<string, [number, string]> = {
   using_warthog: [1, "b3304eb5b8d22c1f"],
   life_admin_records: [1, "749b3fb473c409b9"],
-  building_a_profile: [1, "0fbd96a5e374f44c"],
+  building_a_profile: [1, "6cac249767c38c87"],
 };
 
 test("Warthog's guidance can't change without a new version", () => {

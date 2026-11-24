@@ -43,6 +43,8 @@ import { getRecordForUser } from "../../db/life-admin-records";
 import { visibleTo } from "./records";
 
 import { validTaskAssignee, changeTaskAsAgent } from "../../db/task-handoffs";
+import { listAgentsForUser } from "../../db/agents";
+import { cleanShortText } from "../../../domain/content/untrusted";
 import { systemClock } from "../../seams/clock";
 import { parseParams } from "../../http/validate";
 import { getConnectionPermissions, type ConnectionPermissions } from "../../db/agent-permissions";
@@ -82,7 +84,7 @@ export const listTasksSchema = z.object({ reason });
 // specific agent id, defaulting to 'any'), plus the universal OPTIONAL `reason`.
 export const createTaskSchema = z.object({
   title: z.string().min(1).max(MAX_TITLE).superRefine(neverKept("The task")),
-  assignee: z.string().min(1).max(MAX_ASSIGNEE).optional(),
+  assignee: z.string().min(1).max(MAX_ASSIGNEE).optional().describe('Who should do it: "me" for yourself, "any" for whichever agent picks it up (the default), or another of the person\'s connected agents by its name or id.'),
   recordId: z.uuid().optional().describe("The life-admin record this task is about (an id from list_records), e.g. \"finalise the motorcycle insurance\"."),
   reason,
 });
@@ -249,6 +251,25 @@ export function createListTasksTool(deps: TasksToolDeps): ListTasksTool {
   };
 }
 
+const ASSIGNEE_HELP = 'Use "me" for yourself, "any" for any agent, or one of the person\'s connected agents by its name.';
+
+// Who a new task is for: "me" (the calling agent), "any", an agent's id, or a connected
+// agent's name, case and spaces aside. A name two agents share is the caller's when it's
+// one of them, and otherwise refused rather than guessed.
+async function resolveAssignee(db: Db, connection: AgentConnection, given: string): Promise<{ id: string } | { refused: string }> {
+  const wanted = given.trim();
+  if (wanted.toLowerCase() === "any") return { id: "any" };
+  if (wanted.toLowerCase() === "me") return { id: connection.agentId };
+  if (await validTaskAssignee(db, connection.userId, wanted)) return { id: wanted };
+  const named = (await listAgentsForUser(db, connection.userId)).filter(
+    (agent) => agent.status === "connected" && agent.displayName.trim().toLowerCase() === wanted.toLowerCase(),
+  );
+  if (named.some((agent) => agent.id === connection.agentId)) return { id: connection.agentId };
+  if (named.length === 1 && named[0]) return { id: named[0].id };
+  if (named.length > 1) return { refused: `More than one of the person's agents is called ${cleanShortText(wanted, 60)}. ${ASSIGNEE_HELP}` };
+  return { refused: `No connected agent is called that. ${ASSIGNEE_HELP}` };
+}
+
 export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
   const { db, keyWrapper } = deps;
 
@@ -271,9 +292,8 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
       // DEK-encrypted through the parameterized store; the assignee travels as a bound
       // value, so a SQL-shaped field is inert data.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      if (!(await validTaskAssignee(db, connection.userId, parsed.assignee ?? "any"))) {
-        return { status: "refused", reason: "Choose one of your connected agents or any agent." };
-      }
+      const assignee = await resolveAssignee(db, connection, parsed.assignee ?? "any");
+      if ("refused" in assignee) return { status: "refused", reason: assignee.refused };
       // A task about a life-admin record: one of this person's that this agent may see.
       if (parsed.recordId) {
         const record = await getRecordForUser(db, connection.userId, parsed.recordId, dek);
@@ -286,7 +306,7 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
         {
           userId: connection.userId,
           title: tidyKeptText(parsed.title),
-          assignee: parsed.assignee ?? "any",
+          assignee: assignee.id,
           createdBy: { kind: "agent", agentId: connection.agentId },
           ...(parsed.recordId ? { recordId: parsed.recordId } : {}),
         },

@@ -57,7 +57,14 @@ type LogActivityInput = z.infer<typeof logActivitySchema>;
 export interface LogActivityTool {
   readonly name: string;
   readonly inputSchema: z.ZodType;
-  handle(input: unknown, connection: AgentConnection): Promise<ActivityEntry>;
+  handle(input: unknown, connection: AgentConnection): Promise<LogActivityResult>;
+}
+
+// What the agent gets back: that it was logged, and when. Never the stored entry, which
+// carries the person's id and the audit chain's hashes.
+export interface LogActivityResult {
+  readonly status: "logged";
+  readonly occurredAt: string;
 }
 
 export interface LogActivityDeps {
@@ -87,7 +94,7 @@ export function createLogActivityTool(deps: LogActivityDeps): LogActivityTool {
     name: "log_activity",
     inputSchema: logActivitySchema,
 
-    async handle(input: unknown, connection: AgentConnection): Promise<ActivityEntry> {
+    async handle(input: unknown, connection: AgentConnection): Promise<LogActivityResult> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE the recorder is ever called.
       const parsed = parseParams(logActivitySchema, input);
@@ -95,13 +102,14 @@ export function createLogActivityTool(deps: LogActivityDeps): LogActivityTool {
       // Write ONE entry, labelled reported-by-agent, with the identity taken from
       // the session connection (never a body value). The recorder redacts the
       // payload before it is stored.
-      return recorder.record({
+      const entry = await recorder.record({
         userId: connection.userId,
         kind: KIND,
         source: "agent_reported",
         agentId: connection.agentId,
         payload: payloadOf(parsed),
       });
+      return { status: "logged", occurredAt: entry.occurredAt };
     },
   };
 }

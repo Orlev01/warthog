@@ -20,8 +20,10 @@ export const LIFE_ADMIN_SKILL = {
     "when saving the person's life-admin records or bookings, filling them in from their email or other connected services, carrying on an item another agent started, or when nothing built-in fits",
 } as const;
 
-// Searches that find each category's paperwork in Gmail (Outlook takes the same words in its
-// search). Seed lists, to keep short and current; never a reason to trust a sender.
+// Searches that find each category's paperwork, in Gmail's syntax (the skill says how to put
+// them to Outlook). Seed lists, to keep short and current; never a reason to trust a sender.
+// Searching by sender beats common words: "fine" or "help" match half an inbox (dogfood,
+// 25 Nov 2026).
 export const SEARCHES: Readonly<Record<string, readonly string[]>> = {
   vehicles: [
     '(registration OR rego OR "renewal notice") (vehicle OR motorcycle OR car) newer_than:13m',
@@ -35,7 +37,10 @@ export const SEARCHES: Readonly<Record<string, readonly string[]>> = {
   health: ['("private health" OR "health insurance" OR "hospital cover" OR extras OR "appointment reminder" OR referral) newer_than:15m'],
   investing: ['(superannuation OR "super fund" OR "member statement" OR "annual statement" OR brokerage) newer_than:18m'],
   banking: ['("annual fee" OR "interest free" OR "balance transfer" OR "card expiry" OR "loan statement") newer_than:13m'],
-  government: ['(ATO OR "tax return" OR BAS OR Centrelink OR "penalty notice" OR "infringement" OR "fine") newer_than:18m'],
+  government: [
+    'from:(ato.gov.au OR my.gov.au OR servicesaustralia.gov.au) newer_than:18m',
+    '("tax return" OR "notice of assessment" OR "activity statement" OR "penalty notice" OR infringement) newer_than:18m',
+  ],
   id: ['(passport OR "driver licence" OR "drivers licence" OR visa OR "working with children") (expire OR expiry OR renew) newer_than:5y'],
   work: ['(AHPRA OR registration OR "practising certificate" OR licence OR "census date") (renew OR expire OR due) newer_than:13m'],
   business: ['(ABN OR "business name" OR ASIC OR domain OR hosting OR "public liability") (renew OR invoice OR due) newer_than:13m'],
@@ -190,7 +195,7 @@ export function lifeAdminReference(catalogue: Catalogue, options: SkillOptions =
   ].join("\n");
 
   return [
-    "Searches (Gmail; use the same words in Outlook search)",
+    "Searches (Gmail; in Outlook, put the same words in $search without newer_than:, brackets or inner quotes, and narrow with received>=YYYY-MM-DD)",
     searches,
     own,
     "",
