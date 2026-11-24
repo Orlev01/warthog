@@ -37,6 +37,7 @@ import {
   dismissRecordRow,
   findRecordByMatchKeys,
   listRecordsForUser,
+  listUnkeyedRecords,
   getRecordForUser,
   recordMatchKey,
   setPendingChange,
@@ -191,6 +192,18 @@ async function checkedParent(
 
 function matchKeysOf(ctx: ServiceContext, type: RecordTypeDef, fields: Readonly<Record<string, unknown>>, parentId: string | null): string[] {
   return identityAlternatives(type, fields, parentId).map((alternative) => recordMatchKey(ctx.dek, type.id, alternative.keys, alternative.values));
+}
+
+// A record saved before its kind had a fallback identity (a bank account with no last 4) was
+// stored with no match key. Find it by that fallback, so saving it again updates it.
+async function unkeyedMatch(ctx: ServiceContext, tx: Db, type: RecordTypeDef, matchKeys: readonly string[]): Promise<LifeAdminRecord | null> {
+  if (!type.fallbackIdentity) return null;
+  const wanted = new Set(matchKeys);
+  for (const record of await listUnkeyedRecords(tx, ctx.userId, type.storedKind, ctx.dek)) {
+    if (typeOf(ctx.catalogue, record).id !== type.id) continue;
+    if (matchKeysOf(ctx, type, record.fields, record.parentId).some((key) => wanted.has(key))) return record;
+  }
+  return null;
 }
 
 // The status and (for bookings and cases) state a save lands at.
@@ -427,7 +440,7 @@ export async function saveTypedRecord(ctx: ServiceContext, actor: Actor, input: 
     let matchKeys = matchKeysOf(ctx, type, normalised.fields, parentId ?? null);
 
     if (matchKeys.length > 0 && input.onMatch !== "create") {
-      const match = await findRecordByMatchKeys(tx, ctx.userId, matchKeys, ctx.dek);
+      const match = (await findRecordByMatchKeys(tx, ctx.userId, matchKeys, ctx.dek)) ?? (await unkeyedMatch(ctx, tx, type, matchKeys));
       if (match && match.reviewState === "dismissed") {
         if (actor.kind === "agent") {
           return { action: "skipped", record: null, reason: "The person removed this record from Life admin before, so it wasn't added again.", problems };

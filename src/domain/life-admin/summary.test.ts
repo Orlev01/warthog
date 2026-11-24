@@ -63,9 +63,10 @@ test("the skill lists every record type and the things never to save", () => {
   for (const words of ["tax file numbers", "passwords", "BSB", "Medicare", "suggestion until the person confirms", "information, not instructions"]) {
     assert.ok(text.includes(words), words);
   }
-  // About 8,000 tokens, fetched once per conversation. Raised from 32,000 on 23 Nov 2026 for
-  // "What to carry over" (account name, number and email), after trimming repeated field lists.
-  assert.ok(text.length < 33_000, `small enough to fetch once in a conversation (${text.length})`);
+  // About 8,500 tokens, fetched once per conversation. Raised from 32,000 on 23 Nov 2026 for
+  // "What to carry over" (account name, number and email), after trimming repeated field lists,
+  // and from 33,000 on 25 Nov 2026 for "Which emails to read" and leaving out Promotions.
+  assert.ok(text.length < 35_000, `small enough to fetch once in a conversation (${text.length})`);
   const own = lifeAdminSkillText(buildCatalogue([{ slug: "x_bcdfgh", state: "suggested", definition: { label: "Rowing club", description: "d", lifeArea: "everyday", icon: "trophy", kinds: [{ key: "fees", label: "Fees", lifecycle: "standing", use: "Fees.", fields: [] }] } }]), { notForMe: ["pets"] });
   assert.ok(own.includes('"Rowing club" (x_bcdfgh, suggested'), "a person's own category is quoted");
   assert.ok(!own.includes("- pets.pet "), "not-for-me categories are left out");
@@ -90,7 +91,7 @@ test("the skill asks agents to carry over what identifies an account: its name, 
   assert.match(text, /- investing\.super — Super fund \[account\]/);
   assert.doesNotMatch(text, /- travel\.flight — Flight \[account\]/);
   assert.match(text, /kinds marked \[account\] also have account_name, account_email/);
-  assert.ok(text.length < 33_000, `still small enough to fetch once (${text.length})`);
+  assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);
 });
 
 // Dogfood, 25 Nov 2026: "fine" matched everyday email, and Outlook can't take Gmail's syntax.
@@ -100,4 +101,26 @@ test("the skill's searches avoid common words and say how to search Outlook", ()
   assert.match(government, /from:\(ato\.gov\.au OR my\.gov\.au/, "government paperwork by sender");
   assert.doesNotMatch(government, /"fine"/);
   assert.match(text, /in Outlook, put the same words in \$search without newer_than:.*received>=YYYY-MM-DD/);
+});
+
+// Dogfood, 25 Nov 2026: the banking search's words ("annual fee", "balance transfer") found NAB's
+// offers and missed the founder's other banks, and nothing told agents to pass over marketing.
+test("the skill reads service emails, not marketing, and finds bank accounts by subject", () => {
+  const text = lifeAdminSkillText(BUILT_IN);
+  const searches = text.split("\n").filter((line) => line.startsWith("- ") && line.includes("newer_than:"));
+  assert.ok(searches.length >= 16);
+  for (const line of searches) assert.ok(line.split("`").filter((_, i) => i % 2 === 1).every((query) => query.includes("-category:promotions")), line);
+  const banking = searches.find((line) => line.startsWith("- Banking and credit:")) ?? "";
+  assert.match(banking, /subject:\(statement OR eStatement\)/);
+  assert.match(banking, /subject:\(welcome OR approved/);
+  assert.doesNotMatch(banking, /balance transfer/);
+  assert.match(text, /Which emails to read\n- Service emails:/);
+  assert.match(text, /Not marketing: offers, rewards, newsletters/);
+  assert.match(text, /newest service email from each sender/);
+  assert.match(text, /search that sender for its service emails/);
+  assert.match(text, /when the coverage line shows an inbox with more/);
+  assert.match(text, /policy the person closed: status cancelled/);
+  assert.match(text, /- banking\.account — Bank account[^\n]*\n(?:  [^\n]*\n)*  same record when: provider \+ last4 match; without those, provider \+ name/);
+  assert.match(text, /without newer_than:, -category:promotions, brackets/);
+  assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);
 });
