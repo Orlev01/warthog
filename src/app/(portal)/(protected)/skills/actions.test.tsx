@@ -984,3 +984,51 @@ test("createSkill refuses one of Warthog's skill titles, whatever the case, and 
     await db.close();
   }
 });
+
+// docs/adr/editable-builtin-skills.md: the person's control over Warthog's own skills.
+test("changeWarthogSkill: switch off, edit, choose agents and restore one of Warthog's skills", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId } = await makeUserWithDek(db, keyWrapper, "warthog-skill");
+    const myAgent = await makeAgent(db, userId, "My Claude");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    const view = async (key: string) => (await actions.load(session)).warthogSkills.find((skill) => skill.key === key)!;
+
+    const house = await view("using_warthog");
+    assert.equal(house.state, "on");
+    assert.ok(house.rules.length > 0, "its rules are shown");
+    assert.equal(house.edited, false);
+    assert.equal((await view("building_a_profile")).needs, "Agents that can save to your Life admin");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "off" })), true);
+    assert.equal((await view("using_warthog")).state, "off");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: "Be brief with me." })), true);
+    const edited = await view("using_warthog");
+    assert.equal(edited.guidance, "Be brief with me.");
+    assert.equal(edited.useThisWhen, house.useThisWhen);
+    assert.equal(edited.edited, true);
+    assert.equal(edited.state, "off", "an edit keeps it off");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: ` ${house.warthogGuidance} ` })), true);
+    assert.equal((await view("using_warthog")).edited, false, "Warthog's own wording isn't kept as an edit");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "scope", scope: "chosen", scopedAgentIds: [myAgent] })), true);
+    assert.deepEqual((await view("life_admin_records")).scopedAgentIds, [myAgent]);
+    const foreign = await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "scope", scope: "chosen", scopedAgentIds: [randomUUID()] });
+    assert.equal(okOf(foreign), false, "only the person's own agents");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "remove" })), true);
+    assert.equal((await view("life_admin_records")).state, "removed");
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "restore" })), true);
+    const restored = await view("life_admin_records");
+    assert.equal(restored.state, "on");
+    assert.equal(restored.scope, "all");
+
+    await assert.rejects(actions.changeWarthogSkill(session, { key: "not_a_skill", action: "on" }), "an unknown key is refused at the boundary");
+  } finally {
+    await db.close();
+  }
+});

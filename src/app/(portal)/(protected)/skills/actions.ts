@@ -56,7 +56,10 @@ import {
   type PreferencesProfile,
 } from "@/server/db/preferences";
 import { HOUSE_SKILL } from "@/domain/skills/index";
-import { isReservedSkillTitle } from "@/domain/skills/builtins";
+import { builtinByKey, isReservedSkillTitle, type BuiltinGroup, type EffectiveBuiltin } from "@/domain/skills/builtins";
+import type { SkillGate } from "@/domain/skills/gates";
+import { changeBuiltinSkill, restoreBuiltinSkill, type BuiltinSkillChange } from "@/server/db/builtin-skills";
+import { builtinSkillsFor } from "@/server/skills/builtin-skills";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Session } from "@/server/auth/session";
 
@@ -75,6 +78,8 @@ export interface SkillsActionsDeps {
 export interface SkillsPageData {
   readonly skills: Skill[];
   readonly preferences: PreferencesProfile | null;
+  // Warthog's own skills as they stand for this person (docs/adr/editable-builtin-skills.md).
+  readonly warthogSkills: readonly WarthogSkillView[];
   readonly houseSkill: {
     readonly title: string;
     readonly useThisWhen: string;
@@ -138,7 +143,36 @@ export interface SkillsActions {
   duplicateSkill(session: Session, input: SkillIdInput): Promise<ActionResult>;
   toggleSkill(session: Session, input: ToggleSkillInput): Promise<ActionResult>;
   deleteSkill(session: Session, input: SkillIdInput): Promise<ActionResult>;
+  changeWarthogSkill(session: Session, input: WarthogSkillChangeInput): Promise<ActionResult>;
 }
+
+// One of Warthog's skills as the Skills page shows it: the person's wording or Warthog's,
+// Warthog's own for comparison, the rules no one can change, and who gets it.
+export interface WarthogSkillView {
+  readonly key: string;
+  readonly title: string;
+  readonly group: BuiltinGroup;
+  readonly useThisWhen: string;
+  readonly guidance: string;
+  readonly warthogUseThisWhen: string;
+  readonly warthogGuidance: string;
+  readonly rules: readonly string[];
+  // What Warthog adds to it for each agent, in words, if anything.
+  readonly adds: string | null;
+  // Which agents it's for, in words ("Agents that can save to your Life admin"), or null for all.
+  readonly needs: string | null;
+  readonly state: "on" | "off" | "removed";
+  readonly scope: "all" | "chosen";
+  readonly scopedAgentIds: readonly string[];
+  readonly edited: boolean;
+  readonly updateAvailable: boolean;
+}
+
+// A change to one of Warthog's skills.
+export type WarthogSkillChangeInput =
+  | { readonly key: string; readonly action: "on" | "off" | "remove" | "restore" | "use_new" | "keep_mine" }
+  | { readonly key: string; readonly action: "edit"; readonly useThisWhen: string; readonly guidance: string }
+  | { readonly key: string; readonly action: "scope"; readonly scope: "all" | "chosen"; readonly scopedAgentIds?: readonly string[] };
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
 //
@@ -155,6 +189,56 @@ const PREF_FIELD_MAX = 2_000;
 const SCOPED_AGENTS_MAX = 100;
 
 const skillIdSchema = z.uuid();
+
+const warthogKeySchema = z.string().refine((key) => builtinByKey(key) !== undefined, "Not one of Warthog's skills.");
+const warthogSkillChangeSchema = z.discriminatedUnion("action", [
+  z.object({ key: warthogKeySchema, action: z.enum(["on", "off", "remove", "restore", "use_new", "keep_mine"]) }),
+  z.object({
+    key: warthogKeySchema,
+    action: z.literal("edit"),
+    useThisWhen: z.string().trim().min(1).max(USE_THIS_WHEN_MAX),
+    guidance: z.string().trim().min(1).max(FULL_TEXT_MAX),
+  }),
+  z.object({ key: warthogKeySchema, action: z.literal("scope"), scope: z.enum(["all", "chosen"]), scopedAgentIds: z.array(z.uuid()).max(SCOPED_AGENTS_MAX).optional() }),
+]);
+
+// Which agents a Warthog skill is for, in the person's words.
+const GATE_WORDS: Record<SkillGate, string> = {
+  records_read: "can read your Life admin",
+  records_write: "can save to your Life admin",
+  tasks: "can use your tasks",
+  mail_read: "can read your email",
+  calendar_read: "can read your calendar",
+  cards: "can ask for a card",
+  profile: "can see About you",
+  high_tier: "can ask for details from your Vault",
+  memory: "can read shared memory",
+};
+const ADDS: Record<string, string> = {
+  life_admin: "Warthog adds the email searches, your own categories and every record kind, kept up to date for you.",
+  profile: "Warthog adds the order to go through your categories, what each agent can read, and whether it can suggest About you details.",
+};
+
+export function warthogSkillView(skill: EffectiveBuiltin): WarthogSkillView {
+  const gates = skill.def.requires.filter((gate) => !(gate === "records_read" && skill.def.requires.includes("records_write")));
+  return {
+    key: skill.def.key,
+    title: skill.def.title,
+    group: skill.def.group,
+    useThisWhen: skill.useThisWhen,
+    guidance: skill.guidance,
+    warthogUseThisWhen: skill.def.useThisWhen,
+    warthogGuidance: skill.def.guidance,
+    rules: skill.def.rules,
+    adds: skill.def.reference ? ADDS[skill.def.reference]! : null,
+    needs: gates.length ? `Agents that ${gates.map((gate) => GATE_WORDS[gate]).join(" and ")}` : null,
+    state: skill.state,
+    scope: skill.scope.type === "agents" ? "chosen" : "all",
+    scopedAgentIds: skill.scope.type === "agents" ? skill.scope.agentIds : [],
+    edited: skill.edited,
+    updateAvailable: skill.updateAvailable,
+  };
+}
 const scopeSchema = z.enum(["all", "chosen"]);
 
 // Text fields are trimmed before they're checked, so a value of only spaces is refused like
@@ -233,9 +317,11 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
       }),
     );
     const preferences = await getPreferences(db, session.userId, dek);
+    const warthogSkills = (await builtinSkillsFor(db, session.userId, dek)).map(warthogSkillView);
     return {
       skills,
       preferences,
+      warthogSkills,
       houseSkill: {
         title: HOUSE_SKILL.title,
         useThisWhen: HOUSE_SKILL.useThisWhen,
@@ -384,6 +470,49 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
+  // Change one of Warthog's skills for the session person (docs/adr/editable-builtin-skills.md).
+  // Their wording is kept only while it differs from Warthog's, with the version it was
+  // based on; restore drops their row, so the skill is Warthog's again, in its default state.
+  async function changeWarthogSkill(session: Session, input: WarthogSkillChangeInput): Promise<ActionResult> {
+    const valid = parseParams(warthogSkillChangeSchema, input);
+    const def = builtinByKey(valid.key)!;
+    const defaults = { state: def.startsOn ? ("on" as const) : ("off" as const) };
+    if (valid.action === "restore") {
+      await restoreBuiltinSkill(db, session.userId, def.key);
+      return { ok: true };
+    }
+    const dek = await dataKeyFor(session.userId);
+    const change = async (next: BuiltinSkillChange) => changeBuiltinSkill(db, session.userId, def.key, next, defaults, dek);
+    switch (valid.action) {
+      case "on":
+      case "off":
+        await change({ state: valid.action });
+        break;
+      case "remove":
+        await change({ state: "removed" });
+        break;
+      case "use_new":
+        await change({ useThisWhen: null, guidance: null });
+        break;
+      case "keep_mine":
+        await change({ basedOnVersion: def.version });
+        break;
+      case "edit": {
+        const useThisWhen = valid.useThisWhen === def.useThisWhen.trim() ? null : valid.useThisWhen;
+        const guidance = valid.guidance === def.guidance.trim() ? null : valid.guidance;
+        await change({ useThisWhen, guidance, basedOnVersion: def.version });
+        break;
+      }
+      case "scope": {
+        const agentIds = valid.scopedAgentIds ?? [];
+        if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, agentIds))) return { ok: false, reason: "unknown_agent" };
+        await change({ scope: valid.scope === "chosen" ? { type: "agents", agentIds } : { type: "all_agents" } });
+        break;
+      }
+    }
+    return { ok: true };
+  }
+
   return {
     load,
     savePreferences,
@@ -392,5 +521,6 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     duplicateSkill,
     toggleSkill,
     deleteSkill,
+    changeWarthogSkill,
   };
 }
