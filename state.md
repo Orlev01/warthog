@@ -1,4 +1,15 @@
-# Delivery status — 24 November 2026 (card billing addresses, Life admin Add tab)
+# Delivery status — 24 November 2026 (what agents see)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`460ae18114b2f1dd7f4a33cd83ed4b14e81ee1a0` runs as `warthog--r45314256670a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #58: each person chooses what agents see (Private, Standard, Everything); searches across inboxes
+fill their page and cover up to 10 inboxes; `find_tools`/`call_tool` are always offered. Migration
+0124 (95). See the [release record](docs/audit/read-levels-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (card billing addresses, Life admin Add tab)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

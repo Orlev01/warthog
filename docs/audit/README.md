@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**What agents see, 24 November:** main `460ae18` runs as `warthog--r45314256670a1`. PR #58 lets
+each person choose what agents see in their email and files: Private, Standard (default) or
+Everything. It fills a search's page across inboxes, covers up to 10 inboxes, always offers
+`find_tools`/`call_tool` for apps with an older tool list, and stops masking a long account number
+as a sign-in code. Migration 0124 (95). See the [release record](read-levels-release-2026-11-24.md).
+
 **Card billing addresses and Life admin's Add tab, 24 November:** main `49a0af8` runs as
 `warthog--r45311099130a1`. PR #56 lets a card have its own billing address, kept with the card and
 never an everyday detail (an agent gets it only in an approved card release); saved cards show and
