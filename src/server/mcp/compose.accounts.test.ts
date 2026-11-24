@@ -517,7 +517,7 @@ test("an app with an older tool list reaches a service through find_tools and ca
     const net = gmail({ home: { messages: [mail("h1", "AGL <hi@agl.com.au>", "Bill", 20)] }, Work: { messages: [] } });
     const dispatch = createMcpDispatch({ db, config, fetch: net.fetch });
     // A fresh list request: a request's body can be read only once.
-    const listed = await readRpc(await dispatch(connectionId, mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
+    const listed = await readRpc(await dispatch(connectionId, mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
     const names = (listed.result?.tools ?? []).map((t) => t.name);
     assert.ok(names.includes("find_tools") && names.includes("call_tool"), "offered beside the service's own tools");
     const found = await readRpc(await dispatch(connectionId, call("find_tools", { query: "gmail search" })));
