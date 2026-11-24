@@ -39,7 +39,7 @@ No migrations (96).
 
 - **Locally:** `npm test` passed 6,934 of 6,934 tests on #65 and 6,937 of 6,937 on #66;
   `npm run typecheck` was clean on both.
-- **Image:** run 45509554516's image is `…@sha256:dcdcd835…`, built on
+- **Image:** image run 45507629454 built `…@sha256:dcdcd835…` on
   `node:22-bookworm-slim@sha256:be979e55…`. The image run re-ran the full checks on the merged tree.
   - **Image checks:**
     - linux/amd64, UID 1000, no setuid or setgid, with the deletion-journal label;
