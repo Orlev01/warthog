@@ -229,3 +229,13 @@ test("the log_activity tool is named and carries an optional string `reason` in 
   assert.equal(reason!.safeParse("a short note").success, true, "`reason` accepts a string");
   assert.equal(reason!.safeParse(12345).success, false, "`reason` rejects a non-string");
 });
+
+// Dogfood, 25 Nov 2026: the reply carried the person's user id and the audit chain's hashes,
+// which an agent has no use for.
+test("log_activity answers with what was logged and when, not Warthog's own record of it", async () => {
+  const { recorder } = capturingRecorder();
+  const tool = createLogActivityTool({ recorder });
+  const result = await tool.handle({ reason: "booked the flights" }, connectionFor(USER));
+  assert.deepEqual(Object.keys(result).sort(), ["occurredAt", "status"]);
+  assert.equal(result.status, "logged");
+});

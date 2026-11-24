@@ -510,6 +510,12 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       const today = localDate(now, zone);
 
       if (parsed.view === "categories") {
+        // How many records this agent can see in each, so a profile build skips the filled ones.
+        const counts = new Map<string, number>();
+        for (const record of (await listRecordsForUser(db, connection.userId, dek)).filter(visibleTo(permissions, connection.agentId))) {
+          const category = record.type ? catalogue.type(record.type)?.category : undefined;
+          if (category) counts.set(category, (counts.get(category) ?? 0) + 1);
+        }
         return {
           status: "ok",
           view: "categories",
@@ -517,6 +523,7 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
             id: cat.id,
             label: cat.label,
             origin: cat.origin,
+            records: counts.get(cat.id) ?? 0,
             ...(cat.origin === "custom"
               ? { state: catalogue.customStates[cat.id], kinds: catalogue.typesIn(cat.id).map((type) => ({ type: type.id, label: type.label, lifecycle: type.lifecycle, ...(type.anchor ? { anchor: true } : {}), fields: type.fields.filter((field) => !field.common).map((field) => field.key) })) }
               : { kinds: catalogue.typesIn(cat.id).map((type) => type.id), ...(person.settings[cat.id] ? { setting: person.settings[cat.id] } : {}) }),
