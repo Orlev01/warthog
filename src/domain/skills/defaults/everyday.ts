@@ -197,7 +197,7 @@ const HANDING_OVER: DefaultSkillText = {
     "- On the task, call update_task with a short note and status \"open\" to release your claim. Use complete_task only when it's all done.",
     "",
     "To hand to another agent",
-    "- Call create_task with the recordId and a title that says what's needed. assignee takes \"any\" (the default) or an agent's id, not its name. If the person named an agent, say so in the title, and tell the person they can assign it to that agent in Warthog.",
+    "- Call create_task with the recordId and a title that says what's needed. Give assignee the agent the person named, by its name; leave it out (\"any\") when any agent may pick it up, or give \"me\" for a task you'll carry on yourself.",
     "",
     "Long jobs",
     "- Keep one task for the whole job and update it as you go. Notes hold progress as names and counts only, such as \"done: AGL, Origin; three left\", never copied email text or personal details.",
