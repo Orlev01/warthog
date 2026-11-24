@@ -70,6 +70,8 @@ import { releasedValueMatcher } from "../../crypto/hmac";
 import { listRecordsForUser } from "../../db/life-admin-records";
 import { summariseLifeAdmin, type LifeAdminSummary } from "../../../domain/life-admin/summary";
 import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
+import { PROFILE_SKILL } from "../../../domain/life-admin/profile-skill";
+import { readableSources } from "../../../domain/life-admin/profile-sources";
 import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
 import { visibleTo } from "./records";
 import { catalogueFor } from "../../life-admin/catalogue";
@@ -212,6 +214,10 @@ export function createGetContextTool(deps: GetContextDeps): {
       // may use records.
       const builtIn = buildSkillIndex([], agentId);
       if (permissions.recordsAccess) builtIn.push({ title: LIFE_ADMIN_SKILL.title, useThisWhen: LIFE_ADMIN_SKILL.useThisWhen });
+      // "Building a profile" (docs/adr/profile-build.md), for an agent that may save records.
+      if (permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false) {
+        builtIn.push({ title: PROFILE_SKILL.title, useThisWhen: PROFILE_SKILL.useThisWhen });
+      }
       const skills = [...builtIn, ...skillPage.items];
       const memoryPage = permissions.memoryRead
         ? await pageMemories(db, userId, dek, {
@@ -269,8 +275,9 @@ export function createGetContextTool(deps: GetContextDeps): {
       }
 
       // The life-admin summary over exactly the records this agent may see (so its counts reveal
-      // nothing hidden). The offer to fill it in goes only to an agent that can read the
-      // person's mail and save records.
+      // nothing hidden). The offer to build the person's profile goes only to an agent that can
+      // read their email, calendar or files (connected, through Warthog's own connectors) and
+      // save records.
       let lifeAdmin: LifeAdminSummary | null = null;
       if (permissions.recordsAccess) {
         const person = await catalogueFor(db, userId, dek);
@@ -279,16 +286,21 @@ export function createGetContextTool(deps: GetContextDeps): {
         const readable = new Set(permissions.accounts
           .filter((grant) => MAIL_CONNECTOR_IDS.has(grant.connectorId) && accountPolicy(grant, permissions).readTools)
           .map((grant) => grant.accountId));
-        const readsMail = readable.size > 0;
         const writes = permissions.resourceControls?.recordsWrite !== false;
         // A mail account the person connected that this agent can't read: a hint only, never which one.
         const connections = await listConnectionsForUser(db, userId);
+        const connected = new Set(connections.filter((account) => account.status === "connected").map((account) => account.id));
+        const sources = readableSources(permissions.accounts.map((grant) => ({
+          connectorId: grant.connectorId,
+          connected: connected.has(grant.accountId),
+          reads: accountPolicy(grant, permissions).readTools,
+        })));
         const otherMailAccounts = connections.some((account) => MAIL_CONNECTOR_IDS.has(account.connectorId) && !readable.has(account.id));
         const now = clock.now();
         const savedByLife = await savedByResolver(db, userId, agentId);
         const handover = await handoverItems(db, userId, visible, person.catalogue, dek, savedByLife, now, person.zone);
         lifeAdmin = summariseLifeAdmin(visible, person.catalogue, now, person.zone, {
-          mayOffer: readsMail && writes,
+          offerSources: writes ? sources : [],
           settings: person.settings,
           otherMailAccounts,
           handover,

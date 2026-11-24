@@ -774,3 +774,24 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.DATABASE_URL = prevDbUrl;
   }
 });
+
+// docs/adr/profile-build.md: what Warthog never keeps is refused in memories the person writes too,
+// with its own reason; card numbers are masked.
+test("adding or editing a memory refuses what Warthog never keeps, and masks card numbers", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "never-kept");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    assert.deepEqual(await actions.addMemory(session, { content: "My TFN is 123 456 782", scope: "kept" }), { ok: false, reason: "never_kept" });
+    assert.equal((await listMemoriesForUser(db, userId, dek)).length, 0, "nothing saved");
+    assert.deepEqual(await actions.addMemory(session, { content: "Gym is on card 4111 1111 1111 1111", scope: "kept" }), { ok: true });
+    const [saved] = await listMemoriesForUser(db, userId, dek);
+    assert.equal(saved!.content, "Gym is on card ••••1111");
+    assert.deepEqual(await actions.editMemory(session, { id: saved!.id, content: "BSB 062-000 account 12345678" }), { ok: false, reason: "never_kept" });
+    assert.equal((await listMemoriesForUser(db, userId, dek))[0]!.content, "Gym is on card ••••1111", "unchanged");
+  } finally {
+    await db.close();
+  }
+});

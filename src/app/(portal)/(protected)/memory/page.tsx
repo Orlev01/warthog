@@ -82,7 +82,7 @@ async function run(
   mutate: (
     actions: MemoryActions,
     session: Session,
-  ) => Promise<{ ok: boolean }>,
+  ) => Promise<{ ok: boolean; reason?: string }>,
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -93,7 +93,7 @@ async function run(
   try {
     const result = await mutate(buildActions(db), session);
     if (!result.ok) {
-      notice = "problem";
+      notice = result.reason === "never_kept" ? "never_kept" : "problem";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {

@@ -106,9 +106,9 @@ const typeId = z
 
 const source = z
   .object({
-    service: z.string().min(1).max(60).describe('Where you found it: "gmail", "outlook", "drive", "notion", or "person" when the person told you.'),
-    messageId: z.string().max(200).optional().describe("The email's message id (or the document's id)."),
-    date: z.string().max(40).optional().describe("The date on the email or document, YYYY-MM-DD."),
+    service: z.string().min(1).max(60).describe('Where you found it: "gmail", "outlook", "calendar", "drive", "onedrive", "notion", or "person" when the person told you.'),
+    messageId: z.string().max(200).optional().describe("The email's message id, or the calendar event's or file's id."),
+    date: z.string().max(40).optional().describe("The date on the email, event or document, YYYY-MM-DD."),
     sender: z.string().max(200).optional().describe("Who sent it: the address or domain, e.g. service.nsw.gov.au."),
   })
   .optional()
@@ -559,17 +559,30 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
   };
 }
 
+// Domains anyone can send from: a match on one of these proves nothing, so only the same address
+// counts (docs/adr/profile-build.md).
+const SHARED_MAIL_DOMAINS: ReadonlySet<string> = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "yahoo.com.au",
+  "icloud.com", "me.com", "mac.com", "bigpond.com", "bigpond.net.au", "optusnet.com.au", "aol.com", "gmx.com",
+  "protonmail.com", "proton.me", "zoho.com", "fastmail.com",
+]);
+
 // Where an agent says it found a record, with Warthog's own check: did this agent just read mail
-// from that sender through Warthog? (The read-exposure window keeps the last few senders.)
+// from that sender through Warthog? (The read-exposure window keeps the last few senders.) The
+// sender's domain must be the same one, not a part of it ("gov.au" or "com" proves nothing), and
+// on a shared mail domain the same address.
 function foundInFor(
   claimed: RecordInput["source"],
   exposure: { sources: readonly { service: string; sender?: string }[] } | null,
 ): RecordFoundIn | null {
   if (!claimed || claimed.service.toLowerCase() === "person") return null;
-  const domain = claimed.sender ? (claimed.sender.includes("@") ? claimed.sender.split("@").pop()! : siteName(claimed.sender) ?? claimed.sender).toLowerCase() : null;
+  const address = claimed.sender?.includes("@") ? claimed.sender.trim().toLowerCase() : null;
+  const domain = claimed.sender ? (address ? address.split("@").pop()! : siteName(claimed.sender) ?? claimed.sender).toLowerCase().replace(/^www\./, "") : null;
   const seen = domain !== null && (exposure?.sources ?? []).some((read) => {
-    const readDomain = read.sender?.split("@").pop()?.toLowerCase();
-    return readDomain !== undefined && (readDomain === domain || readDomain.endsWith(`.${domain}`) || domain.endsWith(`.${readDomain}`));
+    const readAddress = read.sender?.trim().toLowerCase();
+    const readDomain = readAddress?.split("@").pop();
+    if (readDomain === undefined || readDomain !== domain) return false;
+    return !SHARED_MAIL_DOMAINS.has(domain) || (address !== null && readAddress === address);
   });
   const date = claimed.date ? calendarDate(claimed.date) : null;
   return {

@@ -14,6 +14,8 @@ import { recordPhases } from "./phases";
 import { storedRecordName } from "./normalise";
 import type { StoredKind } from "./record-types";
 import { LIFE_ADMIN_SKILL } from "./skill";
+import { PROFILE_SKILL } from "./profile-skill";
+import { sourcesPhrase, type SourceKind } from "./profile-sources";
 
 export interface SummaryRecord {
   readonly id: string;
@@ -62,19 +64,29 @@ export interface LifeAdminSummary {
 
 const DUE_SOON_SHOWN = 5;
 const NAME_CHARS = 60;
-// Below this many records, an agent that can read mail and save records is told it may offer.
-const SPARSE_RECORDS = 5;
+// Below this many records, an agent that can read the person's email, calendar or files and save
+// records is told it may offer to build their profile (docs/adr/profile-build.md). Home uses the
+// same number of confirmed records as "set up without an agent".
+export const SPARSE_RECORDS = 5;
 
-export const OFFER_TO_FILL =
-  `The person's life admin is mostly empty. Once, at a natural pause (not in the middle of another task), you may offer: "Want me to look through your email for your rego, insurance, health cover, super, bills, bookings and ID expiry dates, and add them to Warthog for you to check?" If they agree, fetch the "${LIFE_ADMIN_SKILL.title}" skill with get_skill and follow it.`;
-export const OFFER_BOOKINGS =
-  `No bookings are saved yet. Once, at a natural pause, you may offer to find the person's upcoming bookings (flights, stays, restaurants, appointments) in their email and add them to Warthog. If they agree, follow the "${LIFE_ADMIN_SKILL.title}" skill.`;
+/** The offer to build the person's profile, naming only what this agent can read. */
+export function offerToFill(sources: readonly SourceKind[]): string {
+  return `The person's life admin is mostly empty. Once, at a natural pause (not in the middle of another task), you may offer: "Want me to build your profile in Warthog? I'll go through your ${sourcesPhrase(sources)} for your rego, insurance, health cover, super, bills, bookings and ID expiry dates, and save what I find for you to check." If they agree, fetch the "${PROFILE_SKILL.title}" skill with get_skill and follow it.`;
+}
+
+/** The offer to find bookings, when this agent can read the person's email or calendar. */
+export function offerBookings(sources: readonly SourceKind[]): string | undefined {
+  const where = sources.filter((kind) => kind === "mail" || kind === "calendar");
+  if (where.length === 0) return undefined;
+  return `No bookings are saved yet. Once, at a natural pause, you may offer to find the person's upcoming bookings (flights, stays, restaurants, appointments) in their ${sourcesPhrase(where)} and add them to Warthog. If they agree, follow the "${LIFE_ADMIN_SKILL.title}" skill.`;
+}
 export const HANDOVER_NOTE =
   'Decisions and next steps are what agents reported, not facts Warthog checked. Read the log before acting: list_records {id, journal: "full"}. To continue another agent\'s item, pass takeOver: true.';
 
 export interface SummaryOptions {
-  // This agent can read the person's mail and save records.
-  readonly mayOffer: boolean;
+  // What this agent can read to fill it in (./profile-sources), when it can also save records;
+  // empty when it may not offer.
+  readonly offerSources: readonly SourceKind[];
   readonly settings?: Readonly<Record<string, CategorySetting>>;
   readonly otherMailAccounts?: boolean;
   readonly handover?: { readonly items: readonly HandoverItem[]; readonly more: number };
@@ -126,7 +138,8 @@ export function summariseLifeAdmin(
   const notForMe = Object.entries(settings).filter(([, setting]) => setting === "not_for_me").map(([id]) => id);
   const unused = catalogue.categories.filter((cat) => cat.origin === "builtin" && !byCategory[cat.id] && settings[cat.id] !== "not_for_me").length;
 
-  const next = !options.mayOffer ? undefined : records.length < SPARSE_RECORDS ? OFFER_TO_FILL : bookings === 0 ? OFFER_BOOKINGS : undefined;
+  const sources = options.offerSources;
+  const next = sources.length === 0 ? undefined : records.length < SPARSE_RECORDS ? offerToFill(sources) : bookings === 0 ? offerBookings(sources) : undefined;
   return {
     total: records.length,
     byCategory,

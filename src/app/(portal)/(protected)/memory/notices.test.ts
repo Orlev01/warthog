@@ -29,3 +29,9 @@ test("a blank memory and a failed save say what happened and what to do", () => 
   assert.doesNotMatch(memoryNotice("problem")!.text, /something went wrong/i);
   for (const value of [undefined, ["added"], "", "toString", "__proto__", "<script>"]) assert.equal(memoryNotice(value), null);
 });
+
+test("a memory Warthog won't keep says why, in plain words", () => {
+  const notice = memoryNotice("never_kept");
+  assert.equal(notice?.tone, "error");
+  assert.match(notice?.text ?? "", /Warthog never keeps those in memory, so nothing was saved\./);
+});

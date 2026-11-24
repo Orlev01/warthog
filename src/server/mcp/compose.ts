@@ -35,6 +35,7 @@ import { createProviderRuntime } from "../connectors/provider-runtime";
 // travels as inert data and cannot alter a query.
 
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { PROFILE_PROMPT } from "../../domain/life-admin/profile-skill";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 
 import type { Config } from "../config";
@@ -187,6 +188,9 @@ type AttachRun = (connection: AgentConnection, run: unknown) => Promise<void>;
 // tells an agent exactly which fields to send. The SDK validates the arguments against
 // that schema first and refuses a bad call naming the field at fault (zod's issue path and
 // message, never the input value); `tool.handle` and the body validate again (INV-102).
+// The MCP prompt that starts a profile build (docs/adr/profile-build.md).
+export const PROFILE_PROMPT_NAME = "build_profile";
+
 function registerTool(
   server: McpServer,
   tool: ToolDefinition,
@@ -614,8 +618,10 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     const connection = connectionId ? await resolveConnection(connectionId) : null;
 
     let tools: readonly ToolDefinition[];
+    let buildsProfile = false;
     if (connection) {
       const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      buildsProfile = Boolean(permissions?.recordsAccess && permissions.resourceControls?.recordsWrite !== false);
       // The connector tools this connection may use: its person's connected services that
       // this agent is granted (member-scoped by the verified connection's owner).
       const connections = await listConnectionsForUser(db, connection.userId);
@@ -647,6 +653,16 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     }
     for (const tool of tools) {
       registerTool(server, tool, connection, attachRun);
+    }
+    // "Build my profile" as an MCP prompt the person can pick in their app
+    // (docs/adr/profile-build.md): the same fixed text as Home's, for an agent that may save
+    // records. A prompt isn't a tool: no tool budget, and nothing runs until the agent acts.
+    if (buildsProfile) {
+      server.registerPrompt(
+        PROFILE_PROMPT_NAME,
+        { title: "Build my profile", description: "Fill in Warthog from what you can read: Life admin and About you details, waiting for me to check." },
+        () => ({ messages: [{ role: "user" as const, content: { type: "text" as const, text: PROFILE_PROMPT } }] }),
+      );
     }
     return server;
   }

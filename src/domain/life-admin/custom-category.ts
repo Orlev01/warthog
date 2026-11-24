@@ -93,6 +93,24 @@ const RESERVED_KEYS = new Set([
 // Health details are never life admin (docs/adr/life-admin-profile.md, "Never kept").
 const HEALTH_DETAIL = /\b(diagnos\w*|condition|medications?|medicines?|drugs?|dosages?|doses?|results?|symptoms?|prognosis)\b/i;
 
+// Sensitive parts of someone's life an agent mustn't turn into a category (docs/adr/profile-build.md;
+// sensitive information under the Australian Privacy Principles): health and treatment, religion,
+// politics, unions, sexuality, criminal matters and ethnicity. Health has its own built-in category.
+const SENSITIVE = new RegExp(
+  [
+    "\\b(ivf|fertility|psychiatr\\w*|psycholog\\w*|counsell?ing|therapy|therapist|rehab\\w*|addiction|cancer|oncology|hiv|chemo\\w*|mental health|disabilit\\w*)\\b",
+    "\\b(church|parish|mosque|synagogue|temple|religio\\w*|faith|worship|tithe\\w*)\\b",
+    "\\b(politic\\w*|political party)\\b",
+    "(?<!credit\\s)\\bunions?\\b",
+    "\\b(sexual\\w*|lgbt\\w*|gay|lesbian|queer|transgender)\\b",
+    "\\b(criminal|convictions?|parole|probation|bail)\\b",
+    "\\b(ethnic\\w*|racial)\\b",
+  ].join("|"),
+  "i",
+);
+const SENSITIVE_MESSAGE =
+  "Warthog doesn't keep a category about health, religion, politics, a union, sexuality or criminal matters. Leave it out.";
+
 // The built-in kind a suggested category would only duplicate, by its label.
 const BUILT_IN_SYNONYMS: Readonly<Record<string, string>> = {
   flight: "travel.flight", flights: "travel.flight", airfare: "travel.flight",
@@ -154,6 +172,9 @@ export function checkCategoryDraft(draft: CategoryDraftShape, ctx: z.RefinementC
   const duplicate = builtInFor(draft.label);
   if (duplicate) issue(["label"], `This is already a built-in kind: save these as type "${duplicate}" instead of suggesting a category.`);
   if (HEALTH_DETAIL.test(draft.label)) issue(["label"], "Warthog doesn't keep medical details in life admin.");
+  for (const [path, value] of [[["label"], draft.label], [["description"], draft.description], [["why"], draft.why]] as const) {
+    if (value && SENSITIVE.test(value)) issue([...path], SENSITIVE_MESSAGE);
+  }
 
   const kindKeys = draft.kinds.map((kind) => kind.key);
   if (new Set(kindKeys).size !== kindKeys.length) issue(["kinds"], "Give each kind its own key.");

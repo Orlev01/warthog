@@ -37,6 +37,7 @@ import { timeZoneFor } from "@/server/spending/time-zone";
 import { z } from "zod";
 
 import { parseParams } from "@/server/http/validate";
+import { neverKeptRule, tidyKeptText } from "@/domain/content/never-kept";
 import type { Db } from "@/server/db/index";
 import { getUserById } from "@/server/db/users";
 import { listAgentsForUser } from "@/server/db/agents";
@@ -375,13 +376,15 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     input: AddMemoryInput,
   ): Promise<ActionResult> {
     const valid = parseParams(addMemorySchema, input);
+    // What Warthog never keeps is refused for the person too (docs/adr/profile-build.md).
+    if (neverKeptRule(valid.content)) return { ok: false, reason: "never_kept" };
     const dek = await dataKeyFor(session.userId);
     await auditedOwnerChange(deps, session.userId, async (tx, record) => {
     const memory = await createMemoryRow(
       tx,
       {
         userId: session.userId,
-        content: valid.content,
+        content: tidyKeptText(valid.content),
         sourceAgentId: null,
         scope: valid.scope,
       },
@@ -404,9 +407,10 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     if (!(await ownsMemory(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
+    if (neverKeptRule(valid.content)) return { ok: false, reason: "never_kept" };
     const dek = await dataKeyFor(session.userId);
     await auditedOwnerChange(deps, session.userId, async (tx, record) => {
-      await editMemoryRow(tx, session.userId, valid.id, valid.content, dek);
+      await editMemoryRow(tx, session.userId, valid.id, tidyKeptText(valid.content), dek);
       await record("memory_updated", { memoryId: valid.id, contentChanged: true });
     });
     return { ok: true };

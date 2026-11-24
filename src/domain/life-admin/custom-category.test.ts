@@ -86,3 +86,26 @@ test("ids are random, never words; similar labels are recognised", () => {
   assert.equal(sameLabel("Rowing club", "Rowing Clubs"), true);
   assert.equal(sameLabel("Rowing club", "Chess club"), false);
 });
+
+// Building a profile (docs/adr/profile-build.md): an agent reading everything can't turn sensitive
+// parts of someone's life into a category.
+test("a category about health, religion, politics, a union, sexuality or criminal matters is refused", () => {
+  for (const [label, why] of [
+    ["IVF clinic", "Emails from the clinic about cycles"],
+    ["Church", "Weekly emails from the parish about giving"],
+    ["Mosque donations", "Receipts from the mosque"],
+    ["Political party", "Membership renewals from the party"],
+    ["Trade union", "Union dues and meeting notices"],
+    ["LGBTQ group", "Newsletters and events"],
+    ["Parole", "Letters about reporting dates"],
+  ]) {
+    const result = parse({ ...rowing, label, why });
+    assert.equal(result.success, false, label);
+    assert.ok(messages(result).some((message) => message.includes("Warthog doesn't keep a category about")), label);
+    assert.ok(messages(result).every((message) => !message.includes(label)), "a refusal never echoes the label");
+  }
+  assert.equal(parse({ ...rowing, why: "Sensitive: emails from my church choir about rowing" }).success, false, "the reason counts too");
+  for (const label of ["Credit union", "Tennis court bookings", "Birthday parties", "Rowing club"]) {
+    assert.equal(parse({ ...rowing, label, why: "12 emails about it" }).success, true, label);
+  }
+});

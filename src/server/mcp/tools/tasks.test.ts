@@ -759,3 +759,17 @@ test("update_task and complete_task refuse a task assigned to a different agent"
     await db.close();
   }
 });
+
+// Building a profile (docs/adr/profile-build.md): a task's title or note can't hold what Warthog
+// never keeps; the refusal names the rule, never the value.
+test("a task title or note refuses what Warthog never keeps", async () => {
+  const { createTaskSchema, updateTaskSchema } = await import("./tasks");
+  const title = createTaskSchema.safeParse({ title: "Lodge with TFN 123 456 782" });
+  assert.equal(title.success, false);
+  assert.match(title.error!.issues[0]!.message, /^The task looks like it has a tax file number\./);
+  assert.ok(!title.error!.issues[0]!.message.includes("123 456 782"));
+  const note = updateTaskSchema.safeParse({ id: "t1", note: "Pay to BSB 062-000 account 12345678" });
+  assert.equal(note.success, false);
+  assert.match(note.error!.issues[0]!.message, /^The note looks like it has a BSB and account number\./);
+  assert.equal(createTaskSchema.safeParse({ title: "Renew the rego before 14 Dec" }).success, true);
+});

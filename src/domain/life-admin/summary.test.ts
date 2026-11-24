@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { OFFER_BOOKINGS, OFFER_TO_FILL, summariseLifeAdmin, type SummaryRecord } from "./summary";
+import { offerBookings, offerToFill, summariseLifeAdmin, type SummaryRecord } from "./summary";
+import { PROFILE_SKILL } from "./profile-skill";
 import { LIFE_ADMIN_SKILL, lifeAdminSkillText } from "./skill";
 import { BUILT_IN_TYPES } from "./record-types";
 import { BUILT_IN, buildCatalogue } from "./catalogue";
@@ -22,7 +23,7 @@ test("the summary counts categories, lists the soonest few and what waits for th
     record("ancient", { dueDate: "2025-01-01" }),
     record("gone", { dueDate: "2026-11-30", status: "cancelled" }),
     record("netflix", { kind: "subscription", type: null, fields: { name: "Netflix" }, dueDate: "2026-11-25", pending: { set: {} } }),
-  ], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: true });
+  ], BUILT_IN, NOW, "Australia/Sydney", { offerSources: ["mail"] });
 
   assert.equal(summary.total, 6);
   assert.deepEqual(summary.byCategory, { vehicles: 1, health: 1, other: 3, subscriptions: 1 });
@@ -34,14 +35,26 @@ test("the summary counts categories, lists the soonest few and what waits for th
   assert.equal(summary.dueSoon[2]!.name, "Registration · BX12AB", "a record with no name goes by its type and what identifies it");
   assert.equal(summary.dueSoon[2]!.checkedByPerson, false);
   assert.equal(summary.waitingForPerson, 2);
-  assert.equal(summary.next, OFFER_BOOKINGS, "no bookings yet, so the offer is to find them");
+  assert.equal(summary.next, offerBookings(["mail"]), "no bookings yet, so the offer is to find them");
   assert.equal(summary.categories.unused > 10, true);
 });
 
-test("only an agent that can read mail and save records is told it may offer to fill it in", () => {
-  assert.equal(summariseLifeAdmin([], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: true }).next, OFFER_TO_FILL);
-  assert.equal(summariseLifeAdmin([], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: false }).next, undefined);
-  assert.match(OFFER_TO_FILL, new RegExp(LIFE_ADMIN_SKILL.title));
+test("an agent that can read the person's email, calendar or files and save records may offer to build their profile", () => {
+  assert.equal(summariseLifeAdmin([], BUILT_IN, NOW, "Australia/Sydney", { offerSources: ["mail"] }).next, offerToFill(["mail"]));
+  assert.equal(summariseLifeAdmin([], BUILT_IN, NOW, "Australia/Sydney", { offerSources: ["calendar", "files"] }).next, offerToFill(["calendar", "files"]));
+  assert.equal(summariseLifeAdmin([], BUILT_IN, NOW, "Australia/Sydney", { offerSources: [] }).next, undefined);
+  assert.match(offerToFill(["mail"]), new RegExp(`"${PROFILE_SKILL.title}"`), "it points to the profile skill");
+  assert.match(offerToFill(["mail", "calendar", "files"]), /go through your email, calendar and files/);
+  assert.match(offerToFill(["files"]), /go through your files/);
+});
+
+test("the bookings offer names only email and calendar, and needs one of them", () => {
+  assert.match(offerBookings(["mail", "calendar", "files"])!, /in their email and calendar/);
+  assert.match(offerBookings(["calendar"])!, new RegExp(`"${LIFE_ADMIN_SKILL.title}"`));
+  assert.equal(offerBookings(["files"]), undefined);
+  const record = { id: "a", kind: "item" as const, type: "vehicles.vehicle", fields: { name: "Car" }, dueDate: null, status: "active", reviewState: "confirmed" as const, pending: null };
+  const many = Array.from({ length: 6 }, (_, index) => ({ ...record, id: `r${index}` }));
+  assert.equal(summariseLifeAdmin(many, BUILT_IN, NOW, "Australia/Sydney", { offerSources: ["files"] }).next, undefined, "no bookings offer from files alone");
 });
 
 test("the skill lists every record type and the things never to save", () => {
@@ -62,7 +75,7 @@ test("a past trip with past bookings isn't an upcoming booking for agents", () =
   const summary = summariseLifeAdmin([
     record("trip", { kind: "item", type: "travel.trip", fields: { name: "Queenstown" }, dueDate: null, status: "active" }),
     record("stay", { kind: "item", type: "travel.stay", fields: { provider: "Goodstays", starts_at: "2026-08-27[Pacific/Auckland]", ends_at: "2026-08-31[Pacific/Auckland]" }, dueDate: "2026-08-27", status: "active", parentId: "trip" }),
-  ], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: false });
+  ], BUILT_IN, NOW, "Australia/Sydney", { offerSources: [] });
   assert.equal(summary.upcomingBookings, 0);
   assert.equal(summary.dueSoon.length, 0);
 });
