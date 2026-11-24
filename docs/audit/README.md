@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Card-number false alarms, 24 November:** main `0a912ec` runs as `warthog--r45321866247a1`. PR #60
+stops treating policy and account numbers as card numbers. A QBE policy number had been shown as a
+card at Standard and cut to its last four in Life admin. Real card numbers are still hidden. No
+migrations (95). See the [release record](card-number-false-alarms-release-2026-11-24.md).
+
 **MCP spec hygiene, 24 November:** main `32a8e6e` runs as `warthog--r45318664835a1`. PR #59 moves
 the `/mcp` tests onto the 2026-07-28 protocol production traffic uses (keeping deliberate 2025-era
 cases). The token endpoint now refuses a mismatched RFC 8707 `resource` with `invalid_target`. The

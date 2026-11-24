@@ -1,4 +1,15 @@
-# Delivery status — 24 November 2026 (MCP spec hygiene)
+# Delivery status — 24 November 2026 (card-number false alarms)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`0a912ec3c068b289677bdfe3e939652260fcbab5` runs as `warthog--r45321866247a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #60: policy and account numbers are no longer mistaken for card numbers, in the email check or in
+Life admin. No migrations (95). See the
+[release record](docs/audit/card-number-false-alarms-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (MCP spec hygiene)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
