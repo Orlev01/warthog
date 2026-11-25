@@ -1,5 +1,14 @@
 # Warthog comprehensive engineering audit
 
+**Seeing which agent is doing what, 25 November:** main `18dac62` runs as `warthog--r45524200877a1`.
+- **PR #68:** apps on the person's computer read "App on your computer"; the app an agent reported
+  shows beside its platform (measured client names only); agents can be renamed.
+- **PR #70:** Agents › Now lists every agent's conversations from the last day by provider, and an
+  agent can update its conversation's description.
+- **Migration:** 0127 (98 in total).
+
+See the [release record](agent-visibility-release-2026-11-25.md).
+
 **Editable Warthog skills, 25 November:** main `7bf4df6` runs as `warthog--r45519995876a1`. PR #69:
 - **Ownership:** Warthog's own skills are editable by the person, with fixed rules and generated parts.
 - **Defaults:** 14 default skills, among them 4 opt-in packs.

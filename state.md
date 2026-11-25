@@ -1,4 +1,27 @@
-# Delivery status — 25 November 2026 (editable Warthog skills)
+# Delivery status — 25 November 2026 (seeing which agent is doing what)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`18dac62690cedb38e4c94f738124a65da3d465ea` runs as `warthog--r45524200877a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #68:**
+  - an app that signs in on the person's computer reads "App on your computer";
+  - the agent list and the agent's page show the app it reported ("says it's Gemini CLI"), from
+    measured client names only;
+  - Google's callback stays "Google";
+  - agents can be renamed in Settings › Name.
+- **PR #70:**
+  - Agents › Now lists every agent's conversations from the last day, grouped by provider, with
+    what each says it's working on, its latest action and whether it called in the last 15
+    minutes; it refreshes while open;
+  - `get_context` with a run and a new `working_on` updates a conversation's description, recorded
+    as the agent's claim.
+- **Boundary:** only calls made to Warthog are shown.
+
+Migration 0127 (98). See the [release record](docs/audit/agent-visibility-release-2026-11-25.md).
+
+# Earlier delivery status — 25 November 2026 (editable Warthog skills)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
