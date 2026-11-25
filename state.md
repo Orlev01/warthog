@@ -1,4 +1,20 @@
-# Delivery status — 25 November 2026 (service emails, not marketing)
+# Delivery status — 25 November 2026 (editable Warthog skills)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`7bf4df6c286caff9e971b063c91594a1ca643eb4` runs as `warthog--r45519995876a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #69:** Warthog's own skills (Using Warthog, Life admin records, Building a profile and 14 defaults, 4 of them opt-in packs) are on the Skills page. The person can:
+  - edit a skill;
+  - switch it on or off;
+  - choose which agents get it;
+  - remove it, and restore Warthog's version.
+- **What never changes:** the house rules always reach agents, and each skill's rules and generated parts are fixed.
+
+Migration 0126 (97). See the [release record](docs/audit/editable-skills-release-2026-11-25.md).
+
+# Earlier delivery status — 25 November 2026 (service emails, not marketing)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

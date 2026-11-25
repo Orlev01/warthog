@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Editable Warthog skills, 25 November:** main `7bf4df6` runs as `warthog--r45519995876a1`. PR #69:
+- **Ownership:** Warthog's own skills are editable by the person, with fixed rules and generated parts.
+- **Defaults:** 14 default skills, among them 4 opt-in packs.
+- **Migration:** 0126 (97 in total).
+
+See the [release record](editable-skills-release-2026-11-25.md).
+
 **Service emails, not marketing, 25 November:** main `e43fac0` runs as `warthog--r45513459399a1`.
 PR #67:
 - the Life admin skill reads service emails, not marketing, and leaves out Gmail's Promotions tab;
