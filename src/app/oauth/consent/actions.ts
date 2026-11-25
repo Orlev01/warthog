@@ -26,6 +26,7 @@ import { isAllowedRedirectUri } from "../../../server/oauth/clients";
 import { defaultAccountsForAgents, listConnectionsForUser } from "../../../server/db/connections";
 import type { ConsentViewAccount, ConsentViewProps } from "../../../components/agents/consent-view";
 import { byServiceThenAccount } from "../../../domain/permissions/connection-choices";
+import { LOOPBACK_LABEL } from "../../../components/agents/platform-label";
 import type { ConsentApproval } from "../authorize/actions";
 import type { Db } from "../../../server/db/index";
 
@@ -99,10 +100,13 @@ export async function loadConsentView(
   const known = url.protocol === "https:" && url.port === "" ? KNOWN_PLATFORMS.get(host) : undefined;
   const verified = known != null;
   const platform = known ?? host;
+  // An app signing in on the person's own computer returns to a loopback callback; the name
+  // it starts with says so (docs/adr/agent-names-and-providers.md). Its platform stays the host.
+  const loopback = host === "localhost" || host === "127.0.0.1";
 
   return {
     platform,
-    defaultName: platform,
+    defaultName: loopback ? LOOPBACK_LABEL : platform,
     requestedScopes: REQUESTED_SCOPES,
     template: services ? (await getAgentDefaults(services.db, userId)).template : DEFAULT_TEMPLATE,
     redirect: { host: url.host, verified },

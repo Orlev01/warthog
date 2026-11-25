@@ -59,7 +59,7 @@ test("approvals, sensitive requests and releases group together", () => {
 test("rejected requests, connection and account changes have their own types", () => {
   assert.equal(cat("tool_rejected", "google-gmail__send"), "rejected", "a rejected call is not counted as a change");
   assert.equal(cat("protocol_rejected"), "rejected");
-  for (const kind of ["agent_connected", "agent_key_revoked", "agent_key_replaced", "connection_change", "permission_change", "agent_defaults_change", "skill_access_change", "memory_scope_change", "client_observed"]) {
+  for (const kind of ["agent_connected", "agent_renamed", "agent_key_revoked", "agent_key_replaced", "connection_change", "permission_change", "agent_defaults_change", "skill_access_change", "memory_scope_change", "client_observed"]) {
     assert.equal(cat(kind), "access", kind);
   }
   for (const kind of ["rule_created", "rule_updated", "rule_paused", "rule_deleted", "approval_expiry_change", "memory_created", "memory_updated", "memory_deleted", "account_imported"]) {

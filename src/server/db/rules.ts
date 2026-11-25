@@ -174,6 +174,17 @@ export async function createRule(
   };
 }
 
+// A rule scoped to one agent keeps that agent's name beside its connection id, for the
+// sentence the rule is shown and enforced with ("Claude must ask first before …"). Renaming
+// the agent renames it here too, for every rule of this person's scoped to that connection.
+export async function renameRuleScopes(db: Db, userId: string, connectionId: string, name: string): Promise<void> {
+  await db.query(
+    `UPDATE rules SET scope_agent_name = $3
+      WHERE user_id = $1 AND scope_type = 'agent' AND scope_agent_id = $2`,
+    [userId, connectionId, name],
+  );
+}
+
 // Replace an owned rule's content in place (same id), the condition re-encrypted.
 // Member-scoped: the id AND user_id are both bound, so a rule that does not belong
 // to `userId` matches no row. THROWS (never silently) when there is no such rule

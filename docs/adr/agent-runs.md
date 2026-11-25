@@ -58,7 +58,9 @@ rejected as overwhelming.
 - **"Via".** The product a request came through is `x-anthropic-client` when present, otherwise
   the MCP client name. A 2026-07-28 client sends that name in `params._meta` on every request; a
   2025 client sends it only in `initialize`, so its later calls show no "via". It is mapped to "Claude Code", "Claude Cowork" or "claude.ai", and
-  unknown values are shown as reported, after redaction.
+  unknown values are shown as reported, after redaction. (Amended 25 November 2026: a client
+  name Warthog has measured reads as its product, for example "Codex" or "Gemini CLI"; see
+  [agent names and providers](agent-names-and-providers.md).)
   - It is stored as plain metadata in the payload, the approval detail and the run.
   - It is a client claim, labelled as such, and never identity.
 

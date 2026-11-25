@@ -12,6 +12,8 @@ test("Anthropic's product header names the product, before the client name", () 
 
 test("a direct client is named by its MCP client name", () => {
   assert.equal(clientSurface(null, "claude-code"), "Claude Code");
+  assert.equal(clientSurface(null, "codex-mcp-client"), "Codex", "measured 25 Nov 2026");
+  assert.equal(clientSurface(null, "gemini-cli-mcp-client"), "Gemini CLI", "measured 25 Nov 2026");
   assert.equal(clientSurface(undefined, "openai-mcp"), "openai-mcp");
   assert.equal(clientSurface(null, undefined), undefined);
 });

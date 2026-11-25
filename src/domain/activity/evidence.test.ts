@@ -130,6 +130,17 @@ test("a changed setting reads as before → after", () => {
   assert.equal(evidence.changedBy, "you");
 });
 
+// Renaming an agent (docs/adr/agent-names-and-providers.md) records the old and new names.
+test("a renamed agent reads as old name → new name, as the member's own change", () => {
+  const evidence = activityEvidence({
+    kind: "agent_renamed",
+    outcome: "saved",
+    payload: { actor: "account_owner", changes: { name: { from: "App on your computer", to: "Gemini CLI · research" } } },
+  });
+  assert.equal(value(evidence, "Name"), "App on your computer → Gemini CLI · research");
+  assert.equal(evidence.changedBy, "you");
+});
+
 // Several accounts of one service (docs/adr/several-accounts-per-agent.md): an agent's access now
 // records the ACCOUNTS it may use, each with its own settings. The change reads as counts in the
 // Permissions page's words, never as the accounts' ids.
