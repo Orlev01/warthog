@@ -167,6 +167,17 @@ export async function getAgentById(db: Db, userId: string, id: string): Promise<
   return row ? toAgent(row) : null;
 }
 
+// Rename the owned agent (docs/adr/agent-names-and-providers.md): only its display name, never
+// its platform, member-scoped so only `userId`'s own agent changes. The caller cleans the name
+// (`normaliseAgentName`). Returns whether a row was renamed.
+export async function renameAgent(db: Db, userId: string, id: string, displayName: string): Promise<boolean> {
+  const result = await db.query(
+    "UPDATE agents SET display_name = $3 WHERE user_id = $1 AND id = $2 RETURNING id",
+    [userId, id, displayName],
+  );
+  return result.rows.length > 0;
+}
+
 // Record that the owned agent called a tool: increment its request count by 1 and
 // stamp lastActiveAt = clock.now() (connectedAt and the rest untouched),
 // member-scoped so only `userId`'s own agent can be bumped. THROWS (never silently)

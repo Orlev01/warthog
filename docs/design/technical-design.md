@@ -234,6 +234,11 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   must be https, or `http://localhost` / `http://127.0.0.1` (any port) for local clients.
 - Known platform callbacks get a "Verified platform" badge on the consent screen (claude.ai,
   claude.com, chatgpt.com, Google's oauth-redirect); any other redirect host is shown prominently.
+  A loopback callback (`localhost`, `127.0.0.1`) is an app on the person's own computer: it is
+  never verified, its platform is stored as the host, and it is shown and starts named "App on
+  your computer". The person can rename an agent later; its platform never changes. What an
+  agent's apps report about themselves is shown beside the platform as their claim
+  ([agent names and providers](../adr/agent-names-and-providers.md)).
 - The pending request rides in the host-locked `__Host-wh_consent` cookie, and the consent form
   carries a tag of the request it shows (a domain-separated SHA-256 of the handle). Approve and
   Deny act only while the cookie still names that request, so a second `/oauth/authorize` loaded in

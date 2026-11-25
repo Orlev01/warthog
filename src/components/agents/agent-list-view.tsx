@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
 import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import { formatMoney } from "@/domain/approvals/request-sentence";
-import { platformLabel } from "./platform-label";
+import { platformLabel, reportedAppLine } from "./platform-label";
 
 // E10-S10 — Agent list view component (src/components/agents/agent-list-view.tsx).
 //
@@ -54,6 +54,9 @@ export type AgentListItem = {
   spendIncomplete?: boolean;
   // Whether it holds a working Warthog access key (so its key can be replaced instead).
   accessKey?: boolean;
+  // What its apps say they are ("Gemini CLI"), when the ones Warthog knows agree; the app's
+  // own claim, never identity (src/domain/agents/known-clients.ts).
+  reportedApp?: string | null;
 };
 
 export type AgentListViewProps = {
@@ -156,6 +159,7 @@ function AgentCard({
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   const platform = platformLabel(agent.platform);
+  const reported = reportedAppLine(agent.platform, agent.reportedApp);
   const disconnected = isDisconnected(agent);
   return (
     <li className="wh-surface wh-agent-row">
@@ -173,6 +177,7 @@ function AgentCard({
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted sm:gap-x-2">
               <Status status={agent.status} />
               {platform ? <><span aria-hidden className="hidden sm:inline">·</span><span>{platform}</span></> : null}
+              {reported ? <><span aria-hidden className="hidden sm:inline">·</span><span>{reported}</span></> : null}
             </span>
           </div>
         </div>

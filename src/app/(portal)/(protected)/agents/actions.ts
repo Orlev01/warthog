@@ -36,6 +36,8 @@ import { getAgentById, listAgentsForUser, type Agent } from "@/server/db/agents"
 import { getConnectionPermissions, type ConnectionPermissions } from "@/server/db/agent-permissions";
 import { disconnectAgent } from "@/server/agents/disconnect";
 import { hasAccessKey } from "@/server/agents/access-key-state";
+import { readClientObservation } from "@/server/mcp/client-observation";
+import { reportedApp } from "@/domain/agents/known-clients";
 import type { AgentListItem } from "@/components/agents/agent-list-view";
 import type { Db } from "@/server/db/index";
 import type { Clock } from "@/server/seams/clock";
@@ -115,7 +117,8 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
   // session.userId — never a client value) and format each for the view, reading its
   // stored grants for the budget.
   async function load(session: Session): Promise<{ agents: ReadonlyArray<AgentListItem> }> {
-    const timeZone = await timeZoneFor(db, session.userId, await dekFor(session.userId));
+    const dek = await dekFor(session.userId);
+    const timeZone = await timeZoneFor(db, session.userId, dek);
     const agents = await listAgentsForUser(db, session.userId);
     const items: AgentListItem[] = [];
     for (const agent of agents) {
@@ -124,7 +127,9 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
       // Whether it holds a working access key (only checked for presence), so Disconnect's
       // confirmation can point to replacing the key instead.
       const accessKey = agent.status === "connected" && (await hasAccessKey(db, agent.connectionId));
-      items.push({ ...toListItem(agent, grants, timeZone, clock.now()), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0, accessKey });
+      // What its recent apps say they are, beside the platform Warthog recorded.
+      const apps = (await readClientObservation(db, session.userId, agent.id, dek))?.seen ?? [];
+      items.push({ ...toListItem(agent, grants, timeZone, clock.now()), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0, accessKey, reportedApp: reportedApp(apps)?.label ?? null });
     }
     return { agents: items };
   }

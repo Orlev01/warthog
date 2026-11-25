@@ -102,6 +102,7 @@ import { fixedClock } from "@/server/seams/clock";
 import { systemRandom } from "@/server/seams/random";
 import { issueAccessKey } from "@/server/oauth/access-key";
 import { freshDb } from "@/test/db";
+import { encrypt } from "@/server/crypto/envelope";
 import type { Db } from "@/server/db/index";
 import type { Session } from "@/server/auth/session";
 
@@ -670,5 +671,35 @@ test("no ambient env secret leaks into the loaded agent list or the mounted scre
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// What an agent's app reported about itself (the client details the MCP layer keeps, in the
+// shape it stores them), so the list can say what the app is beside the platform Warthog
+// recorded (docs/adr/agent-names-and-providers.md).
+async function seedReportedApps(db: Db, userId: string, agentId: string, names: readonly string[]): Promise<void> {
+  const seen = names.map((name) => ({ name, version: "1.0.0", source: "client_reported", observedAt: NOW.toISOString() }));
+  const ct = await encrypt(await dekFor(userId), "agents", "client_observation_ct", agentId, JSON.stringify({ ...seen[0], seen }));
+  await db.query("UPDATE agents SET client_observation_ct = $3 WHERE user_id = $1 AND id = $2", [userId, agentId, ct]);
+}
+
+test("each agent's row carries what its apps reported, when Warthog knows the app", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "reported");
+    const gemini = await seedAgent(db, userId, { displayName: "Research helper", platform: "localhost" });
+    const codex = await seedAgent(db, userId, { displayName: "Coding helper", platform: "127.0.0.1" });
+    const unknown = await seedAgent(db, userId, { displayName: "Quiet helper", platform: "localhost" });
+    await seedReportedApps(db, userId, gemini.id, ["gemini-cli-mcp-client"]);
+    await seedReportedApps(db, userId, codex.id, ["codex-mcp-client", "an-unmeasured-app"]);
+    await seedReportedApps(db, userId, unknown.id, ["an-unmeasured-app"]);
+    const items = new Map((await makeActions(db).load(sessionFor(userId))).agents.map((item) => [item.id, item]));
+    assert.equal(items.get(gemini.id)?.reportedApp, "Gemini CLI");
+    assert.equal(items.get(codex.id)?.reportedApp, "Codex");
+    assert.equal(items.get(unknown.id)?.reportedApp, null, "an app Warthog hasn't measured isn't guessed");
+    const text = visibleText(renderScreen(await makeActions(db).load(sessionFor(userId))));
+    assert.match(text, /App on your computer · says it’s Gemini CLI/);
+  } finally {
+    await db.close();
   }
 });

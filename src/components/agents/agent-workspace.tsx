@@ -13,7 +13,8 @@ import { ButtonLink } from "@/components/ui/button-link";
 import { EmptyState } from "@/components/ui/empty";
 import { LIST_ROW } from "@/components/ui/list-group";
 import { formatMoney } from "@/domain/approvals/request-sentence";
-import { platformLabel } from "./platform-label";
+import { platformLabel, reportedAppLine } from "./platform-label";
+import { knownClient } from "@/domain/agents/known-clients";
 import { AgentAuditLog } from "./agent-audit-log";
 
 // The agent workspace (/agents/[id]): the heading band every section shares, the Overview,
@@ -40,6 +41,7 @@ export function AgentWorkspaceHeader({
 }) {
   const connected = data.agent.status === "connected";
   const platform = platformLabel(data.agent.platform);
+  const reported = reportedAppLine(data.agent.platform, data.reportedApp);
   const navigation = agentNavigation(data.agent.id, section);
   return (
     <header className="wh-surface wh-agent-heading flex flex-col gap-3">
@@ -59,6 +61,7 @@ export function AgentWorkspaceHeader({
           <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted sm:gap-x-2">
             <Status status={connected ? "connected" : "disconnected"} />
             {platform ? <><span aria-hidden className="hidden sm:inline">·</span><span>{platform}</span></> : null}
+            {reported ? <><span aria-hidden className="hidden sm:inline">·</span><span>{reported}</span></> : null}
             <span aria-hidden className="hidden sm:inline">·</span>
             <span>{plural(data.agent.requestCount, "request", "requests")}</span>
           </p>
@@ -245,9 +248,11 @@ export function RecentConversations({ data }: { data: AgentWorkspaceData }) {
   );
 }
 
-// An app as its report names it ("claude-code 2.1.289"); null when it gave no name.
+// An app as its report names it, in its product's words when Warthog has measured the name
+// ("Gemini CLI 0.46.0", not "gemini-cli-mcp-client 0.46.0"); null when it gave no name. The
+// technical details below keep the name exactly as reported.
 function appLabel(app: { name?: string; version?: string }): string | null {
-  return app.name ? [app.name, app.version].filter(Boolean).join(" ") : null;
+  return app.name ? [knownClient(app.name)?.product ?? app.name, app.version].filter(Boolean).join(" ") : null;
 }
 
 // "A", "A and B", "A, B and C", then "A, B, C and 2 others".

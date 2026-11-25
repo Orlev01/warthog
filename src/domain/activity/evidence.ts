@@ -57,6 +57,7 @@ export interface ActivityEvidence {
 
 // The kinds that only ever record the account owner's own change.
 const OWNER_KINDS: readonly string[] = [
+  "agent_renamed",
   "connection_change",
   "permission_change",
   "agent_defaults_change",
@@ -463,6 +464,10 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
     if (changes.credentialKind === "oauth") fact("How it connects", "Signed in through its own app (OAuth)");
     if (isRecord(changes.grants)) fact("Access it was given", accessSentence(changes.grants));
     if (typeof changes.clientId === "string") ids.push({ label: "OAuth client ID", value: changes.clientId });
+    // A renamed agent: its old name and its new one.
+    if (isRecord(changes.name) && typeof changes.name.from === "string" && typeof changes.name.to === "string") {
+      fact("Name", `${changes.name.from} → ${changes.name.to}`);
+    }
     // The person's "what agents see" level, and which way it moved.
     if (Array.isArray(changes.fields) && changes.fields.includes("readLevel")) {
       const moved = isReadLevel(changes.from) && isReadLevel(changes.to) ? `: ${readLevelLabel(changes.from)} → ${readLevelLabel(changes.to)}` : "";
