@@ -198,11 +198,12 @@ test("bills: which kinds, which date is the payment, and Paid with after the cyc
     const keys = type.fields.map((field) => field.key);
     assert.ok(type.account, `${type.id} has the account fields`);
     assert.equal(keys.filter((key) => key === "paid_with").length, 1, type.id);
-    assert.equal(keys[keys.indexOf("cycle") + 1], type.bill!.date === "next_payment" ? "next_payment" : "paid_with", type.id);
-    assert.equal(keys.includes("next_payment"), type.bill!.date === "next_payment", type.id);
+    assert.deepEqual(keys.slice(keys.indexOf("cycle") + 1, keys.indexOf("cycle") + 3), ["next_payment", "paid_with"], type.id);
   }
   const paidWith = BUILT_IN.type("subscriptions.service")!.fields.find((field) => field.key === "paid_with")!;
   assert.match(paidWith.hint!, /Visa ending 1234\. Last 4 digits only\./, "a generic example, never someone's card");
   assert.equal(paidWith.suggest, "payment_sources");
   assert.ok(!BUILT_IN.type("investing.super")!.fields.some((field) => field.key === "paid_with"), "not a bill");
+  const account = BUILT_IN.type("banking.account")!.fields.map((field) => field.key);
+  assert.deepEqual(account.slice(account.indexOf("last4"), account.indexOf("last4") + 2), ["last4", "card_last4"], "a bank account's debit card, for matching what pays a bill");
 });

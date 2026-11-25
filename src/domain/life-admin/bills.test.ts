@@ -107,10 +107,21 @@ test("a lease's own date is when it ends, so only next_payment dates its rent", 
   assert.equal(billOf(lease, row("home.lease", { amount: "4766.68", cycle: "monthly" }, { dueDate: "2027-05-02" }), TODAY)?.next, null);
   assert.deepEqual(billOf(lease, row("home.lease", { amount: "4766.68", cycle: "monthly", next_payment: "2026-05-03" }), TODAY)?.next, { date: "2026-12-03", estimated: true });
   assert.ok(lease.fields.some((field) => field.key === "next_payment"));
-  assert.ok(!BUILT_IN.type("subscriptions.service")!.fields.some((field) => field.key === "next_payment"), "a renewal date is the payment");
+});
+
+// Founder, 25 Nov 2026: Medibank renews yearly but debits monthly (9 Nov), so every bill has
+// Next payment; when it's set it wins over the kind's own date.
+test("a yearly renewal paid monthly counts on from its last debit, not its renewal date", () => {
+  const health = BUILT_IN.type("health.insurance")!;
+  assert.ok(health.fields.some((field) => field.key === "next_payment"));
+  const medibank = billOf(health, row("health.insurance", { amount: "148.25", cycle: "monthly", next_payment: "2026-11-09" }, { dueDate: "2027-04-01" }), TODAY)!;
+  assert.deepEqual(medibank.next, { date: "2026-12-09", estimated: true });
+  const renewal = billOf(health, row("health.insurance", { amount: "1779", cycle: "yearly" }, { dueDate: "2027-04-01" }), TODAY)!;
+  assert.deepEqual(renewal.next, { date: "2027-04-01", estimated: false }, "without Next payment, the renewal is the payment");
 });
 
 const ACCOUNTS: Row[] = [
+  row("banking.account", { name: "ANZ Access Basic", provider: "ANZ", last4: "9045", card_last4: "6004" }),
   row("banking.account", { name: "Macquarie Transaction Account", provider: "Macquarie", last4: "2460" }),
   row("banking.account", { name: "Macquarie Savings Account", provider: "Macquarie", last4: "2478" }),
   row("banking.account", { name: "Westpac Choice", provider: "Westpac", last4: "2902" }),
@@ -124,6 +135,7 @@ const label = (said: string | null) => resolvePaidFrom(said, SOURCES)?.label ?? 
 
 test("Paid with is matched to one of the person's accounts or cards only when exactly one fits", () => {
   assert.equal(label("Visa ending 2686"), "NAB Qantas Rewards Signature card ending 2686");
+  assert.equal(label("Visa (4*** **** **** 6004)"), "ANZ Access Basic ending 9045", "an account's debit card names the account");
   assert.equal(label("Mastercard ••••2686"), "NAB Qantas Rewards Signature card ending 2686", "a masked full number");
   assert.equal(label("Direct debit from Macquarie account ending 2478"), "Macquarie Savings Account ending 2478");
   assert.equal(label("NAB card ending 1234"), null, "digits that match nothing never fall back to words");

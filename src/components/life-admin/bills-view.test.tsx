@@ -147,6 +147,8 @@ test("the cost line: what the bills come to a month, each currency apart, and wh
   const words = text(billsPanel(render()));
   assert.match(words, /You pay about AUD 3,046\.12 and USD 4\.00 a month for 6 bills\./, "never added across currencies; income and finished things left out");
   assert.match(words, /2 not counted yet \(no cost or how often\) · 1 not checked yet/);
+  // Founder, 25 Nov 2026: "what the hell is about AUD 5,060.48 a month!? Is this a mistake?" (it was rent).
+  assert.match(words, /Ray White is AUD 2,816\.67 of that · 2 not counted yet/, "when one bill is most of the total, the line says so");
   const tidy = text(billsPanel(render({ records: [ALTITUDE, NETFLIX] })));
   assert.match(tidy, /You pay about AUD 46\.82 a month for 2 bills\./);
   assert.doesNotMatch(tidy, /not counted yet|not checked yet/);
@@ -170,7 +172,7 @@ test("by account: each card or account with what it comes to a month, then Paid 
   assert.deepEqual(groups.map(rowIds), [["netflix", "altitude"], ["medibank"], ["rent"], ["rego", "github", "mobile", "coffee"]]);
   assert.deepEqual(
     groups.map((group) => text(/<p class="wh-list-group-summary">([\s\S]*?)<\/p>/.exec(group)![1]!)),
-    ["About AUD 46.82 a month", "About AUD 148.25 a month", "About AUD 2,816.67 a month", "About AUD 34.38 and USD 4.00 a month"],
+    ["About AUD 46.82 a month; Netflix is AUD 25.99 of it", "About AUD 148.25 a month", "About AUD 2,816.67 a month", "About AUD 34.38 and USD 4.00 a month"],
     "subtotals per currency, never added together",
   );
   assert.match(groups[0]!, /<h3 id="bills-account-0-heading"><a href="\/life-admin\/items\/altitude"[^>]*>Westpac ending 2460<\/a><\/h3>/, "a card's group links to its page");

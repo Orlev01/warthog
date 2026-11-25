@@ -379,7 +379,7 @@ test("step two: the chosen type's form has every field by kind, the due date in 
   assert.ok(form, "the add form");
   assert.deepEqual(form.hidden.filter(([name]) => name === "type"), [["type", "vehicles.registration"]]);
   const names = [...form.body.matchAll(/name="(field:[^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(names, ["field:name", "field:provider", "field:account_name", "field:reference", "field:account_email", "field:plate", "field:state", "field:term", "field:ctp_insurer", "field:inspection", "field:amount", "field:currency", "field:cycle", "field:paid_with", "field:for_whom", "field:contact", "field:email", "field:website", "field:notes"]);
+  assert.deepEqual(names, ["field:name", "field:provider", "field:account_name", "field:reference", "field:account_email", "field:plate", "field:state", "field:term", "field:ctp_insurer", "field:inspection", "field:amount", "field:currency", "field:cycle", "field:next_payment", "field:paid_with", "field:for_whom", "field:contact", "field:email", "field:website", "field:notes"]);
   assert.match(form.body, /inputMode="decimal"[^>]*name="field:amount"|name="field:amount"[^>]*inputMode="decimal"/, "amounts get a decimal keypad");
   assert.match(form.body, /<datalist id="[^"]+"><option value="NSW"><\/option>/, "the state's usual values are suggested");
   assert.match(form.body, /<textarea[^>]*name="field:notes"/, "notes are a text area");
@@ -411,7 +411,7 @@ test("Edit shows every field of the type, empty ones too, and the record's own o
   const markup = render({ records: [HEALTH] });
   const edit = forms(markup).find((f) => f.buttons.includes("Save changes") && /name="field:/.test(f.body))!;
   const names = [...edit.body.matchAll(/name="field:([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(names, ["name", "provider", "account_name", "reference", "account_email", "hospital_cover", "extras_cover", "excess", "scale", "ambulance", "amount", "currency", "cycle", "paid_with", "for_whom", "contact", "email", "website", "notes", "colour"]);
+  assert.deepEqual(names, ["name", "provider", "account_name", "reference", "account_email", "hospital_cover", "extras_cover", "excess", "scale", "ambulance", "amount", "currency", "cycle", "next_payment", "paid_with", "for_whom", "contact", "email", "website", "notes", "colour"]);
   assert.match(edit.body, /name="field:provider"[^>]*value="Medibank"|value="Medibank"[^>]*name="field:provider"/);
   assert.match(edit.body, /name="field:colour"[^>]*value="blue"|value="blue"[^>]*name="field:colour"/, "an agent's own detail stays editable");
 });

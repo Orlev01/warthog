@@ -547,3 +547,20 @@ shown as text: nothing an agent read from email is ever a link.
 
 The skill's size stays under its 35,000-character guard (34,927).
 
+
+### Every bill has Next payment; a bank account's debit card (amended later on 25 November 2026)
+
+Dogfooding the Bills tab on the founder's records turned up three gaps.
+
+- **A yearly renewal paid monthly had nowhere for its payment date.** Medibank renews yearly but is
+  debited monthly (9 Nov). Every bill kind now has `next_payment`. When it is set, it wins over the
+  kind's own date, and Warthog counts on from it by the cycle. Without it, a kind whose own date is the
+  payment (a renewal, an annual fee) still uses that date. The skill names `next_payment` and
+  `paid_with` once, in the kinds sentence, rather than in each field list. That made the text shorter
+  (34,857 characters). "Life admin records" moves to version 3.
+- **Bills name the debit card, not the account.** GitHub's receipt names "Visa ending 6004", the
+  debit card on the founder's ANZ account ending 9045. A bank account now has `card_last4` ("Debit
+  card (last 4)"). Paid with matches it as it matches a last 4, so the bill links to the account.
+- **A total read as a mistake.** "About AUD 5,060.48 a month" was mostly rent. When one bill makes up
+  half or more of a total, the Bills line and each account group now say so ("Lease, Unit 44 is AUD
+  4,766.68 of that").

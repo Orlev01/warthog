@@ -174,12 +174,13 @@ export const ACCOUNT_FIELDS: readonly FieldDef[] = [
 ];
 export const ACCOUNT_FIELD_KEYS: readonly string[] = ACCOUNT_FIELDS.map((field) => field.key);
 
-// What a bill adds beside its cost and cycle: when the next payment is (only for kinds whose own
-// date isn't the payment) and which of the person's cards or accounts it comes out of. Paid with
+// What a bill adds beside its cost and cycle: when the next payment is (a lease's date is when it
+// ends; a yearly renewal is often paid monthly) and which of the person's cards or accounts it comes
+// out of. Paid with
 // names the person's own card or account by its last 4; it is never how to pay (no payee, BSB,
 // biller code or link: those are refused).
 export const BILL_FIELDS: readonly FieldDef[] = [
-  f("next_payment", "Next payment", "date"),
+  f("next_payment", "Next payment", "date", { hint: "When the next payment comes out, if it isn't the date below. Warthog counts on from it by how often." }),
   f("paid_with", "Paid with", "text", { hint: "The card or account it comes out of, for example Visa ending 1234. Last 4 digits only.", suggest: "payment_sources" }),
 ];
 export const BILL_FIELD_KEYS: readonly string[] = BILL_FIELDS.map((field) => field.key);
@@ -235,7 +236,7 @@ export function mergeFields(
   for (const field of own) push(field);
   for (const field of COMMON_TRAILING) {
     push(field);
-    if (field.key === "cycle" && bill) for (const extra of BILL_FIELDS) if (extra.key !== "next_payment" || bill.date === "next_payment") push(extra);
+    if (field.key === "cycle" && bill) for (const extra of BILL_FIELDS) push(extra);
   }
   return merged;
 }
@@ -375,7 +376,7 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
     { key: "service", label: "Support service", use: "A support provider or service agreement.", due: { means: "ends", label: "Agreement ends" }, fields: [f("service_kind", "Service")], labels: { reference: "Agreement number" }, identity: policy },
   ],
   banking: [
-    { key: "account", account: true, label: "Bank account", use: "A bank or savings account: the bank and the last 4 digits only. Never the BSB and full account number.", due: { means: "ends", label: "Rate or term ends" }, fields: [f("account_kind", "Kind", "text", { choices: ["everyday", "savings", "offset", "term deposit"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Bank" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "account", account: true, label: "Bank account", use: "A bank or savings account: the bank and the last 4 digits only. Never the BSB and full account number.", due: { means: "ends", label: "Rate or term ends" }, fields: [f("account_kind", "Kind", "text", { choices: ["everyday", "savings", "offset", "term deposit"] }), f("last4", "Account (last 4)", "last4"), f("card_last4", "Debit card (last 4)", "last4", { hint: "The card on this account, if it has one: bills often name the card, not the account." }), f("rate", "Interest rate")], labels: { provider: "Bank" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "card", bill: "auto", account: true, label: "Credit card", use: "A credit card's issuer, last 4 digits, expiry and annual fee date. Never the card number.", due: { means: "due", label: "Annual fee" }, reminders: [30], fields: [f("card_product", "Card"), f("last4", "Card (last 4)", "last4"), f("card_expiry", "Card expires", "month_year"), f("annual_fee", "Annual fee", "amount"), f("promo_ends", "Interest-free or balance transfer ends", "date")], labels: { provider: "Issuer" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "loan", bill: "auto", account: true, label: "Loan", use: "A car, personal or student loan, novated lease or buy-now-pay-later plan.", due: { means: "ends", label: "Ends or fixed rate ends" }, reminders: [60], fields: [f("loan_kind", "Kind", "text", { choices: ["car", "personal", "novated lease", "buy now pay later"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "application", label: "Application", lifecycle: "case", use: "A card, account or loan application in progress.", fields: [f("application_kind", "For")], labels: { provider: "Bank or lender" } },
