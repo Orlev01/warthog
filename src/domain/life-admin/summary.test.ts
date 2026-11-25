@@ -131,8 +131,8 @@ test("the skill marks bill kinds and says how to fill and find bills", () => {
   const text = lifeAdminSkillText(BUILT_IN);
   assert.match(text, /- subscriptions\.service — Subscription \[bill\]/);
   assert.match(text, /- investing\.super — Super fund \[account\]/);
-  assert.match(text, /kinds marked \[account\] or \[bill\] also have account_name, account_email; \[bill\] kinds \(what the person pays on repeat\) also have paid_with/);
-  assert.match(text, /- home\.lease — Lease \[bill\][^\n]*\n  fields: starts_on, bond, bond_reference, next_payment/);
+  assert.match(text, /kinds marked \[account\] or \[bill\] also have account_name, account_email; \[bill\] kinds \(what the person pays on repeat\) also have next_payment, paid_with/);
+  assert.match(text, /- home\.lease — Lease \[bill\][^\n]*\n  fields: starts_on, bond, bond_reference\n/, "Next payment is said once, not in every kind's list");
   assert.match(text, /For a \[bill\] kind: paid_with as the bill or receipt shows it/);
   assert.match(text, /"What do I pay for\?": list_records view "bills"/);
   assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);

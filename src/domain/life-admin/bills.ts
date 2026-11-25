@@ -7,8 +7,8 @@
 // - A bill is a live record of a kind marked `bill` (subscriptions, utilities, rent, insurance,
 //   rego, a card's annual fee …), or of the person's own kinds (or Other) with a cost and a
 //   repeating cycle. Income (a pension, a government payment), balances and one-offs aren't.
-// - The next payment comes from `next_payment`, else the kind's own date when that is the payment
-//   (a renewal, an annual fee). On a cycle, a past or far date is moved to the first payment on or
+// - The next payment comes from `next_payment` (every bill kind has it), else the kind's own date
+//   when that is the payment (a renewal, an annual fee). On a cycle, a past or far date is moved to the first payment on or
 //   after today and marked estimated; a bill the person pays by hand stays overdue for 30 days.
 //   Estimates are for showing only: stored dates and reminders don't move.
 // - "Paid with" is matched to the person's own bank account or card by its last 4 digits, else by
@@ -265,6 +265,8 @@ export interface PaymentSource {
   readonly label: string;
   readonly provider: string | null;
   readonly last4: string | null;
+  // An account's debit card, which a bill names more often than the account.
+  readonly cardLast4: string | null;
   readonly closed: boolean;
   // The words of its name and card product that tell it apart (not its bank's, not "card" or
   // "account"), for matching.
@@ -286,8 +288,11 @@ export function paymentSources(records: readonly BillRecord[], typeOf: (record: 
     const type = typeOf(record);
     if (!type || (type.id !== "banking.account" && type.id !== "banking.card")) continue;
     const name = storedRecordName(type, record.fields);
-    const last4 = text(record.fields, "last4");
-    const digits = last4 && /^\d{3,4}$/.test(last4) ? last4 : null;
+    const digitsOf = (key: string) => {
+      const value = text(record.fields, key);
+      return value && /^\d{3,4}$/.test(value) ? value : null;
+    };
+    const digits = digitsOf("last4");
     const finished = record.phase?.bucket === "finished" || ["cancelled", "expired", "done"].includes(record.status);
     sources.push({
       id: record.id,
@@ -295,6 +300,7 @@ export function paymentSources(records: readonly BillRecord[], typeOf: (record: 
       label: digits && !name.includes(digits) ? `${name} ending ${digits}` : name,
       provider: text(record.fields, "provider"),
       last4: digits,
+      cardLast4: type.id === "banking.account" ? digitsOf("card_last4") : null,
       closed: finished,
       words: distinctive([name, text(record.fields, "card_product")], text(record.fields, "provider")),
     });
@@ -306,7 +312,7 @@ const DIGITS = /(?:ending(?:\s+in)?|ends\s+in|last\s*4(?:\s+digits)?|[·•*x.]{
 
 /**
  * The account or card `paidWith` names, or null unless exactly one fits. Four digits must match a
- * last 4 (the provider in the text settles a tie; no match means no link, never a guess by
+ * last 4, an account's or its debit card's (the provider in the text settles a tie; no match means no link, never a guess by
  * name). Three digits match a last 4 ending in them, else words among accounts with no last 4.
  * Words: "card" narrows to cards, "account", "savings" or "everyday" to accounts; the source with
  * the most of its own distinctive words in the text fits ("Altitude", "Choice", "Savings"), if no
@@ -324,12 +330,12 @@ export function resolvePaidFrom(paidWith: string | null, sources: readonly Payme
   if (match) {
     const digits = match[1]!;
     if (digits.length === 4) {
-      const exact = sources.filter((source) => source.last4 === digits);
+      const exact = sources.filter((source) => source.last4 === digits || source.cardLast4 === digits);
       return only(exact) ?? only(exact.filter(hasProvider));
     }
-    const ending = sources.filter((source) => source.last4?.endsWith(digits));
+    const ending = sources.filter((source) => source.last4?.endsWith(digits) || source.cardLast4?.endsWith(digits));
     if (ending.length === 1) return ending[0]!;
-    pool = sources.filter((source) => source.last4 === null);
+    pool = sources.filter((source) => source.last4 === null && source.cardLast4 === null);
   }
   if (tokens.has("card")) pool = pool.filter((source) => source.typeId === "banking.card");
   else if (["account", "savings", "everyday"].some((word) => tokens.has(word))) pool = pool.filter((source) => source.typeId === "banking.account");

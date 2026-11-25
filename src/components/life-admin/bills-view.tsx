@@ -173,6 +173,20 @@ function AskAgent({ title, lead }: { title: string; lead?: string }) {
   );
 }
 
+/**
+ * When one bill is most of a total (rent, usually), say so: "Lease, Unit 44 is AUD 4,766.68 of
+ * that". The founder read AUD 5,060 a month as a mistake until they saw it was mostly rent.
+ */
+export function largestShare(bills: readonly PaidBill[], of: string): string | null {
+  const counted = bills.filter((bill) => bill.monthly !== null);
+  if (counted.length < 2) return null;
+  const totals = new Map<string, number>();
+  for (const bill of counted) totals.set(bill.currency, (totals.get(bill.currency) ?? 0) + bill.monthly!);
+  const top = [...counted].sort((a, b) => b.monthly! - a.monthly!)[0]!;
+  const total = totals.get(top.currency)!;
+  return top.monthly! >= total / 2 && top.monthly! < total ? `${top.name} is ${top.currency} ${moneyText(top.monthly!)} of ${of}` : null;
+}
+
 function closedWords(source: PaymentSource, bills: number): string {
   const what = source.typeId === "banking.card" ? "card" : "account";
   return `This ${what} is closed: ${plural(bills, "bill still points", "bills still point")} to it. Change Paid with on each to what it comes out of now.`;
@@ -224,7 +238,7 @@ function AccountGroups({ view, ctx }: { view: ReturnType<typeof billsView>; ctx:
               level={3}
               title={title}
               count={account.bills.length}
-              summary={account.monthly.length ? `About ${monthlyWords(account.monthly)} a month` : "Cost not known yet"}
+              summary={account.monthly.length ? [`About ${monthlyWords(account.monthly)} a month`, largestShare(account.bills, "it")].filter(Boolean).join("; ") : "Cost not known yet"}
             >
               {account.bills.map((bill) => (
                 <BillRow key={bill.id} bill={bill} ctx={ctx} />
@@ -282,6 +296,7 @@ export function BillsView({
   const missing = all.filter((bill) => bill.next === null || bill.monthly === null || (!bill.paidFrom && !bill.paidWith)).length;
   const estimated = all.some((bill) => bill.next?.estimated);
   const notes = [
+    largestShare(all, "that"),
     view.uncounted > 0 ? `${view.uncounted} not counted yet (no cost or how often)` : null,
     view.notChecked > 0 ? `${view.notChecked} not checked yet` : null,
   ].filter(Boolean);
