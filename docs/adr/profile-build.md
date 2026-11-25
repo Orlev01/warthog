@@ -83,3 +83,9 @@ Life admin (every category and new ones it discovers) and About you, replacing "
   and "Connect a service" counts only a service some agent can read: both on purpose.
 - The person's own tasks, and memories restored from an export, aren't filtered (they're the
   person's own words); the agent-facing paths and the person's memory edits are.
+
+## Amendment, 25 November 2026 (founder)
+
+"Building a profile" and "Life admin records" are now on the Skills page with Warthog's other skills.
+The person can edit their guidance, switch them off or remove them; their safety lines and the parts
+Warthog generates stay fixed. See docs/adr/editable-builtin-skills.md.

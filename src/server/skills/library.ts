@@ -48,7 +48,7 @@ export function createLibraryActions({ db, keyWrapper }: { db: Db; keyWrapper: K
     },
     async save(session: Session, input: unknown) {
       const valid = parseParams(packageInputSchema, input);
-      return savePackage(db, session.userId, valid, await key(session));
+      return savePackage(db, session.userId, valid, await key(session), { refuseNewReservedNames: true });
     },
     async remove(session: Session, input: unknown) {
       const valid = parseParams(z.object({ id: z.uuid(), revision: z.number().int().positive() }), input);

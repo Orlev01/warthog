@@ -15,7 +15,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SkillsView, type SkillsViewSkill } from "./skills-view";
 import { DeleteSkillControl, deleteSkillCopy } from "./delete-skill";
 
-const houseSkill = { title: "Using Warthog", useThisWhen: "when you use Warthog", alwaysIncluded: true as const };
 const SKILL: SkillsViewSkill = {
   id: "sk-groceries",
   title: "Weekly grocery run",
@@ -37,7 +36,7 @@ test("the dialog names the skill and says plainly what deleting it means", () =>
 });
 
 test("a skill card's Delete opens the confirmation; it never posts on its own", () => {
-  const html = renderToStaticMarkup(<SkillsView skills={[SKILL]} preferences={null} houseSkill={houseSkill} deleteSkillAction={async () => {}} />);
+  const html = renderToStaticMarkup(<SkillsView skills={[SKILL]} preferences={null} deleteSkillAction={async () => {}} />);
   const trigger = /<button[^>]*aria-haspopup="dialog"[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0] ?? "";
   assert.match(trigger, /type="button"/, "the card's Delete is not a submit");
   assert.match(text(trigger), /^Delete Weekly grocery run$/, "its name says which skill");
@@ -64,8 +63,8 @@ test("only the dialog's danger button posts the skill's id; the safe choice come
   assert.ok(dialog.indexOf("Keep skill") < dialog.indexOf("Delete skill"), "the safe choice comes first in reading order");
 });
 
-test("the house skill and an empty library offer no delete confirmation", () => {
-  const html = renderToStaticMarkup(<SkillsView skills={[]} preferences={null} houseSkill={houseSkill} />);
+test("an empty library offers no delete confirmation", () => {
+  const html = renderToStaticMarkup(<SkillsView skills={[]} preferences={null} />);
   assert.doesNotMatch(html, /<dialog\b[^>]*aria-labelledby/);
   assert.doesNotMatch(text(html), /Delete skill/);
 });

@@ -2,7 +2,6 @@ import { getAgentById } from "../../db/agents";
 import { savedByResolver } from "../../agents/saved-by";
 import { listConnectionsForUser } from "../../db/connections";
 import { accountHandle, accountPolicy } from "../../../domain/permissions/account-access";
-import { HOUSE_SKILL_BODY } from "./get-skill";
 import { z } from "zod";
 import { parseParams } from "../../http/validate";
 import { pageMemories } from "../../db/memories";
@@ -51,10 +50,11 @@ import { vaultFieldAllowed } from "../../agents/resource-access";
 // `process.env` and holds no secret (INV-103). Every read is member-scoped by the session
 // connection's user id and parameter-bound by the stores (INV-102).
 
-import {
-  buildSkillIndex,
-  type SkillIndexEntry,
-} from "../../../domain/skills/index";
+import { type SkillIndexEntry } from "../../../domain/skills/index";
+import { builtinAvailableTo, HOUSE_KEY, LIFE_ADMIN_KEY, PROFILE_KEY } from "../../../domain/skills/builtins";
+import { LIFE_ADMIN_RULES } from "../../../domain/life-admin/skill";
+import { houseInstructions } from "../../../domain/skills/house";
+import { agentGatesFor, builtinSkillsFor } from "../../skills/builtin-skills";
 import { ruleSentence } from "../../../domain/rules/rules";
 import { listIdentityFields } from "../../db/identity-fields";
 import { getPreferences } from "../../db/preferences";
@@ -69,8 +69,6 @@ import { startRun, type RunRef } from "../../agents/runs";
 import { releasedValueMatcher } from "../../crypto/hmac";
 import { listRecordsForUser } from "../../db/life-admin-records";
 import { summariseLifeAdmin, type LifeAdminSummary } from "../../../domain/life-admin/summary";
-import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
-import { PROFILE_SKILL } from "../../../domain/life-admin/profile-skill";
 import { readableSources } from "../../../domain/life-admin/profile-sources";
 import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
 import { visibleTo } from "./records";
@@ -210,15 +208,21 @@ export function createGetContextTool(deps: GetContextDeps): {
         cursor: pageInput.skill_cursor,
         limit: pageInput.limit,
       });
-      // Warthog's own skills first: the house skill, and the life-admin one for an agent that
-      // may use records.
-      const builtIn = buildSkillIndex([], agentId);
-      if (permissions.recordsAccess) builtIn.push({ title: LIFE_ADMIN_SKILL.title, useThisWhen: LIFE_ADMIN_SKILL.useThisWhen });
-      // "Building a profile" (docs/adr/profile-build.md), for an agent that may save records.
-      if (permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false) {
-        builtIn.push({ title: PROFILE_SKILL.title, useThisWhen: PROFILE_SKILL.useThisWhen });
-      }
+      // Warthog's own skills first (docs/adr/editable-builtin-skills.md): each one the person
+      // has on, with this agent in its scope and passing its gates, in the person's wording.
+      const builtins = await builtinSkillsFor(db, userId, dek);
+      const gates = await agentGatesFor(db, userId, permissions);
+      const given = builtins.filter((skill) => builtinAvailableTo(skill, agentId, gates));
+      const builtIn = given.map((skill) => ({ title: skill.def.title, useThisWhen: skill.useThisWhen }));
       const skills = [...builtIn, ...skillPage.items];
+      // The house skill's rules always reach the agent; its guidance only while it's given to it.
+      const house = given.find((skill) => skill.def.key === HOUSE_KEY);
+      // Life admin's rules reach an agent that can use Life admin even when the person switched
+      // that skill off for it: switching a skill off never drops a protection.
+      const lifeAdminGiven = given.some((skill) => skill.def.key === LIFE_ADMIN_KEY);
+      const moreRules = !lifeAdminGiven && gates.passes.has("records_read") ? LIFE_ADMIN_RULES : [];
+      // Offers that send the agent to the profile build or Life admin skill only while it has both.
+      const offersSkills = lifeAdminGiven && given.some((skill) => skill.def.key === PROFILE_KEY);
       const memoryPage = permissions.memoryRead
         ? await pageMemories(db, userId, dek, {
             agentId,
@@ -300,7 +304,7 @@ export function createGetContextTool(deps: GetContextDeps): {
         const savedByLife = await savedByResolver(db, userId, agentId);
         const handover = await handoverItems(db, userId, visible, person.catalogue, dek, savedByLife, now, person.zone);
         lifeAdmin = summariseLifeAdmin(visible, person.catalogue, now, person.zone, {
-          offerSources: writes ? sources : [],
+          offerSources: writes && offersSkills ? sources : [],
           settings: person.settings,
           otherMailAccounts,
           handover,
@@ -312,7 +316,7 @@ export function createGetContextTool(deps: GetContextDeps): {
       return {
         connection: { agentId: connection.agentId, name: agent?.displayName ?? "This connection", platform: agent?.platform ?? "other", identitySource: "Warthog credential; display name and platform are owner supplied, not verification of the chat user or model." },
         run: run ? { id: run.id, workingOn: run.label ?? null, note: RUN_NOTE } : null,
-        instructions: HOUSE_SKILL_BODY,
+        instructions: houseInstructions(house ? house.guidance : null, moreRules),
         // Every account this agent may use, with its own settings (docs/adr/several-accounts-per-agent.md).
         // An agent names one in a tool's `account` by its address or handle; no internal ids.
         serviceAccounts: [...permissions.accounts].sort((a, b) => {

@@ -79,11 +79,6 @@ function rootClass(markup: string): string {
 // Minimal props for the two views the touched pages mount (an empty vault / a fresh
 // skills screen) — enough to render; the fixtures carry no page container of their own.
 const VAULT_PROPS = { lowTierFields: [], highTierFields: [] } as const;
-const HOUSE_SKILL = {
-  title: "Warthog house skill",
-  useThisWhen: "always",
-  alwaysIncluded: true,
-} as const;
 
 // =====================================================================================
 // The shared container: it wraps its children in ONE centred, width-capped content
@@ -157,11 +152,11 @@ test("the Vault page view wraps in exactly one PageContainer, with its content i
 
 test("the Skills page view wraps in exactly one PageContainer, with its content inside", () => {
   const viewOnly = renderToStaticMarkup(
-    <SkillsView skills={[]} preferences={null} houseSkill={HOUSE_SKILL} />,
+    <SkillsView skills={[]} preferences={null} />,
   );
   const wrapped = renderToStaticMarkup(
     <PageContainer>
-      <SkillsView skills={[]} preferences={null} houseSkill={HOUSE_SKILL} />
+      <SkillsView skills={[]} preferences={null} />
     </PageContainer>,
   );
   assert.equal(

@@ -119,6 +119,16 @@ export const exportDocumentSchema = z.looseObject({
   profile: profileSchema,
   preferences: preferencesSchema,
   skills: z.array(skillSchema),
+  // What the person changed about Warthog's own skills, when anything (docs/adr/editable-builtin-skills.md).
+  warthogSkills: z.array(z.object({
+    key: z.string().max(40),
+    state: z.enum(["on", "off", "removed"]),
+    scope: z.enum(["all", "chosen"]),
+    scopedAgentIds: z.array(z.string().max(200)).max(100),
+    useThisWhen: z.string().max(500).optional(),
+    guidance: z.string().max(20_000).optional(),
+    basedOnVersion: z.number().int().positive().optional(),
+  })).max(100).optional(),
   skillPackages: z.array(z.object({
     id: z.uuid().optional(),
     name: z.string().max(150),
