@@ -106,6 +106,10 @@ test("display names and identity alternatives", () => {
   const dinner = type("outings.restaurant");
   assert.deepEqual(identityAlternatives(dinner, { provider: "Bistro", starts_at: "2026-12-03T19:30+11:00[Australia/Sydney]" }, null).map((a) => a.values), [["bistro", "20261203"]], "provider + start date when there's no reference");
   assert.equal(identityAlternatives(dinner, { provider: "Bistro", reference: "R1", starts_at: "2026-12-03" }, null).length, 2);
+  const account = type("banking.account");
+  assert.deepEqual(identityAlternatives(account, { provider: "Westpac", name: "Westpac eSaver" }, null), [{ keys: ["provider", "name"], values: ["westpac", "westpacesaver"] }], "no last 4: the bank and name");
+  assert.deepEqual(identityAlternatives(account, { provider: "Westpac", name: "Westpac Choice", last4: "2902" }, null).map((a) => a.keys), [["provider", "last4"]], "the fallback only stands in for a missing last 4");
+  assert.deepEqual(identityAlternatives(account, { name: "Some account" }, null), []);
 });
 
 test("new field kinds are kept in canonical form", () => {

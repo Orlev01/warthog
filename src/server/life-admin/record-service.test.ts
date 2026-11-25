@@ -319,8 +319,42 @@ test("the hint for a record that can't be matched later names only what's missin
   const t = await setup();
   await closing(t.db, async () => {
     const withProvider = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.card"), fields: { name: "Rewards card", provider: "NAB" } }));
-    assert.deepEqual(withProvider.hints, ["Add last4 so a later save updates this record instead of adding another."]);
+    assert.equal(withProvider.hints, undefined, "a card with no last 4 still matches on its issuer and name");
     const bare = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.card"), fields: { name: "Another card" } }));
     assert.deepEqual(bare.hints, ["Add provider and last4 so a later save updates this record instead of adding another."]);
+    const policy = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("vehicles.insurance"), fields: { name: "Car insurance", provider: "AAMI" } }));
+    assert.deepEqual(policy.hints, ["Add reference so a later save updates this record instead of adding another."], "kinds with no fallback still ask");
+  });
+});
+
+// Dogfood, 25 Nov 2026: Wise, a Westpac eSaver and a card whose statements show 3 digits had no
+// last 4, so every scan of the founder's banks would have added them again.
+test("a bank account or card saved without its last 4 matches on its bank and name", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const first = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.account"), fields: { name: "Wise account", provider: "Wise", account_kind: "multi-currency" } }));
+    const again = await saveTypedRecord(t.ctx(), t.muse, { type: type("banking.account"), fields: { name: "Wise Account", provider: "wise", notes: "AUD details" } });
+    assert.equal(again.action, "updated");
+    assert.equal(again.record?.id, first.record.id);
+    const savings = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.account"), fields: { name: "Macquarie Savings Account", provider: "Macquarie", last4: "2478" } }));
+    const second = created(await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.account"), fields: { name: "Macquarie Savings Account", provider: "Macquarie", last4: "9911" } }));
+    assert.equal(second.action, "created", "a second account with the same name but its own last 4 is its own record");
+    assert.notEqual(second.record.id, savings.record.id);
+    assert.equal((await listRecordsForUser(t.db, t.userId, t.dek)).length, 3);
+  });
+});
+
+test("an older bank record saved with no match key is found by its bank and name", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const older = await createRecord(t.db, {
+      userId: t.userId, kind: "item", type: "banking.account", fields: { name: "Westpac eSaver", provider: "Westpac", account_kind: "savings" }, status: "active",
+      source: t.instinct, matchKeys: [],
+    }, t.dek);
+    const again = await saveTypedRecord(t.ctx(), t.instinct, { type: type("banking.account"), fields: { name: "Westpac eSaver", provider: "Westpac", notes: "Intro rate ended" } });
+    assert.equal(again.action, "updated");
+    assert.equal(again.record?.id, older.id);
+    assert.equal((await listRecordsForUser(t.db, t.userId, t.dek)).length, 1);
+    assert.equal((await getRecordForUser(t.db, t.userId, older.id, t.dek))?.matchKeys.length, 1, "it now has its key");
   });
 });

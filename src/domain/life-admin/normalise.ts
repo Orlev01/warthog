@@ -437,7 +437,8 @@ export function storedRecordName(type: RecordTypeDef, fields: Readonly<Record<st
 
 /**
  * Each identity alternative of `type` this record can fill: the field keys and their normalised
- * values (a date-time matches on its date). A singleton kind has one empty alternative.
+ * values (a date-time matches on its date). A singleton kind has one empty alternative. The kind's
+ * fallback identity counts only when the record fills none of the others.
  */
 export function identityAlternatives(
   type: RecordTypeDef,
@@ -445,8 +446,18 @@ export function identityAlternatives(
   parentId: string | null,
 ): { readonly keys: readonly string[]; readonly values: readonly string[] }[] {
   if (type.singleton) return [{ keys: [], values: [] }];
+  const filled = fillIdentities(type, type.identity, fields, parentId);
+  return filled.length === 0 && type.fallbackIdentity ? fillIdentities(type, [type.fallbackIdentity], fields, parentId) : filled;
+}
+
+function fillIdentities(
+  type: RecordTypeDef,
+  identities: readonly (readonly string[])[],
+  fields: Readonly<Record<string, unknown>>,
+  parentId: string | null,
+): { readonly keys: readonly string[]; readonly values: readonly string[] }[] {
   const alternatives: { keys: readonly string[]; values: string[] }[] = [];
-  for (const keys of type.identity) {
+  for (const keys of identities) {
     if (keys.length === 0) continue;
     const values: string[] = [];
     for (const key of keys) {

@@ -102,6 +102,9 @@ export interface RecordTypeDef {
   // saving the same thing again updates it. "parent" stands for the record it belongs to, "title"
   // for its name (or provider). Empty ⇒ never matched.
   readonly identity: readonly (readonly string[])[];
+  // Used only when a record can fill none of `identity`: a bank account saved without its last 4
+  // still matches its bank and name, so a later scan updates it instead of adding a copy.
+  readonly fallbackIdentity?: readonly string[];
   readonly singleton?: true;
   readonly storedKind: StoredKind;
   readonly reminders?: readonly number[];
@@ -252,6 +255,7 @@ interface KindSpec {
   readonly fields?: readonly FieldDef[];
   readonly labels?: Readonly<Record<string, string>>;
   readonly identity?: readonly (readonly string[])[];
+  readonly fallbackIdentity?: readonly string[];
   readonly singleton?: true;
   readonly storedKind?: StoredKind;
   readonly reminders?: readonly number[];
@@ -278,6 +282,7 @@ export function buildKind(categoryId: string, spec: KindSpec, origin: "builtin" 
     ...(spec.due ? { due: spec.due } : lifecycle === "booking" ? { due: { means: "starts" as const, label: "Starts" } } : {}),
     fields: mergeFields(spec.fields ?? [], lifecycle, spec.labels, account),
     identity,
+    ...(spec.fallbackIdentity ? { fallbackIdentity: spec.fallbackIdentity } : {}),
     ...(spec.singleton ? { singleton: true as const } : {}),
     storedKind: spec.storedKind ?? "item",
     ...(spec.reminders ? { reminders: spec.reminders } : lifecycle === "booking" ? { reminders: BOOKING_REMINDERS } : {}),
@@ -296,7 +301,7 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
   home: [
     { key: "property", label: "Home", anchor: true, use: "A place you live in or own. Its lease or mortgage, insurance, rates, utilities and tradies belong to it.", fields: [f("address", "Address", "place"), f("role", "Your role", "text", { choices: ["renter", "owner", "strata owner", "landlord"] })], labels: { name: "Name, for example Home" }, identity: [["address"]] },
     { key: "lease", account: true, label: "Lease", belongsTo: ["home.property"], use: "A rental lease: rent, when it ends, the agent and the bond.", due: { means: "ends", label: "Lease ends" }, reminders: [90, 30], fields: [f("starts_on", "Started", "date"), f("bond", "Bond", "amount"), f("bond_reference", "Bond number", "reference")], labels: { provider: "Agent or landlord", amount: "Rent" }, identity: [["parent"]] },
-    { key: "mortgage", account: true, label: "Mortgage", belongsTo: ["home.property"], use: "A home loan: the lender, rate and when a fixed rate ends.", due: { means: "ends", label: "Fixed rate ends" }, reminders: [60, 14], fields: [f("last4", "Loan account (last 4)", "last4"), f("rate", "Interest rate"), f("rate_type", "Rate type", "text", { choices: ["variable", "fixed", "split"] })], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]] },
+    { key: "mortgage", account: true, label: "Mortgage", belongsTo: ["home.property"], use: "A home loan: the lender, rate and when a fixed rate ends.", due: { means: "ends", label: "Fixed rate ends" }, reminders: [60, 14], fields: [f("last4", "Loan account (last 4)", "last4"), f("rate", "Interest rate"), f("rate_type", "Rate type", "text", { choices: ["variable", "fixed", "split"] })], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "insurance", account: true, label: "Home insurance", belongsTo: ["home.property"], use: "Building, contents, landlord or renters insurance.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["building", "contents", "building and contents", "landlord", "renters"]), f("sum_insured", "Sum insured", "amount"), f("excess", "Excess", "amount"), f("claims_phone", "Claims phone", "phone")], labels: ins, identity: policy },
     { key: "rates", account: true, label: "Rates or levies", belongsTo: ["home.property"], use: "Council rates, strata levies, water rates or land tax.", due: { means: "due", label: "Next instalment" }, reminders: [14, 3], fields: [f("rates_kind", "What", "text", { choices: ["council rates", "strata levies", "water rates", "land tax"] })], labels: { provider: "Council or strata manager", reference: "Assessment or lot number" }, identity: policy },
     { key: "visit", label: "Tradie or inspection", lifecycle: "booking", use: "A tradie, cleaner, inspection or open home booked at the home.", defaultMinutes: 120, fields: [f("visit_kind", "What", "text", { choices: ["tradie", "cleaner", "inspection", "open home"] }), f("job", "Job")], labels: { provider: "Who's coming" } },
@@ -339,9 +344,9 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
     { key: "service", label: "Support service", use: "A support provider or service agreement.", due: { means: "ends", label: "Agreement ends" }, fields: [f("service_kind", "Service")], labels: { reference: "Agreement number" }, identity: policy },
   ],
   banking: [
-    { key: "account", account: true, label: "Bank account", use: "A bank or savings account: the bank and the last 4 digits only. Never the BSB and full account number.", due: { means: "ends", label: "Rate or term ends" }, fields: [f("account_kind", "Kind", "text", { choices: ["everyday", "savings", "offset", "term deposit"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Bank" }, identity: [["provider", "last4"]] },
-    { key: "card", account: true, label: "Credit card", use: "A credit card's issuer, last 4 digits, expiry and annual fee date. Never the card number.", due: { means: "due", label: "Annual fee" }, reminders: [30], fields: [f("card_product", "Card"), f("last4", "Card (last 4)", "last4"), f("card_expiry", "Card expires", "month_year"), f("annual_fee", "Annual fee", "amount"), f("promo_ends", "Interest-free or balance transfer ends", "date")], labels: { provider: "Issuer" }, identity: [["provider", "last4"]] },
-    { key: "loan", account: true, label: "Loan", use: "A car, personal or student loan, novated lease or buy-now-pay-later plan.", due: { means: "ends", label: "Ends or fixed rate ends" }, reminders: [60], fields: [f("loan_kind", "Kind", "text", { choices: ["car", "personal", "novated lease", "buy now pay later"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]] },
+    { key: "account", account: true, label: "Bank account", use: "A bank or savings account: the bank and the last 4 digits only. Never the BSB and full account number.", due: { means: "ends", label: "Rate or term ends" }, fields: [f("account_kind", "Kind", "text", { choices: ["everyday", "savings", "offset", "term deposit"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Bank" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "card", account: true, label: "Credit card", use: "A credit card's issuer, last 4 digits, expiry and annual fee date. Never the card number.", due: { means: "due", label: "Annual fee" }, reminders: [30], fields: [f("card_product", "Card"), f("last4", "Card (last 4)", "last4"), f("card_expiry", "Card expires", "month_year"), f("annual_fee", "Annual fee", "amount"), f("promo_ends", "Interest-free or balance transfer ends", "date")], labels: { provider: "Issuer" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "loan", account: true, label: "Loan", use: "A car, personal or student loan, novated lease or buy-now-pay-later plan.", due: { means: "ends", label: "Ends or fixed rate ends" }, reminders: [60], fields: [f("loan_kind", "Kind", "text", { choices: ["car", "personal", "novated lease", "buy now pay later"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "application", label: "Application", lifecycle: "case", use: "A card, account or loan application in progress.", fields: [f("application_kind", "For")], labels: { provider: "Bank or lender" } },
   ],
   investing: [

@@ -464,6 +464,23 @@ export async function findRecordByMatchKeys(
   return (await decryptRows(result.rows, dek))[0] ?? null;
 }
 
+// `userId`'s live records of one stored `kind` that were saved with no match key (nothing to match
+// on at the time), decrypted, newest first. Member-scoped like every owner read.
+export async function listUnkeyedRecords(
+  db: Db,
+  userId: string,
+  kind: RecordKind,
+  dek: Uint8Array,
+): Promise<LifeAdminRecord[]> {
+  const result = await db.query(
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records
+     WHERE user_id = $1 AND kind = $2 AND review_state <> 'dismissed' AND COALESCE(cardinality(match_keys), 0) = 0
+     ORDER BY updated_at DESC, id ASC`,
+    [userId, kind],
+  );
+  return decryptRows(result.rows, dek);
+}
+
 // The agent handling a live item, or nobody (null). Member-scoped; true when the record exists.
 export async function setSteward(
   db: Db,

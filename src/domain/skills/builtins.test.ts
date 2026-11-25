@@ -22,7 +22,7 @@ test("every Warthog skill has its own key and title, and the house skill comes f
 // Changing a skill's guidance: bump its version, then update its line here.
 const PINS: Record<string, [number, string]> = {
   using_warthog: [1, "b3304eb5b8d22c1f"],
-  life_admin_records: [1, "749b3fb473c409b9"],
+  life_admin_records: [1, "c1e3b00b77037f51"],
   building_a_profile: [1, "6cac249767c38c87"],
   weekly_check_in: [1, "a656336f8ea17a92"],
   renewals_switching: [1, "c749104202c19962"],
