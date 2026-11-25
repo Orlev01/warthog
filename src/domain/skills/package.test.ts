@@ -41,7 +41,9 @@ test("rejects unsafe, duplicate, oversized and malformed package files", () => {
   assert.throws(() => validateFiles([{ path: "x", content: "a".repeat(200_001) }]), /large/);
   assert.throws(() => parsePackage([{ path: "SKILL.md", content: "no frontmatter" }]), /frontmatter/);
   assert.throws(() => parsePackage([{ path: ".claude-plugin/plugin.json", content: "not json" }]), /manifest/);
-  assert.throws(() => parsePackage([{ path: "SKILL.md", content: makeSkillFile("Using Warthog", "Reserved", "Text") }]), /reserved/);
+  // Reading a stored or exported package never fails on a name: saving one from the Skills page
+  // refuses a Warthog skill's title (skill-packages.ts), so an older package still opens and exports.
+  assert.doesNotThrow(() => parsePackage([{ path: "SKILL.md", content: makeSkillFile("Tax time", "Mine", "Text") }]));
 });
 
 test("skill authoring escapes quoted fields and requires instructions", () => {

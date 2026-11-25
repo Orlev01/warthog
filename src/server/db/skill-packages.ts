@@ -1,3 +1,4 @@
+import { isReservedSkillTitle } from "../../domain/skills/builtins";
 import { assertCollectionCapacity } from "./collection-limits";
 import { randomUUID } from "node:crypto";
 import {
@@ -120,6 +121,9 @@ export async function savePackage(
   userId: string,
   input: SavePackageInput,
   dek: Uint8Array,
+  // From the Skills page: a skill name that's one of Warthog's is refused unless the package
+  // already had it (docs/adr/editable-builtin-skills.md). An import keeps what was exported.
+  options: { readonly refuseNewReservedNames?: boolean } = {},
 ): Promise<StoredPackage> {
   const parsed = parsePackage(input.files, input.name);
   const save = async (tx: Db) => {
@@ -135,6 +139,11 @@ export async function savePackage(
       throw new PackageError(
         "This package changed in another tab. Reload it before saving.",
       );
+    if (options.refuseNewReservedNames) {
+      const before = previous ? new Set(((await getPackage(tx, userId, previous.id, dek))?.skills ?? []).map((skill) => skill.name.trim().toLowerCase())) : new Set<string>();
+      const clash = parsed.skills.find((skill) => isReservedSkillTitle(skill.name) && !before.has(skill.name.trim().toLowerCase()));
+      if (clash) throw new PackageError(`${clash.name} is the name of one of Warthog's skills. Choose another name.`);
+    }
     if (
       packages.some(
         (p) =>

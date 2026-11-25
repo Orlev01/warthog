@@ -11,6 +11,7 @@ import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createSkillsActions, type SkillsActions } from "./actions";
+import { warthogNotice, warthogReturn, warthogSkillChange, type WarthogNotice } from "./warthog-form";
 import { SkillsView } from "@/components/skills/skills-view";
 import { PageContainer } from "@/components/shell/page-container";
 import { listPackageSummaries } from "@/server/db/skill-packages";
@@ -21,9 +22,10 @@ import { getUserById } from "@/server/db/users";
 // `createSkillsActions` seam, `./actions`). It reads the signed-in session from the
 // host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into the
 // person's own skills + preferences — skill content decrypted, the profile decrypted or
-// null, plus the always-included house skill — and mounts the already-render-tested
+// null, plus Warthog's own skills as they stand for them — and mounts the already-render-tested
 // <SkillsView/> with each control BOUND to a `use server` wrapper over the SAME seam:
-// Save profile (savePreferences), Create / Edit / Duplicate / Switch / Delete skill.
+// Save profile (savePreferences), Create / Edit / Duplicate / Switch / Delete skill, and every
+// change to one of Warthog's skills (changeWarthogSkill, one action read by ./warthog-form).
 // Every wrapper re-derives the verified session (never trusting a client value for
 // identity), takes its input from the submitted form, persists member-scoped through the
 // seam, and redirects back with a `?notice=` the page renders in plain words — a refusal
@@ -92,13 +94,14 @@ function skillContentOf(formData: FormData) {
 // Run one mutation against the seam under the verified session and redirect back with a
 // notice naming the outcome. A reported refusal ({ ok: false }) or a 4xx `HttpError` from
 // the validation boundary becomes `problem` — shown in plain words, never swallowed; a
-// genuine fault rethrows.
+// genuine fault rethrows. `query` adds to the address it returns to (already encoded).
 async function run(
   success: Notice,
   mutate: (
     actions: SkillsActions,
     session: Session,
   ) => Promise<{ ok: boolean }>,
+  query = "",
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -109,7 +112,8 @@ async function run(
   try {
     const result = await mutate(buildActions(db), session);
     if (!result.ok) {
-      notice = "problem";
+      const reason = (result as { reason?: string }).reason;
+      notice = reason === "reserved_title" || reason === "unknown_agent" ? reason : "problem";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {
@@ -118,7 +122,7 @@ async function run(
     notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/skills");
-  redirect(`/skills?notice=${notice}${success === "saved" ? "&view=preferences" : ""}`);
+  redirect(`/skills?notice=${notice}${success === "saved" ? "&view=preferences" : ""}${query}`);
 }
 
 async function saveProfileAction(formData: FormData): Promise<void> {
@@ -176,7 +180,20 @@ async function deleteSkillAction(formData: FormData): Promise<void> {
   );
 }
 
+// One of Warthog's skills: switch, edit, choose who gets it, remove, restore, or take or
+// decline Warthog's newer version. The page comes back with that skill's card open.
+async function changeWarthogSkillAction(formData: FormData): Promise<void> {
+  "use server";
+  const change = warthogSkillChange(formData);
+  await run(
+    change ? warthogNotice(change.action) : "problem",
+    async (actions, session) => (change ? actions.changeWarthogSkill(session, change) : { ok: false }),
+    change ? warthogReturn(change.key) : "",
+  );
+}
+
 type Notice =
+  | WarthogNotice
   | "saved"
   | "created"
   | "updated"
@@ -184,6 +201,8 @@ type Notice =
   | "switched"
   | "deleted"
   | "problem"
+  | "reserved_title"
+  | "unknown_agent"
   | "storage_full";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
@@ -194,6 +213,15 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   switched: { done: true, text: "Skill updated." },
   deleted: { done: true, text: "Skill deleted." },
   problem: { done: false, text: "We couldn't save that change. Check every field is filled in, then try again." },
+  reserved_title: { done: false, text: "That's the name of one of Warthog's skills. Choose another name, or change Warthog's skill instead." },
+  unknown_agent: { done: false, text: "We couldn't find one of the agents you chose. Refresh the page and choose again." },
+  warthog_on: { done: true, text: "Skill switched on." },
+  warthog_off: { done: true, text: "Skill switched off. Your agents won't get it until you switch it back on." },
+  warthog_removed: { done: true, text: "Skill removed. It's under Removed if you want it back." },
+  warthog_restored: { done: true, text: "Skill restored to Warthog's version." },
+  warthog_new: { done: true, text: "You're now using Warthog's new version." },
+  warthog_kept: { done: true, text: "Kept your version." },
+  warthog_scope: { done: true, text: "Saved who gets this skill." },
   storage_full: {
     done: false,
     text: "Storage limit reached. Remove unused items or reduce their size before saving.",
@@ -250,13 +278,15 @@ export default async function SkillsPage({
           status: a.status,
         }))}
         preferences={data.preferences}
-        houseSkill={data.houseSkill}
+        warthogSkills={data.warthogSkills}
+        openWarthogSkill={typeof params.skill === "string" ? params.skill : undefined}
         saveProfileAction={saveProfileAction}
         createSkillAction={createSkillAction}
         editSkillAction={editSkillAction}
         duplicateSkillAction={duplicateSkillAction}
         toggleSkillAction={toggleSkillAction}
         deleteSkillAction={deleteSkillAction}
+        changeWarthogSkillAction={changeWarthogSkillAction}
       />
     </PageContainer>
   );

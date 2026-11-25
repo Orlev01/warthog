@@ -1,4 +1,21 @@
-# Delivery status — 25 November 2026 (dogfood fixes)
+# Delivery status — 25 November 2026 (service emails, not marketing)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`e43fac059e9d4b1d181489dd2aa70e49b11157a1` runs as `warthog--r45513459399a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #67:** the Life admin skill reads service emails, not marketing:
+  - every Gmail search leaves out Promotions;
+  - banking searches subjects;
+  - a new "Which emails to read" section;
+  - closed accounts are saved as cancelled.
+
+  Bank accounts, cards, loans and mortgages without a last 4 match on provider + name.
+
+No migrations (96). See the [release record](docs/audit/service-emails-release-2026-11-25.md).
+
+# Earlier delivery status — 25 November 2026 (dogfood fixes)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

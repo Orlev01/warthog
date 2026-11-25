@@ -754,3 +754,21 @@ test("buildExportDocument folds no ambient env secret into the document: a decoy
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// docs/adr/editable-builtin-skills.md: the person's own wording for Warthog's skills is theirs.
+test("buildExportDocument includes what the person changed about Warthog's skills, and nothing when they changed nothing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "warthog-skills");
+    const dek = freshDek();
+    const none = asRecord(await buildExportDocument(db, userId, dek, clockAt(EXPORTED_AT)));
+    assert.equal(none.warthogSkills, undefined);
+    const { changeBuiltinSkill } = await import("../db/builtin-skills");
+    await changeBuiltinSkill(db, userId, "using_warthog", { state: "off", guidance: "Be brief.", basedOnVersion: 1 }, { state: "on" }, dek);
+    const doc = await buildExportDocument(db, userId, dek, clockAt(EXPORTED_AT));
+    assert.ok(exportDocumentSchema.safeParse(doc).success);
+    assert.deepEqual(asRecord(doc).warthogSkills, [{ key: "using_warthog", state: "off", scope: "all", scopedAgentIds: [], guidance: "Be brief.", basedOnVersion: 1 }]);
+  } finally {
+    await db.close();
+  }
+});

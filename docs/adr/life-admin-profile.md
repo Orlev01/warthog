@@ -442,3 +442,38 @@ the rest's prompt works across services and points to the "Life admin records" s
 file it links to Home's build. `save_record` also takes `aboutYou` (About you suggestions). Still 16
 core tools; the build is also an MCP prompt, `build_profile`, which isn't a tool. To check groups a
 build's suggestions by category, each with its own "Confirm all".
+
+## Service emails, not marketing (amended 25 November 2026)
+
+Dogfooding the founder's banks showed that agents mined the wrong emails. The founder holds accounts
+with Macquarie, Westpac, NAB, ANZ, ING, CommBank and Wise, and closed an Amex and an ANZ card. A scan
+saved only the NAB card.
+
+- **The banking search found offers.** Its words ("annual fee", "balance transfer") match NAB's
+  promotions. Bank footers say "card" and "statement" too, so body words can't tell an account email
+  from an offer. Banking now searches subjects: statement notices from the last 7 months, and
+  welcome, approval and closure emails from the last 2 years.
+- **Nothing said to pass over marketing.** "Leave out offers and marketing" covered what to save,
+  not which emails to read. The skill gains "Which emails to read":
+  - read service emails, about the person's own account, policy, booking or bill;
+  - skip offers, rewards, newsletters, tips, surveys, and anything asking them to apply, upgrade or
+    buy;
+  - a marketing email only shows that the person is a customer, so take details from a service email;
+  - search a newly seen provider by sender;
+  - page on when an inbox has more.
+
+  Every Gmail search leaves out the Promotions tab. Marketing reaches Updates too, so agents still
+  judge by sender, subject and preview.
+- **One skill, not one per record kind.** These rules sit in "Life admin records", which "Building a
+  profile" already makes agents fetch first. They are guidance, not fixed rules: they're about search
+  quality, not protection.
+- **Closed accounts** are saved as cancelled, so they show under History rather than as open.
+- **No last 4, no copies.** A bank account, card, loan or mortgage matches on provider + last 4. One
+  saved without them (Wise, an eSaver, a card whose statements show 3 digits) had no match key, so
+  every scan added it again.
+  - These kinds now have a fallback identity, provider + name, used only when a save fills none of
+    the others. Two accounts with the same name and different last 4s stay apart.
+  - A record saved earlier with no key is found by that fallback (`listUnkeyedRecords`) and gets its
+    key when it's updated.
+
+The skill's size guard moved from 33,000 to 35,000 characters.

@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Service emails, not marketing, 25 November:** main `e43fac0` runs as `warthog--r45513459399a1`.
+PR #67:
+- the Life admin skill reads service emails, not marketing, and leaves out Gmail's Promotions tab;
+- banking searches subjects;
+- bank records without a last 4 match on provider + name.
+
+No migrations (96). See the [release record](service-emails-release-2026-11-25.md).
+
 **Dogfood fixes, 25 November:** main `8771b03` runs as `warthog--r45509554516a1`. Two PRs:
 - **#65:** `create_task` takes "me" or an agent's name; the tax search goes by sender; Outlook search
   guidance; category counts; a slimmer `log_activity` reply.

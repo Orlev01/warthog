@@ -44,8 +44,8 @@
 //   createSkillsActions(deps: { db: Db; keyWrapper: KeyWrapper }): {
 //     // the owner's skills + preferences, read member-scoped by session.userId and
 //     // shaped into the props <SkillsView/> is mounted over (skills decrypted, the
-//     // preferences profile decrypted or null, plus the always-included house skill).
-//     load(session): Promise<{ skills; preferences; houseSkill }>
+//     // preferences profile decrypted or null, plus Warthog's own skills).
+//     load(session): Promise<{ skills; preferences; warthogSkills }>
 //
 //     // upsert the session user's ONE communication-style profile (owner = session,
 //     // never a userId smuggled in the input).
@@ -318,8 +318,8 @@ test("the loader returns the session user's skills + preferences and mounts Skil
 
     const data = await makeActions(db, keyWrapper).load(sessionFor(userId));
 
-    // The loader hands back the owner's decrypted skill + preferences and the
-    // always-included house skill (not one of the person's skills).
+    // The loader hands back the owner's decrypted skill + preferences and Warthog's own
+    // skills (not the person's).
     assert.ok(
       data.skills.some((s: { title?: string }) => s.title === SKILL_TITLE),
       `the loader returns the owner's skill; got ${JSON.stringify(data.skills)}`,
@@ -330,17 +330,17 @@ test("the loader returns the session user's skills + preferences and mounts Skil
       "Warm and plain",
       "the preferences profile is decrypted",
     );
-    assert.equal(data.houseSkill.title, HOUSE_SKILL.title, "the always-included house skill is carried");
+    assert.ok(data.warthogSkills.some((skill) => skill.title === HOUSE_SKILL.title), "Warthog's house skill is carried");
 
     // "mounts SkillsView": the loader's output IS the screen's data — feeding it
     // straight into the already-render-tested view renders the owner's skills screen.
     const markup = renderToStaticMarkup(
-      <SkillsView skills={data.skills} preferences={data.preferences} houseSkill={data.houseSkill} />,
+      <SkillsView skills={data.skills} preferences={data.preferences} warthogSkills={data.warthogSkills} />,
     );
     const text = strip(markup);
     assert.ok(text.includes(SKILL_TITLE), "mounting SkillsView renders the owner's skill title");
     assert.ok(text.includes(SKILL_WHEN), "the owner's use-this-when line renders");
-    assert.ok(text.includes(HOUSE_SKILL.title), "the house skill renders, always included");
+    assert.ok(text.includes(HOUSE_SKILL.title), "the house skill renders, among Warthog's skills");
     assert.ok(markup.includes("Warm and plain"), "the owner's saved tone renders as an editable control");
   } finally {
     await db.close();
@@ -357,13 +357,13 @@ test("the loader returns a null preferences profile and no skills for a person w
 
     assert.deepEqual(data.skills, [], "a person with no skills gets an empty list");
     assert.equal(data.preferences, null, "a person with no profile gets a null profile");
-    assert.equal(data.houseSkill.title, HOUSE_SKILL.title, "the house skill is present even with nothing saved");
+    assert.ok(data.warthogSkills.some((skill) => skill.title === HOUSE_SKILL.title), "the house skill is present even with nothing saved");
 
     // The screen still renders (the house skill, the create/save controls) with no
     // person-skills — no crash on the empty case.
     const text = strip(
       renderToStaticMarkup(
-        <SkillsView skills={data.skills} preferences={data.preferences} houseSkill={data.houseSkill} />,
+        <SkillsView skills={data.skills} preferences={data.preferences} warthogSkills={data.warthogSkills} />,
       ),
     );
     assert.ok(text.includes(HOUSE_SKILL.title), "the empty screen still shows the house skill");
@@ -963,5 +963,97 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.WARTHOG_DECOY_SECRET = prevDecoy;
     if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = prevDbUrl;
+  }
+});
+
+// docs/adr/editable-builtin-skills.md: a Warthog skill's title belongs to it, so an agent asking
+// for "Building a profile" never gets the person's own skill instead (or the other way round).
+test("createSkill refuses one of Warthog's skill titles, whatever the case, and stores nothing", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "reserved-title");
+    const actions = makeActions(db, keyWrapper);
+    for (const title of ["Building a profile", "using warthog", " Life admin  records "]) {
+      const result = await actions.createSkill(sessionFor(userId), createInput({ title, useThisWhen: "when x", fullText: "y", scope: "all" }));
+      assert.equal(okOf(result), false, `${title} is Warthog's`);
+      assert.equal((result as { reason?: string }).reason, "reserved_title");
+    }
+    assert.equal((await listSkillsForUser(db, userId, dek)).length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/editable-builtin-skills.md: the person's control over Warthog's own skills.
+test("changeWarthogSkill: switch off, edit, choose agents and restore one of Warthog's skills", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId } = await makeUserWithDek(db, keyWrapper, "warthog-skill");
+    const myAgent = await makeAgent(db, userId, "My Claude");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    const view = async (key: string) => (await actions.load(session)).warthogSkills.find((skill) => skill.key === key)!;
+
+    const house = await view("using_warthog");
+    assert.equal(house.state, "on");
+    assert.ok(house.rules.length > 0, "its rules are shown");
+    assert.equal(house.edited, false);
+    assert.equal((await view("building_a_profile")).needs, "Agents that can save to your Life admin");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "off" })), true);
+    assert.equal((await view("using_warthog")).state, "off");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: "Be brief with me." })), true);
+    const edited = await view("using_warthog");
+    assert.equal(edited.guidance, "Be brief with me.");
+    assert.equal(edited.useThisWhen, house.useThisWhen);
+    assert.equal(edited.edited, true);
+    assert.equal(edited.state, "off", "an edit keeps it off");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: ` ${house.warthogGuidance} ` })), true);
+    assert.equal((await view("using_warthog")).edited, false, "Warthog's own wording isn't kept as an edit");
+    // Review, 25 Nov 2026: a browser posts the textarea with CRLF line breaks.
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: house.warthogGuidance.replace(/\n/g, "\r\n") })), true);
+    assert.equal((await view("using_warthog")).edited, false, "posted back with CRLF, it's still Warthog's");
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: "Line one.\r\nLine two." })), true);
+    assert.equal((await view("using_warthog")).guidance, "Line one.\nLine two.", "kept with LF");
+    await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: house.warthogGuidance });
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "scope", scope: "chosen", scopedAgentIds: [myAgent] })), true);
+    assert.deepEqual((await view("life_admin_records")).scopedAgentIds, [myAgent]);
+    const foreign = await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "scope", scope: "chosen", scopedAgentIds: [randomUUID()] });
+    assert.equal(okOf(foreign), false, "only the person's own agents");
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "remove" })), true);
+    assert.equal((await view("life_admin_records")).state, "removed");
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "restore" })), true);
+    const restored = await view("life_admin_records");
+    assert.equal(restored.state, "on");
+    assert.equal(restored.scope, "all");
+
+    await assert.rejects(actions.changeWarthogSkill(session, { key: "not_a_skill", action: "on" }), "an unknown key is refused at the boundary");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review, 25 Nov 2026: a skill the person made before "Tax time" was Warthog's keeps its title.
+test("editSkill lets an older skill keep a title Warthog now uses, but not take one", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "reserved-edit");
+    const actions = makeActions(db, keyWrapper);
+    await actions.createSkill(sessionFor(userId), createInput({ title: "My tax", useThisWhen: "when x", fullText: "y", scope: "all" }));
+    const mine = (await listSkillsForUser(db, userId, dek))[0]!;
+    const renamed = await actions.editSkill(sessionFor(userId), { id: mine.id, title: "Tax time", useThisWhen: "when x", fullText: "y", scope: "all" } as never);
+    assert.equal((renamed as { reason?: string }).reason, "reserved_title", "can't take it");
+    const older = await seedSkill(db, { userId, title: "Tax time", useThisWhen: "when x", fullText: "y", scope: "all", scopedAgentIds: [] }, dek);
+    const kept = await actions.editSkill(sessionFor(userId), { id: (older as { id: string }).id, title: "Tax time", useThisWhen: "when x", fullText: "z", scope: "all" } as never);
+    assert.equal(okOf(kept), true, "keeps it");
+  } finally {
+    await db.close();
   }
 });
