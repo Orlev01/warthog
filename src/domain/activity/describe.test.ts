@@ -48,6 +48,7 @@ test("titles use the same plain labels as the Event filter", () => {
   assert.equal(entryTitle({ kind: "protocol_rejected" }), "Request couldn't be read");
   assert.equal(entryTitle({ kind: "client_observed" }), "Client details reported");
   assert.equal(entryTitle({ kind: "identity_release" }), "Identity detail release");
+  assert.equal(entryTitle({ kind: "run_status" }), "Conversation status update");
   for (const kind of ["agent_key_replaced", "tool_rejected", "client_observed", "memory_scope_change"]) {
     assert.equal(entryTitle({ kind }), kindLabel(kind), `${kind}: title and filter label agree`);
   }

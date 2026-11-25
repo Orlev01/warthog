@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { cleanRunLabel, isRunId, listRuns, resolveRun, startRun, RUN_LABEL_MAX } from "./runs";
+import { cleanRunLabel, isRunId, listRuns, resolveRun, startRun, updateRunLabel, RUN_LABEL_CHANGE_MS, RUN_LABEL_MAX, type RunLabelChange } from "./runs";
 import { createAgent } from "../db/agents";
 import { createUser } from "../db/users";
 import { fixedClock } from "../seams/clock";
@@ -124,5 +124,99 @@ test("the activity writer links an entry to its run, and never loses an entry ov
     assert.deepEqual((await listActivity(db, owner.userId, { runId: "nonsense" }, owner.dek)), [], "a malformed filter matches nothing");
     const links = await db.query("SELECT entry_seq FROM activity_entry_runs WHERE user_id = $1", [owner.userId]);
     assert.deepEqual(links.rows.map((row) => Number(row.entry_seq)), [1]);
+  } finally { await db.close(); }
+});
+
+// 25 Nov — status updates (docs/adr/agent-runs.md): an agent may change what its conversation
+// says it is working on. The change is cleaned like a new label, only ever applies to the
+// agent's own run, is spaced out, and commits with its activity entry.
+test("an agent updates its own run's description, cleaned and encrypted, with what it replaced", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await person(db, "runs-update@warthog.com.au");
+    const run = await startRun(db, owner, { label: "Fixing the website tests" }, owner.dek, clock);
+    const recorded: RunLabelChange[] = [];
+    const record = async (_tx: Db, change: RunLabelChange) => { recorded.push(change); };
+
+    const change = await updateRunLabel(db, owner, run.id, "  Writing the\n release notes ", owner.dek, later, () => false, record);
+    assert.deepEqual(change, { run: { id: run.id, label: "Writing the release notes" }, previous: "Fixing the website tests" });
+    assert.deepEqual(recorded, [change], "the change is handed to the recorder");
+    assert.deepEqual(await resolveRun(db, owner, run.id, owner.dek, later), { id: run.id, label: "Writing the release notes" });
+    const stored = (await db.query("SELECT label_ct, label_changed_at FROM agent_runs WHERE id = $1", [run.id])).rows[0]!;
+    assert.doesNotMatch(String(stored.label_ct), /release notes/);
+    assert.equal(new Date(stored.label_changed_at as string).toISOString(), "2026-11-16T09:30:00.000Z");
+
+    const card = await startRun(db, owner, {}, owner.dek, clock);
+    const redacted = await updateRunLabel(db, owner, card.id, "Paying with 4111 1111 1111 1111", owner.dek, clock, () => false, record);
+    assert.doesNotMatch(redacted?.run.label ?? "", /4111 1111/);
+    assert.equal(redacted?.previous, undefined, "a run with no description had nothing to replace");
+  } finally { await db.close(); }
+});
+
+test("an unchanged, empty or too-soon description, or someone else's run, changes nothing", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await person(db, "runs-update-none@warthog.com.au");
+    const otherAgent = await createAgent(db, { userId: owner.userId, connectionId: randomUUID(), displayName: "ChatGPT", platform: "ChatGPT", status: "connected" }, clock);
+    const stranger = await person(db, "runs-update-stranger@warthog.com.au");
+    const run = await startRun(db, owner, { label: "Fixing the website tests" }, owner.dek, clock);
+    let calls = 0;
+    const record = async () => { calls += 1; };
+
+    assert.equal(await updateRunLabel(db, owner, run.id, "Fixing the  website tests", owner.dek, later, () => false, record), null, "the same words");
+    assert.equal(await updateRunLabel(db, owner, run.id, " \n ", owner.dek, later, () => false, record), null, "nothing left after cleaning");
+    assert.equal(await updateRunLabel(db, { userId: owner.userId, agentId: otherAgent.id }, run.id, "Hijacked", owner.dek, later, () => false, record), null, "another agent of the same person");
+    assert.equal(await updateRunLabel(db, stranger, run.id, "Hijacked", stranger.dek, later, () => false, record), null, "another person's agent");
+    for (const bad of [undefined, 42, "not-a-run"]) assert.equal(await updateRunLabel(db, owner, bad, "Hijacked", owner.dek, later, () => false, record), null, String(bad));
+    assert.equal(calls, 0, "nothing is recorded for a change that didn't happen");
+    assert.equal((await resolveRun(db, owner, run.id, owner.dek, later))?.label, "Fixing the website tests");
+
+    // At most one change a minute: the first change is always allowed.
+    assert.ok(await updateRunLabel(db, owner, run.id, "Step two", owner.dek, later, () => false, record));
+    const soon = fixedClock(new Date(later.now().getTime() + RUN_LABEL_CHANGE_MS - 1000));
+    assert.equal(await updateRunLabel(db, owner, run.id, "Step three", owner.dek, soon, () => false, record), null);
+    const after = fixedClock(new Date(later.now().getTime() + RUN_LABEL_CHANGE_MS));
+    assert.equal((await updateRunLabel(db, owner, run.id, "Step three", owner.dek, after, () => false, record))?.run.label, "Step three");
+    assert.equal(calls, 2);
+  } finally { await db.close(); }
+});
+
+test("a description change that can't be recorded is rolled back", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await person(db, "runs-update-rollback@warthog.com.au");
+    const run = await startRun(db, owner, { label: "Before" }, owner.dek, clock);
+    await assert.rejects(updateRunLabel(db, owner, run.id, "After", owner.dek, later, () => false, async () => { throw new Error("audit write failed"); }));
+    assert.equal((await resolveRun(db, owner, run.id, owner.dek, later))?.label, "Before");
+    const stored = (await db.query("SELECT label_changed_at FROM agent_runs WHERE id = $1", [run.id])).rows[0]!;
+    assert.equal(stored.label_changed_at, null);
+  } finally { await db.close(); }
+});
+
+test("the person's recent runs list across agents, with each one's latest action", async () => {
+  const { createDbRecorder } = await import("../activity/writer");
+  const db = await freshDb();
+  try {
+    const owner = await person(db, "runs-recent@warthog.com.au");
+    const gemini = await createAgent(db, { userId: owner.userId, connectionId: randomUUID(), displayName: "Gemini CLI", platform: "localhost", status: "connected" }, clock);
+    const stranger = await person(db, "runs-recent-stranger@warthog.com.au");
+    const old = await startRun(db, owner, { label: "Last week" }, owner.dek, fixedClock(new Date("2026-11-09T09:00:00.000Z")));
+    const claude = await startRun(db, owner, { label: "Fixing the website tests" }, owner.dek, clock);
+    const research = await startRun(db, { userId: owner.userId, agentId: gemini.id }, { label: "Researching coffee tables" }, owner.dek, clock);
+    await startRun(db, stranger, { label: "Not yours" }, stranger.dek, clock);
+    const recorder = createDbRecorder({ db, clock, dekFor: async () => owner.dek });
+    await recorder.record({ userId: owner.userId, agentId: owner.agentId, kind: "tool_call", source: "warthog", tool: "remember", outcome: "executed", runId: claude.id });
+    await recorder.record({ userId: owner.userId, agentId: owner.agentId, kind: "tool_attempt", source: "warthog", tool: "google-gmail__send", connectorId: "google-gmail", runId: claude.id });
+    await recorder.record({ userId: owner.userId, agentId: owner.agentId, kind: "tool_call", source: "warthog", tool: "google-gmail__send", connectorId: "google-gmail", outcome: "pending_approval", runId: claude.id });
+    await recorder.record({ userId: owner.userId, agentId: owner.agentId, kind: "run_status", source: "agent_reported", outcome: "reported", runId: claude.id });
+    await recorder.record({ userId: owner.userId, agentId: owner.agentId, kind: "tool_call", source: "warthog", tool: "get_context", outcome: "executed", runId: claude.id });
+
+    const recent = await listRuns(db, owner.userId, owner.dek, { since: "2026-11-15T09:00:00.000Z" });
+    assert.deepEqual(new Set(recent.map((run) => run.id)), new Set([claude.id, research.id]), "both agents' runs, not last week's, never another person's");
+    assert.ok(!recent.some((run) => run.id === old.id));
+    const latest = recent.find((run) => run.id === claude.id)!.latest;
+    assert.deepEqual(latest && { kind: latest.kind, tool: latest.tool, outcome: latest.outcome, connectorId: latest.connectorId }, { kind: "tool_call", tool: "google-gmail__send", outcome: "pending_approval", connectorId: "google-gmail" }, "the latest action Warthog recorded, not an intent, a status change or a check-in");
+    assert.equal(recent.find((run) => run.id === research.id)!.latest, undefined, "a run with no entries has no latest action");
+    assert.equal(recent.find((run) => run.id === claude.id)!.labelChangedAt, undefined);
   } finally { await db.close(); }
 });

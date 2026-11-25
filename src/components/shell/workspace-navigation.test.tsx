@@ -42,6 +42,9 @@ test("section navigation resolves nested routes and does not capture lookalike r
     "/vault/cards",
   );
   assert.equal(sectionNavigation("/agents/access-key").items.find(i => i.active)?.href, "/agents/connect");
+  // The Now view sits between the agent list and connecting one (docs/adr/agent-runs.md).
+  assert.deepEqual(sectionNavigation("/agents/now").items.map(i => [i.label, i.href, i.active]), [["Your agents", "/agents", false], ["Now", "/agents/now", true], ["Connect an agent", "/agents/connect", false]]);
+  assert.deepEqual(sectionNavigation("/agents").items.map(i => i.label), ["Your agents", "Now", "Connect an agent"]);
   assert.equal(sectionNavigation("/vaultage").items.length, 0);
   assert.equal(sectionNavigation("/agents/my-agent").items.length, 0);
 });
@@ -84,7 +87,7 @@ test("sibling route tabs share one page width per section family", () => {
     ["/memory", "/skills"],
     ["/vault", "/vault/cards"],
     ["/activity", "/spending"],
-    ["/agents", "/agents/connect", "/agents/access-key", "/agents/some-id"],
+    ["/agents", "/agents/now", "/agents/connect", "/agents/access-key", "/agents/some-id"],
   ])
     assert.equal(measure(family).size, 1, family.join(" "));
   assert.equal(pageMeasureFor("/settings/security"), "form");

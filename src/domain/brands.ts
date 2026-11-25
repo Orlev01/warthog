@@ -36,6 +36,33 @@ export function agentBrand(platform: string | undefined, name?: string): BrandMa
   return undefined;
 }
 
+// The provider an agent's mark belongs to, in words, for grouping agents by maker (the Now
+// view). The same keywords as the mark, so a group always matches the marks in it.
+export type AgentProvider = { readonly key: string; readonly label: string };
+
+const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+  claude: "Claude",
+  chatgpt: "ChatGPT",
+  gemini: "Gemini",
+  grok: "Grok",
+  notion: "Notion",
+  llama: "Llama",
+  perplexity: "Perplexity",
+  cursor: "Cursor",
+  copilot: "Copilot",
+  mistral: "Mistral",
+};
+
+/** The agent's provider by its platform, then its name; "other" when neither names one. */
+export function agentProvider(platform: string | undefined, name?: string): AgentProvider {
+  for (const text of [platform, name]) {
+    if (!text) continue;
+    const match = AGENT_KEYWORDS.find(([pattern]) => pattern.test(text));
+    if (match) return { key: match[1], label: PROVIDER_LABELS[match[1]] ?? match[1] };
+  }
+  return { key: "other", label: "Other agents" };
+}
+
 /** The letter a neutral tile shows for a brand without a mark. */
 export function brandInitial(name: string): string {
   const letter = name.trim().match(/[\p{L}\p{N}]/u)?.[0];

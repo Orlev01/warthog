@@ -77,3 +77,12 @@ export function relativeDayTime(iso: string, timeZone: string | undefined, now: 
   if (day.key === "unknown") return day.label;
   return `${day.label}, ${timeOfDay(iso, timeZone)}`;
 }
+
+/** "just now", "3 min ago", "2 hours ago": how long ago, for things that happened recently. */
+export function agoText(at: Date, now: Date): string {
+  const minutes = Math.round((now.getTime() - at.getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+}

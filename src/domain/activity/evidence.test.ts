@@ -252,6 +252,18 @@ test("an entry names its agent conversation and the product it came through, as 
   }
 });
 
+// 25 Nov — status updates (docs/adr/agent-runs.md): a conversation's new description and the
+// one it replaced, both as the agent described them.
+test("a conversation status update reads as the agent's own words, with what it replaced", () => {
+  const RUN = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
+  const evidence = activityEvidence({ kind: "run_status", source: "agent_reported", outcome: "reported", payload: { run: { id: RUN, label: "Writing the release notes" }, previous: "Fixing the website tests" } });
+  assert.equal(evidence.summary, "Changed what it says it’s working on to “Writing the release notes”");
+  assert.equal(value(evidence, "Conversation (as the agent described it)"), "Writing the release notes");
+  assert.equal(value(evidence, "Before (as the agent described it)"), "Fixing the website tests");
+  const first = activityEvidence({ kind: "run_status", source: "agent_reported", outcome: "reported", payload: { run: { id: RUN, label: "Starting out" } } });
+  assert.equal(value(first, "Before (as the agent described it)"), undefined);
+});
+
 test("what Warthog's read check kept from the agent reads in words, counts only", () => {
   const read = { ...addTask, tool: "google-gmail__read", payload: { ...addTask.payload, resultEvidence: { outcome: "executed", status: 200, guard: { outcome: "masked", counts: { codes: 1, signInLinks: 2, hiddenCharacters: 3 } } } } };
   assert.match(value(activityEvidence(read), "Result") ?? "", /Kept from the agent: 1 sign-in code, 2 sign-in links/);

@@ -396,7 +396,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
   // low-tier profile (when allowed), preferences, the skill index with the house skill, the
   // rules as sentences, the memory it may read and its open tasks — member-scoped by the
   // connection, with no internal ids.
-  const getContextTool = createGetContextTool({ db, keyWrapper, clock });
+  const getContextTool = createGetContextTool({ db, keyWrapper, clock, recorder });
 
   // The tool-body executor the pipeline runs on ALLOW: a connector tool goes to the
   // connector engine under the connection's owner; a core tool is routed to its real body by

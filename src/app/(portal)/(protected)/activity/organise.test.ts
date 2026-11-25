@@ -173,6 +173,17 @@ test("an agent row names its platform in words, and leaves out a placeholder", (
   assert.equal(detail(() => ({ name: "Claude", platform: "Claude", platformName: "Claude", exists: true })), undefined, "a platform that repeats the name adds nothing");
 });
 
+// The Now view links to an agent's actions outside any conversation (docs/adr/agent-runs.md).
+test("actions outside any conversation are a filter of their own", () => {
+  const state = readActivityState({ run: "none", agent: AGENT }, anyDate);
+  assert.equal(state.run, "none");
+  assert.deepEqual(filtersFor(state, widen), { agentId: AGENT, noRun: true });
+  const chip = appliedFilters(state, { agent: "Codex" }).filters.find((filter) => filter.label === "Not in a conversation");
+  assert.ok(chip);
+  assert.doesNotMatch(chip!.removeHref, /run=/);
+  assert.equal(readActivityState({ run: "NONE" }, anyDate).run, "none");
+});
+
 test("one agent conversation is a filter: a run id selects it, a chip names it, anything else is ignored", () => {
   const RUN = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
   const state = readActivityState({ run: RUN.toUpperCase(), agent: AGENT }, anyDate);

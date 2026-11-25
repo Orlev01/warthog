@@ -427,7 +427,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const names = {
       agent: state.agent !== undefined && state.agent !== NONE ? agentLabel(agentNames, state.agent) : undefined,
       service: state.service !== undefined && state.service !== NONE ? serviceLabel(state.service) : undefined,
-      run: state.run !== undefined ? (await listRuns(db, session.userId, dek, { runIds: [state.run] }))[0]?.label : undefined,
+      run: state.run !== undefined && state.run !== NONE ? (await listRuns(db, session.userId, dek, { runIds: [state.run] }))[0]?.label : undefined,
     };
     const applied = appliedFilters(state, names);
     const common = {

@@ -54,7 +54,12 @@ export const TOOL_KINDS: readonly string[] = ["tool_call", "tool_attempt"];
 // Agent-reported activity, including the Warthog-recorded rows of the `log_activity` call
 // that carries the report: an agent's own claim is never counted as a read or change.
 export const REPORT_TOOLS: readonly string[] = ["log_activity"];
-export const REPORT_KINDS: readonly string[] = ["agent_report"];
+export const REPORT_KINDS: readonly string[] = ["agent_report", "run_status"];
+
+// What an agent itself did, as one row each: its calls, the requests Warthog refused before
+// they ran, and its reports. Not a change's intent record (its result is the row), and not what
+// the person or Warthog did to it. Used to count an agent's actions outside any conversation.
+export const AGENT_ACTION_KINDS: readonly string[] = ["tool_call", "tool_rejected", "protocol_rejected", "agent_report"];
 
 // Approval decisions, sensitive releases and the tools that request or collect them.
 export const APPROVAL_KINDS: readonly string[] = ["approval_decision", "card_release", "identity_release"];

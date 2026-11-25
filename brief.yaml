@@ -426,7 +426,11 @@ features:
     whole record and shows either "All <n> entries intact" or the first entry that fails, with the
     advice to export the record and contact the operator (through Contact us in the app); the daily automatic check notifies the
     person (push and email) only if their record fails, and records the pass/fail count, without
-    content, in the operational metrics.
+    content, in the operational metrics. (Amended 25 November 2026, founder: Agents › Now lists every
+    agent's conversations from the last day, grouped by provider, with what each says it is working
+    on, its latest action and whether it called Warthog in the last 15 minutes, refreshing while
+    open; an agent may update its conversation's description, recorded as its own claim; only calls
+    made to Warthog are shown. See docs/adr/agent-runs.md.)
   - >-
     Dispute and undo — any activity entry can be marked as disputed with a note (the original entry
     is never changed; the dispute is added alongside it); an action whose tool declares a reversal

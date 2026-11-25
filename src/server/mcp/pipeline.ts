@@ -570,8 +570,10 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     guardEvidence?: unknown,
   ): Promise<void> {
     // The call's own run (an approved hold), else the request's: get_context starts a run
-    // while it runs, so its own entry joins it.
-    const run = call.run ?? requestObservation.getStore()?.run;
+    // while it runs, so its own entry joins it. When both name the same run, the request's is
+    // read again: get_context may have changed its description while it ran.
+    const current = requestObservation.getStore()?.run;
+    const run = call.run && current?.id === call.run.id ? current : call.run ?? current;
     const recordIds = result === undefined ? [] : recordIdsOf(call.tool, result);
     await targetRecorder.record({
       userId: connection.userId,

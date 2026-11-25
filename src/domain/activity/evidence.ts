@@ -411,6 +411,7 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
   else if (reversal && text("outcome")) summary = text("outcome");
   else if (text("summary")) summary = text("summary");
   else if (entry.kind === "agent_report" && reason) summary = reason;
+  else if (entry.kind === "run_status" && runOf(payload.run)?.label) summary = `Changed what it says it’s working on to “${runOf(payload.run)!.label}”`;
   else if (reason && !reversal) summary = `Agent's reason: ${reason}`;
   else summary = entryTitle(entry);
 
@@ -444,6 +445,7 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
   fact("Platform", text("platform"));
   const conversation = runOf(payload.run);
   fact("Conversation (as the agent described it)", conversation?.label);
+  if (entry.kind === "run_status") fact("Before (as the agent described it)", text("previous"));
   fact("Came through (as the app reported it)", text("via"));
 
   // An agent's reason (the agent's claim) — shown here only when the summary doesn't already.

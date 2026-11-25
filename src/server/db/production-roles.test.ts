@@ -81,9 +81,10 @@ test("runtime role claims and releases undo claims, may set only their approval,
   } finally { await db.query("RESET ROLE"); await db.close(); }
 });
 
-// 16 Nov — agent runs (docs/adr/agent-runs.md). The runtime role starts runs, reads them and
-// marks one seen (UPDATE of last_seen_at only); it can never rewrite whose a run is, when it
-// started or what the agent said it was for. Entry links are append-only like the entries.
+// 16 Nov — agent runs (docs/adr/agent-runs.md). The runtime role starts runs, reads them,
+// marks one seen and (since 25 Nov) updates what the agent says it is working on; it can never
+// rewrite whose a run is, when it started or how it came in. Entry links are append-only like
+// the entries.
 // An account purge carries both away by cascade.
 test("runtime role starts and touches runs but cannot rewrite them, links are append-only, and a purge removes both", async () => {
   const db = await freshDb();
@@ -95,7 +96,10 @@ test("runtime role starts and touches runs but cannot rewrite them, links are ap
     const run = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
     await db.query("INSERT INTO agent_runs (user_id, id, agent_id, started_at, last_seen_at) VALUES ($1, $2, $3, now(), now())", [user.id, run, agentId]);
     await db.query("UPDATE agent_runs SET last_seen_at = now() WHERE user_id = $1 AND id = $2", [user.id, run]);
-    for (const column of ["label_ct = label_ct", "agent_id = agent_id", "user_id = user_id", "started_at = now()", "via = via"]) {
+    // 25 Nov — status updates (docs/adr/agent-runs.md): the agent may change what it says the
+    // conversation is working on; each change is also an entry in the hash-chained record.
+    await db.query("UPDATE agent_runs SET label_ct = label_ct, label_changed_at = now() WHERE user_id = $1 AND id = $2", [user.id, run]);
+    for (const column of ["agent_id = agent_id", "user_id = user_id", "started_at = now()", "via = via"]) {
       await assert.rejects(db.query(`UPDATE agent_runs SET ${column} WHERE false`), /permission denied/, column);
     }
     await assert.rejects(db.query("DELETE FROM agent_runs WHERE false"), /permission denied/);

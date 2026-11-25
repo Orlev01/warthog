@@ -265,3 +265,55 @@ test("an approval checked from another conversation stays with the conversation 
     assert.ok((await listActivity(db, userId, { runId: checking.id }, dek)).some((entry) => entry.tool === "check_approval"), "the check itself is in the checking conversation");
   } finally { await db.close(); }
 });
+
+// 25 Nov — status updates (docs/adr/agent-runs.md): get_context with the conversation's run and
+// a new working_on replaces its description. The change is the agent's claim, recorded as its
+// own agent-reported entry in the run; calls after it carry the new description.
+test("get_context with its run and a new working_on updates the conversation's description", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, agentId, connectionId, dek } = await seed(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const started = await startRunOver(dispatch, connectionId, { working_on: "Fixing the website tests" });
+    const runId = started.run!.id;
+    assert.match(started.run!.note, /new working_on/, "the agent is told it can update it");
+
+    const updated = await startRunOver(dispatch, connectionId, { run: runId, working_on: "Writing the release notes" });
+    assert.equal(updated.run!.id, runId, "the same conversation");
+    assert.equal(updated.run!.workingOn, "Writing the release notes");
+    assert.deepEqual((await listRuns(db, userId, dek, { agentId })).map((run) => run.label), ["Writing the release notes"]);
+
+    const entries = await listActivity(db, userId, { runId }, dek);
+    const status = entries.filter((entry) => entry.kind === "run_status");
+    assert.equal(status.length, 1, "one entry for the change");
+    assert.equal(status[0]!.source, "agent_reported", "labelled as the agent's claim");
+    assert.deepEqual((status[0]!.payload as { run?: unknown; previous?: unknown }).run, { id: runId, label: "Writing the release notes" });
+    assert.equal((status[0]!.payload as { previous?: unknown }).previous, "Fixing the website tests");
+    const calls = entries.filter((entry) => entry.tool === "get_context").map((entry) => (entry.payload as { run?: { label?: string } }).run?.label);
+    assert.deepEqual(calls.sort(), ["Fixing the website tests", "Writing the release notes"], "each call carries the description it was made under");
+
+    // Straight away again: too soon, so nothing changes and nothing is recorded, and the agent
+    // is shown the description that stands.
+    const tooSoon = await startRunOver(dispatch, connectionId, { run: runId, working_on: "Something else" });
+    assert.equal(tooSoon.run!.workingOn, "Writing the release notes");
+    assert.equal((await listActivity(db, userId, { runId }, dek)).filter((entry) => entry.kind === "run_status").length, 1);
+  } finally { await db.close(); }
+});
+
+test("an agent can't change another agent's conversation description", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const owner = await seed(db, config);
+    const other = await seed(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+    const ownerRun = (await startRunOver(dispatch, owner.connectionId, { working_on: "Owner's work" })).run!;
+
+    const borrowed = await startRunOver(dispatch, other.connectionId, { run: ownerRun.id, working_on: "Hijacked" });
+    assert.notEqual(borrowed.run!.id, ownerRun.id, "a run that isn't its own starts its own conversation");
+    assert.deepEqual((await listRuns(db, owner.userId, owner.dek, { agentId: owner.agentId })).map((run) => run.label), ["Owner's work"]);
+    assert.equal((await listActivity(db, owner.userId, { kind: "run_status" }, owner.dek)).length, 0);
+  } finally { await db.close(); }
+});
