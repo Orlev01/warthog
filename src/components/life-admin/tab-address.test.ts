@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ADD_ANCHOR, ADD_TAB_HREF, addFormRedirect, shownLifeAdminAddress } from "./tab-address";
+import { ADD_ANCHOR, ADD_TAB_HREF, addFormRedirect, lifeAdminTab, shownLifeAdminAddress, tabNamed } from "./tab-address";
 
 test("the Add tab's address and its form's anchor", () => {
   assert.equal(ADD_TAB_HREF, "/life-admin?tab=add");
@@ -42,4 +42,14 @@ test("an old link to the add form without a tab goes to the Add tab's address", 
   assert.equal(addFormRedirect("", "#new-record", "add"), null, "already on Add");
   assert.equal(addFormRedirect("?tab=upcoming", "#new-record", "upcoming"), null, "a named tab wins");
   assert.equal(addFormRedirect("", "#record-abc", "records"), null);
+});
+
+// Bills (founder, 25 Nov 2026): the tab after Upcoming, by date or, with `?bills=account`, by
+// account.
+test("the six tabs by name, Bills among them, and Bills' grouping kept in its address", () => {
+  for (const tab of ["records", "add", "upcoming", "bills", "history", "tasks"] as const) assert.equal(tabNamed(tab), tab);
+  assert.equal(lifeAdminTab({ tab: "bills", bills: "account" }), "bills");
+  assert.equal(shownLifeAdminAddress("?tab=bills", "", "bills", "records"), null);
+  assert.equal(shownLifeAdminAddress("?tab=bills&bills=account", "#record-abc", "bills", "records"), null, "already right, grouping and all");
+  assert.equal(shownLifeAdminAddress("?tab=bills&bills=account&notice=updated", "#record-abc", "bills", "add"), null);
 });

@@ -30,7 +30,11 @@ import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions, 
 // becomes a link.
 //
 // The row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
-// reminder notifications, Home and the Coming up list link to.
+// reminder notifications, Home and the Coming up list link to. Where the record also shows on
+// another tab that carries that anchor (Upcoming, Bills), the row is marked `data-record="<id>"`
+// instead, so the page has one anchor per record and a link can still land on the row on screen.
+// A tab may give the row its own muted line (`summary`; Bills: when the next payment is, what it
+// costs) and one more line under it (`extra`; Bills: what it comes out of).
 
 /** An item's own page, with where it stands and its whole journal. */
 export const itemHref = (id: string) => `/life-admin/items/${encodeURIComponent(id)}`;
@@ -333,6 +337,8 @@ export function RecordRow({
   partOf,
   category,
   note,
+  summary: givenSummary,
+  extra,
   anchor = true,
   assets,
   zone = "UTC",
@@ -351,8 +357,13 @@ export function RecordRow({
   category?: string;
   // Added to the line under its name ("in 12 days", on Upcoming).
   note?: string | null;
+  // The line under its name in place of the usual one (kind, when, cost, provider).
+  summary?: string;
+  // One more line under that one (on Bills: "From NAB card ending 2686 · Registered to …").
+  extra?: React.ReactNode;
   // False where the record also shows on another tab that carries its `record-<id>` anchor
-  // (a renewal on Upcoming that lives on Records), so the page has one anchor per record.
+  // (a renewal on Upcoming that lives on Records), so the page has one anchor per record: the
+  // row is then marked `data-record="<id>"`, for a link to land on it on the tab shown.
   anchor?: boolean;
   assets: readonly AssetOption[];
   zone?: string;
@@ -367,9 +378,9 @@ export function RecordRow({
   const ReminderIcon = reminders?.on ? Bell : BellOff;
   const suggested = record.reviewState === "suggested";
   const handling = handlingText(record.handling, zone);
-  const summary = [rowSummary(type, record, { name, titleKey, lead: Boolean(lead), category, zone, currentYear }), note].filter(Boolean).join(" · ");
+  const summary = [givenSummary ?? rowSummary(type, record, { name, titleKey, lead: Boolean(lead), category, zone, currentYear }), note].filter(Boolean).join(" · ");
   return (
-    <li {...(anchor ? { id: `record-${record.id}`, tabIndex: -1 } : {})} className={`${LIST_ROW} scroll-mt-32`}>
+    <li {...(anchor ? { id: `record-${record.id}` } : { "data-record": record.id })} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
       <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-[1_1_16rem] flex-col gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -389,6 +400,7 @@ export function RecordRow({
             ) : null}
           </div>
           {summary ? <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">{summary}</p> : null}
+          {extra ? <div className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">{extra}</div> : null}
           {partOf ? (
             <p className="inline-flex min-w-0 items-center gap-1.5 text-sm text-fg-muted [overflow-wrap:anywhere]">
               <Link2 aria-hidden={true} className="h-4 w-4 shrink-0" />

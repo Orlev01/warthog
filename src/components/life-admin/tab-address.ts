@@ -1,4 +1,4 @@
-// Life admin's tabs in the address (founder, 23 and 24 Nov 2026): `?tab=records|add|upcoming|history|tasks`
+// Life admin's tabs in the address (founder, 23, 24 and 25 Nov 2026): `?tab=records|add|upcoming|bills|history|tasks`
 // (the page's default tab has no parameter: Records, or Add while nothing is on file), and older
 // addresses mapped onto them — the two-level
 // `?view=life|tasks&tab=…`, the Bookings tab (its bookings are Upcoming's now), the moving
@@ -12,7 +12,7 @@ import type { LifeAdminTab } from "./record-view-types";
 
 type Params = Readonly<Record<string, string | readonly string[] | undefined>>;
 
-const PAGE_TABS: readonly LifeAdminTab[] = ["records", "add", "upcoming", "history", "tasks"];
+const PAGE_TABS: readonly LifeAdminTab[] = ["records", "add", "upcoming", "bills", "history", "tasks"];
 
 // The Add tab (what's still to fill in, and adding a record) and its add form's anchor.
 export const ADD_TAB_HREF = "/life-admin?tab=add";

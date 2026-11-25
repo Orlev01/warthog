@@ -14,14 +14,15 @@ import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { calendarDate, MAX_FIELD_CHARS, MAX_NOTES_CHARS } from "@/domain/life-admin/normalise";
 import { CYCLES, type FieldDef, type RecordTypeDef } from "@/domain/life-admin/record-types";
 import { dueLabelOf, fieldLabel, statusChoices, statusLabel, typedFieldLabel } from "./record-format";
-import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordFilter } from "./record-view-types";
+import type { AssetOption, BillsGrouping, LifeAdminAction, LifeAdminRecordView, RecordFilter } from "./record-view-types";
 
 // The typed record forms (docs/adr/life-admin-profile.md): adding a record of a kind from the
 // person's own catalogue and editing one, with an input per field of the kind chosen by the
 // field's kind — a date picker for dates, a date-and-time picker with the time zone it happens
 // in for date-times, a month picker for a month and year, a decimal keypad with its unit for
 // numbers and amounts, Yes/No for a yes-or-no field, suggestions (a <datalist>) for fields
-// with usual values, a text area for notes — then the due date in the kind's own words
+// with usual values (and, for a bill's Paid with, the person's open cards and accounts), a text
+// area for notes — then the due date in the kind's own words
 // ("Expires"; a booking's start sets it, so a booking has none), the status in the kind's
 // lifecycle's words (a booking: confirmed, waiting, cancelled, didn't go; a case: open,
 // waiting, resolved) and, for a record that may belong to an anchor, which one.
@@ -40,19 +41,25 @@ export function summaryClass(variant: ButtonVariant, size: "sm" | "md" = "md"): 
   return buttonClasses({ variant, size, className: "w-fit list-none [&::-webkit-details-marker]:hidden" });
 }
 
-// Where a record action lands afterwards: the tab it was taken on (Records, Upcoming or History),
-// under the filters it was shown with. Each tab provides its own; every record form posts them back as
-// hidden values (`returnTab`, `returnCategory`, `returnStatus`, `returnPage`) and the page's
-// actions redirect there.
-export type RecordReturn = { tab: "records" | "add" | "upcoming" | "history"; filter: RecordFilter & { page?: number } };
-const RecordReturnContext = React.createContext<RecordReturn>({ tab: "records", filter: { categories: [], statuses: [] } });
+// Where a record action lands afterwards: the tab it was taken on (Records, Add, Upcoming, Bills or
+// History), under the filters it was shown with (Bills: its grouping). Each tab provides its own;
+// every record form posts them back as hidden values (`returnTab`, `returnCategory`,
+// `returnStatus`, `returnPage`, `returnBills`) and the page's actions redirect there.
+export type RecordReturn = {
+  tab: "records" | "add" | "upcoming" | "bills" | "history";
+  filter?: RecordFilter & { page?: number };
+  bills?: BillsGrouping;
+};
+const NO_FILTER: RecordFilter & { page?: number } = { categories: [], statuses: [] };
+const RecordReturnContext = React.createContext<RecordReturn>({ tab: "records", filter: NO_FILTER });
 export const RecordReturnProvider = RecordReturnContext.Provider;
 
 export function ReturnFields() {
-  const { tab, filter } = React.useContext(RecordReturnContext);
+  const { tab, filter = NO_FILTER, bills } = React.useContext(RecordReturnContext);
   return (
     <>
       <input type="hidden" name="returnTab" value={tab} />
+      {tab === "bills" && bills ? <input type="hidden" name="returnBills" value={bills} /> : null}
       {filter.categories.map((category) => (
         <input key={`c-${category}`} type="hidden" name="returnCategory" value={category} />
       ))}
@@ -63,6 +70,12 @@ export function ReturnFields() {
     </>
   );
 }
+
+// The person's open cards and bank accounts (their labels, "NAB Qantas Rewards card ending 2686"),
+// which a bill's "Paid with" suggests in the Add and Edit forms. Closed ones are never offered.
+// Life admin provides them once for every tab; elsewhere there are none.
+const PaymentSourcesContext = React.createContext<readonly string[]>([]);
+export const PaymentSourcesProvider = PaymentSourcesContext.Provider;
 
 // A small muted line under a control: help text or the reason a control is unavailable.
 export const HINT_CLASS = "text-sm text-fg-muted";
@@ -176,6 +189,7 @@ function FieldInput({
   value: string;
   zone: string;
 }) {
+  const sources = React.useContext(PaymentSourcesContext);
   const name = `field:${field?.key ?? ""}`;
   const kind = field?.kind ?? "text";
   const hint =
@@ -230,7 +244,8 @@ function FieldInput({
       </div>
     );
   }
-  const suggestions = kind === "cycle" ? CYCLES : field?.choices;
+  // Usual values (a cycle's, a field's own choices) or, for Paid with, the person's open cards and accounts.
+  const suggestions = kind === "cycle" ? CYCLES : field?.suggest === "payment_sources" ? sources : field?.choices;
   const listId = suggestions?.length ? `${id}-choices` : undefined;
   const short = kind === "amount" || kind === "currency" || kind === "last4" || kind === "cycle";
   return (

@@ -8,9 +8,12 @@ import { DEFAULT_LIST_STATUSES, listedRecords } from "./record-groups";
 import { AddView, RecordsView, assetsOf, nothingOnFile } from "./records-view";
 import type { ProfileBuildView } from "@/domain/home/profile-build";
 import { UpcomingView } from "./upcoming-view";
+import { BillsView, paymentSourceLabels } from "./bills-view";
 import { HistoryView } from "./history-view";
+import { PaymentSourcesProvider } from "./record-forms";
 import { addFormRedirect, shownLifeAdminAddress } from "./tab-address";
 import type {
+  BillsGrouping,
   CategoryStateView,
   HistoryFilter,
   LifeAdminRecordView,
@@ -23,6 +26,7 @@ import type {
 
 export type {
   AssetOption,
+  BillsGrouping,
   CategoryStateView,
   HistoryFilter,
   NextStepView,
@@ -50,13 +54,18 @@ export type {
 //     nothing is on file;
 //   • "Upcoming": what needs them or is booked — renewals and expiry dates coming up, every
 //     booking ahead, and next steps due (./upcoming-view.tsx);
+//   • "Bills": what they pay on repeat, across categories — what it costs, when the next payment
+//     is and which card or account it comes out of — by date or by account (./bills-view.tsx);
 //   • "History": everything finished, strictly apart, newest first, filtered by category and
 //     status (./history-view.tsx);
 //   • "Tasks", when the page passes it (LifeAdminScreen does).
 // Agents fill most of it in from email; what they save arrives as a suggestion the person
 // confirms, and their change to a confirmed record waits for the person. Each record keeps its
-// `#record-<id>` anchor, so reminder links still land on it: one this page doesn't show as a row
-// (a booking, something finished, or in a category the person hid) goes to the item's own page.
+// `#record-<id>` anchor, so reminder links still land on it (on the tab shown, its row there,
+// marked `data-record`, when that tab lists it too: Upcoming, Bills): one this page doesn't show as
+// a row (a booking, something finished, or in a category the person hid) goes to the item's own
+// page. Every tab's Add and Edit forms suggest the person's open cards and accounts for a bill's
+// Paid with.
 //
 // This is the pure, prop-driven VIEW (a Client Component in the app): it renders FROM the
 // props the Life Admin loader hands it, with fields already decrypted, agent names resolved
@@ -85,6 +94,8 @@ export type LifeAdminViewProps = RecordActions & {
   recordFilter?: RecordFilter;
   // History's category and status filters and page, validated by the page. Absent ⇒ everything.
   historyFilter?: HistoryFilter;
+  // How the Bills tab groups (`?bills=account`), validated by the page. Absent ⇒ by date.
+  billsGroup?: BillsGrouping;
   // Every live record the person has (dismissed ones are never loaded).
   records: ReadonlyArray<LifeAdminRecordView>;
   // Which tab a render shows first; every tab is always navigable.
@@ -104,16 +115,20 @@ export type LifeAdminViewProps = RecordActions & {
 
 export { nextTabIndex } from "@/components/ui/view-tabs";
 
-// A `#record-<id>` link (reminder notifications, older bookmarks) lands on its row in the tab
-// shown: a row inside a closed disclosure is opened first, and one that tab doesn't show (a
-// booking, something finished, the filters leave it out, or its category is hidden) goes to the
-// item's own page instead.
+// A `#record-<id>` link (reminder notifications, older bookmarks, coming back from an edit) lands
+// on its row in the tab shown — the row carrying the anchor, else the same record's row on that
+// tab (`data-record`: on Upcoming or Bills, a record that lives on Records): a row inside a closed
+// disclosure is opened first, and one that tab doesn't show (a booking, something finished, the
+// filters leave it out, or its category is hidden) goes to the item's own page instead.
 function useRecordAnchor() {
   React.useEffect(() => {
     const match = /^#record-([0-9a-f-]{36})$/i.exec(window.location.hash);
     if (!match) return;
-    const found = document.getElementById(`record-${match[1]}`);
-    const row = found && !found.closest('[role="tabpanel"][hidden]') ? found : null;
+    const shown = (element: HTMLElement | null) => (element && !element.closest('[role="tabpanel"][hidden]') ? element : null);
+    const row =
+      shown(document.getElementById(`record-${match[1]}`)) ??
+      [...document.querySelectorAll<HTMLElement>(`[data-record="${match[1]}"]`)].find((element) => shown(element)) ??
+      null;
     if (!row) {
       const item = `/life-admin/items/${match[1]!.toLowerCase()}`;
       // Not when the person just came back from that item's page: it would send them straight back.
@@ -155,7 +170,7 @@ function useCurrentAddress(shown: LifeAdminTab, defaultTab: LifeAdminTab) {
   }, []);
 }
 
-// Life admin's tabs: Records | Add | Upcoming | History (| Tasks), then the selected tab's panels.
+// Life admin's tabs: Records | Add | Upcoming | Bills | History (| Tasks), then the selected tab's panels.
 // Every tab stays mounted, so a half-typed record or task survives a switch. With nothing on file
 // (`nothingOnFile`: no record shown and nothing to check) Add is the tab an address without `?tab=`
 // opens.
@@ -168,6 +183,7 @@ export function LifeAdminView({
   nextSteps = [],
   recordFilter = { categories: [], statuses: DEFAULT_LIST_STATUSES },
   historyFilter = { categories: [], statuses: [] },
+  billsGroup = "date",
   records,
   initialTab,
   addType,
@@ -196,6 +212,8 @@ export function LifeAdminView({
   const shown = initialTab ?? defaultTab;
   useCurrentAddress(shown, defaultTab);
   const assets = React.useMemo(() => assetsOf(records, catalogue), [records, catalogue]);
+  // A bill's Paid with suggests the person's open cards and accounts, in every tab's forms.
+  const sources = React.useMemo(() => paymentSourceLabels(records, catalogue), [records, catalogue]);
   const withNotice = (key: LifeAdminTab, content: React.ReactNode) => (
     <>
       {shown === key ? notice : null}
@@ -203,61 +221,71 @@ export function LifeAdminView({
     </>
   );
   return (
-    <ViewPanels
-      label="Life admin"
-      parameter="tab"
-      defaultTab={defaultTab}
-      initialTab={shown}
-      heading={heading}
-      tabs={[
-        {
-          key: "records",
-          label: "Records",
-          content: withNotice(
-            "records",
-            <RecordsView
-              records={records}
-              catalogue={catalogue}
-              categories={states}
-              suggestedCategories={suggestedCategories}
-              today={today}
-              zone={zone}
-              filter={recordFilter}
-              assets={assets}
-              actions={actions}
-            />,
-          ),
-        },
-        {
-          key: "add",
-          label: "Add",
-          content: withNotice(
-            "add",
-            <AddView
-              records={records}
-              catalogue={catalogue}
-              categories={states}
-              zone={zone}
-              addType={addType}
-              assets={assets}
-              profileBuild={profileBuild}
-              actions={actions}
-            />,
-          ),
-        },
-        {
-          key: "upcoming",
-          label: "Upcoming",
-          content: withNotice("upcoming", <UpcomingView records={listed} catalogue={catalogue} nextSteps={nextSteps} today={today} zone={zone} actions={actions} />),
-        },
-        {
-          key: "history",
-          label: "History",
-          content: withNotice("history", <HistoryView records={listed} catalogue={catalogue} filter={historyFilter} today={today} zone={zone} actions={actions} />),
-        },
-        ...(tasks ? [{ key: "tasks", label: "Tasks", content: withNotice("tasks", tasks) }] : []),
-      ]}
-    />
+    <PaymentSourcesProvider value={sources}>
+      <ViewPanels
+        label="Life admin"
+        parameter="tab"
+        defaultTab={defaultTab}
+        initialTab={shown}
+        heading={heading}
+        tabs={[
+          {
+            key: "records",
+            label: "Records",
+            content: withNotice(
+              "records",
+              <RecordsView
+                records={records}
+                catalogue={catalogue}
+                categories={states}
+                suggestedCategories={suggestedCategories}
+                today={today}
+                zone={zone}
+                filter={recordFilter}
+                assets={assets}
+                actions={actions}
+              />,
+            ),
+          },
+          {
+            key: "add",
+            label: "Add",
+            content: withNotice(
+              "add",
+              <AddView
+                records={records}
+                catalogue={catalogue}
+                categories={states}
+                zone={zone}
+                addType={addType}
+                assets={assets}
+                profileBuild={profileBuild}
+                actions={actions}
+              />,
+            ),
+          },
+          {
+            key: "upcoming",
+            label: "Upcoming",
+            content: withNotice("upcoming", <UpcomingView records={listed} catalogue={catalogue} nextSteps={nextSteps} today={today} zone={zone} actions={actions} />),
+          },
+          {
+            key: "bills",
+            label: "Bills",
+            content: withNotice(
+              "bills",
+              <BillsView records={records} listed={listed} catalogue={catalogue} today={today} zone={zone} group={billsGroup} assets={assets} actions={actions} />,
+            ),
+          },
+          {
+            key: "history",
+            label: "History",
+            content: withNotice("history", <HistoryView records={listed} catalogue={catalogue} filter={historyFilter} today={today} zone={zone} actions={actions} />),
+          },
+          ...(tasks ? [{ key: "tasks", label: "Tasks", content: withNotice("tasks", tasks) }] : []),
+        ]}
+      />
+    </PaymentSourcesProvider>
   );
 }
 

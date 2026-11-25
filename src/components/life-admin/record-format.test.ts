@@ -227,7 +227,7 @@ test("a row's one muted line: kind, when, cost and cycle, provider, each only on
 
 test("a cost reads once with its currency and cycle; one written with its own currency reads as written", () => {
   assert.equal(costText({ amount: "25.99", currency: "AUD", cycle: "monthly" }), "AUD 25.99 a month");
-  assert.equal(costText({ price: "1,250" }), "1250.00");
+  assert.equal(costText({ price: "1,250" }), "1,250.00", "thousands grouped");
   assert.equal(costText({ amount: "A$18.50", cycle: "weekly" }), "A$18.50 a week");
   assert.equal(costText({ amount: " " }), null);
   assert.equal(costText({ provider: "Netflix" }), null);

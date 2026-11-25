@@ -117,9 +117,9 @@ function renderThings(records: ReadonlyArray<LifeAdminRecordView>, overrides: Pa
   return render(base({ records, ...overrides }));
 }
 
-// The markup inside one tab panel (0 Records, 1 Add, 2 Upcoming, 3 History), so an assertion about
-// one tab never meets another's content.
-function tabPanel(markup: string, index: 0 | 1 | 2 | 3): string {
+// The markup inside one tab panel (0 Records, 1 Add, 2 Upcoming, 3 Bills, 4 History), so an
+// assertion about one tab never meets another's content.
+function tabPanel(markup: string, index: 0 | 1 | 2 | 3 | 4): string {
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
 }
@@ -308,7 +308,7 @@ test("names the tabs — Records, Upcoming and History — as navigable controls
   assert.match(visibleText(selected[1]!), /^Records$/, "Records opens first, with no count in its name");
   const finished = render(base({ records: [...RECORDS, { ...SUB_A, id: "sub-done", status: "cancelled", phase: { phase: "ended", bucket: "finished", live: false, label: "Ended", comingUp: false } }] }));
   assert.doesNotMatch(tabPanel(finished, 0), /id="record-sub-done"/, "a cancelled record isn't on Records");
-  assert.match(tabPanel(finished, 3), /id="record-sub-done"/, "it's in History");
+  assert.match(tabPanel(finished, 4), /id="record-sub-done"/, "it's in History");
 });
 
 // ════════════════════════════════════════════════════════════════════════════════

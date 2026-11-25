@@ -68,6 +68,8 @@ export interface FieldDef {
   readonly unit?: string;
   // A field every kind has (name, provider, amount …): the skill lists these once.
   readonly common?: true;
+  // Suggestions the form offers from the person's own records: their cards and bank accounts.
+  readonly suggest?: "payment_sources";
 }
 
 export interface CategoryDef {
@@ -113,9 +115,18 @@ export interface RecordTypeDef {
   readonly account?: true;
   // An identity document: any document-number-shaped value is refused.
   readonly documentLike?: true;
+  // Something the person pays on repeat (the Bills tab): whether its own date is the payment
+  // ("due_date": a renewal, an annual fee) or it needs a "next_payment" of its own (a lease's date
+  // is when it ends); and whether it is charged by itself ("auto") or the person pays it ("manual").
+  readonly bill?: BillDef;
   // A booking with no end lasts this long.
   readonly defaultMinutes?: number;
   readonly origin: "builtin" | "custom";
+}
+
+export interface BillDef {
+  readonly date: "due_date" | "next_payment";
+  readonly paid: "auto" | "manual";
 }
 
 // The cycles a cost can recur on, and how each converts to a month (for monthly totals).
@@ -163,6 +174,16 @@ export const ACCOUNT_FIELDS: readonly FieldDef[] = [
 ];
 export const ACCOUNT_FIELD_KEYS: readonly string[] = ACCOUNT_FIELDS.map((field) => field.key);
 
+// What a bill adds beside its cost and cycle: when the next payment is (only for kinds whose own
+// date isn't the payment) and which of the person's cards or accounts it comes out of. Paid with
+// names the person's own card or account by its last 4; it is never how to pay (no payee, BSB,
+// biller code or link: those are refused).
+export const BILL_FIELDS: readonly FieldDef[] = [
+  f("next_payment", "Next payment", "date"),
+  f("paid_with", "Paid with", "text", { hint: "The card or account it comes out of, for example Visa ending 1234. Last 4 digits only.", suggest: "payment_sources" }),
+];
+export const BILL_FIELD_KEYS: readonly string[] = BILL_FIELDS.map((field) => field.key);
+
 export const BOOKING_FIELDS: readonly FieldDef[] = [
   f("starts_at", "Starts", "datetime"),
   f("ends_at", "Ends", "datetime"),
@@ -189,14 +210,16 @@ const BOOKING_REMINDERS = [1, 0] as const;
 
 /**
  * Merge a kind's own fields with its lifecycle's and the common ones (and, for an account, the
- * account fields beside its number: name, provider, account name, number, account email); a kind's
- * own definition (and its label overrides) win.
+ * account fields beside its number: name, provider, account name, number, account email; for a
+ * bill, next payment and paid with after its cycle); a kind's own definition (and its label
+ * overrides) win.
  */
 export function mergeFields(
   own: readonly FieldDef[],
   lifecycle: Lifecycle,
   labels: Readonly<Record<string, string>> = {},
   account = false,
+  bill?: BillDef,
 ): FieldDef[] {
   const lifecycleFields = lifecycle === "booking" ? BOOKING_FIELDS : lifecycle === "case" ? CASE_FIELDS : [];
   const ownKeys = new Set(own.map((field) => field.key));
@@ -210,7 +233,10 @@ export function mergeFields(
   for (const field of leading) push(ownKeys.has(field.key) ? own.find((o) => o.key === field.key)! : field);
   for (const field of lifecycleFields) push(ownKeys.has(field.key) ? own.find((o) => o.key === field.key)! : field);
   for (const field of own) push(field);
-  for (const field of COMMON_TRAILING) push(field);
+  for (const field of COMMON_TRAILING) {
+    push(field);
+    if (field.key === "cycle" && bill) for (const extra of BILL_FIELDS) if (extra.key !== "next_payment" || bill.date === "next_payment") push(extra);
+  }
   return merged;
 }
 
@@ -262,14 +288,18 @@ interface KindSpec {
   readonly account?: true;
   readonly documentLike?: true;
   readonly defaultMinutes?: number;
+  readonly bill?: BillDef["paid"];
 }
 
 /** Build a kind definition from a spec (built-in and custom kinds alike). */
 export function buildKind(categoryId: string, spec: KindSpec, origin: "builtin" | "custom"): RecordTypeDef {
   const lifecycle = spec.lifecycle ?? "standing";
   // Only something the person holds is an account: not a thing others belong to, an ID document,
-  // a booking or a matter in progress.
-  const account = Boolean(spec.account) && lifecycle === "standing" && !spec.anchor && !spec.documentLike;
+  // a booking or a matter in progress. A bill is always an account (the email it's registered to).
+  const account = Boolean(spec.account || spec.bill) && lifecycle === "standing" && !spec.anchor && !spec.documentLike;
+  const bill: BillDef | undefined = spec.bill && lifecycle === "standing" && !spec.anchor
+    ? { date: spec.due && ["renews", "due", "expires"].includes(spec.due.means) ? "due_date" : "next_payment", paid: spec.bill }
+    : undefined;
   const identity = spec.identity ?? (lifecycle === "booking" ? [["provider", "reference"], ["provider", "starts_at"]] : lifecycle === "case" ? [["provider", "reference"], ["provider", "opened_on"]] : []);
   return {
     id: `${categoryId}.${spec.key}`,
@@ -280,13 +310,14 @@ export function buildKind(categoryId: string, spec: KindSpec, origin: "builtin" 
     ...(spec.anchor ? { anchor: true as const } : {}),
     ...(spec.belongsTo ?? (lifecycle !== "standing" ? ["any"] : undefined) ? { belongsTo: spec.belongsTo ?? ["any"] } : {}),
     ...(spec.due ? { due: spec.due } : lifecycle === "booking" ? { due: { means: "starts" as const, label: "Starts" } } : {}),
-    fields: mergeFields(spec.fields ?? [], lifecycle, spec.labels, account),
+    fields: mergeFields(spec.fields ?? [], lifecycle, spec.labels, account, bill),
     identity,
     ...(spec.fallbackIdentity ? { fallbackIdentity: spec.fallbackIdentity } : {}),
     ...(spec.singleton ? { singleton: true as const } : {}),
     storedKind: spec.storedKind ?? "item",
     ...(spec.reminders ? { reminders: spec.reminders } : lifecycle === "booking" ? { reminders: BOOKING_REMINDERS } : {}),
     ...(account ? { account: true as const } : {}),
+    ...(bill ? { bill } : {}),
     ...(spec.documentLike ? { documentLike: true as const } : {}),
     ...(lifecycle === "booking" ? { defaultMinutes: spec.defaultMinutes ?? 60 } : {}),
     origin,
@@ -300,26 +331,26 @@ const cover = (choices: readonly string[]) => f("cover", "Cover", "text", { choi
 const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
   home: [
     { key: "property", label: "Home", anchor: true, use: "A place you live in or own. Its lease or mortgage, insurance, rates, utilities and tradies belong to it.", fields: [f("address", "Address", "place"), f("role", "Your role", "text", { choices: ["renter", "owner", "strata owner", "landlord"] })], labels: { name: "Name, for example Home" }, identity: [["address"]] },
-    { key: "lease", account: true, label: "Lease", belongsTo: ["home.property"], use: "A rental lease: rent, when it ends, the agent and the bond.", due: { means: "ends", label: "Lease ends" }, reminders: [90, 30], fields: [f("starts_on", "Started", "date"), f("bond", "Bond", "amount"), f("bond_reference", "Bond number", "reference")], labels: { provider: "Agent or landlord", amount: "Rent" }, identity: [["parent"]] },
-    { key: "mortgage", account: true, label: "Mortgage", belongsTo: ["home.property"], use: "A home loan: the lender, rate and when a fixed rate ends.", due: { means: "ends", label: "Fixed rate ends" }, reminders: [60, 14], fields: [f("last4", "Loan account (last 4)", "last4"), f("rate", "Interest rate"), f("rate_type", "Rate type", "text", { choices: ["variable", "fixed", "split"] })], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
-    { key: "insurance", account: true, label: "Home insurance", belongsTo: ["home.property"], use: "Building, contents, landlord or renters insurance.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["building", "contents", "building and contents", "landlord", "renters"]), f("sum_insured", "Sum insured", "amount"), f("excess", "Excess", "amount"), f("claims_phone", "Claims phone", "phone")], labels: ins, identity: policy },
-    { key: "rates", account: true, label: "Rates or levies", belongsTo: ["home.property"], use: "Council rates, strata levies, water rates or land tax.", due: { means: "due", label: "Next instalment" }, reminders: [14, 3], fields: [f("rates_kind", "What", "text", { choices: ["council rates", "strata levies", "water rates", "land tax"] })], labels: { provider: "Council or strata manager", reference: "Assessment or lot number" }, identity: policy },
+    { key: "lease", bill: "auto", account: true, label: "Lease", belongsTo: ["home.property"], use: "A rental lease: rent, when it ends, the agent and the bond.", due: { means: "ends", label: "Lease ends" }, reminders: [90, 30], fields: [f("starts_on", "Started", "date"), f("bond", "Bond", "amount"), f("bond_reference", "Bond number", "reference")], labels: { provider: "Agent or landlord", amount: "Rent" }, identity: [["parent"]] },
+    { key: "mortgage", bill: "auto", account: true, label: "Mortgage", belongsTo: ["home.property"], use: "A home loan: the lender, rate and when a fixed rate ends.", due: { means: "ends", label: "Fixed rate ends" }, reminders: [60, 14], fields: [f("last4", "Loan account (last 4)", "last4"), f("rate", "Interest rate"), f("rate_type", "Rate type", "text", { choices: ["variable", "fixed", "split"] })], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "insurance", bill: "auto", account: true, label: "Home insurance", belongsTo: ["home.property"], use: "Building, contents, landlord or renters insurance.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["building", "contents", "building and contents", "landlord", "renters"]), f("sum_insured", "Sum insured", "amount"), f("excess", "Excess", "amount"), f("claims_phone", "Claims phone", "phone")], labels: ins, identity: policy },
+    { key: "rates", bill: "manual", account: true, label: "Rates or levies", belongsTo: ["home.property"], use: "Council rates, strata levies, water rates or land tax.", due: { means: "due", label: "Next instalment" }, reminders: [14, 3], fields: [f("rates_kind", "What", "text", { choices: ["council rates", "strata levies", "water rates", "land tax"] })], labels: { provider: "Council or strata manager", reference: "Assessment or lot number" }, identity: policy },
     { key: "visit", label: "Tradie or inspection", lifecycle: "booking", use: "A tradie, cleaner, inspection or open home booked at the home.", defaultMinutes: 120, fields: [f("visit_kind", "What", "text", { choices: ["tradie", "cleaner", "inspection", "open home"] }), f("job", "Job")], labels: { provider: "Who's coming" } },
     { key: "repair", label: "Repair request", lifecycle: "case", use: "A repair or maintenance request with the landlord, agent or strata.", fields: [f("issue", "Issue")], labels: { provider: "Agent, landlord or tradie", reference: "Request number" } },
   ],
   utilities: [
-    { key: "energy", account: true, label: "Electricity or gas", belongsTo: ["home.property"], use: "An electricity or gas account.", due: { means: "ends", label: "Plan or discount ends" }, reminders: [30], fields: [f("service", "Service", "text", { choices: ["electricity", "gas"] }), f("plan", "Plan"), f("meter_id", "NMI or MIRN")], labels: { provider: "Retailer", reference: "Account number", amount: "Typical bill" }, identity: policy },
-    { key: "water", account: true, label: "Water", belongsTo: ["home.property"], use: "A water account.", labels: { reference: "Account number", amount: "Typical bill" }, identity: policy },
-    { key: "internet", account: true, label: "Internet", belongsTo: ["home.property"], use: "An NBN or other internet plan.", due: { means: "ends", label: "Contract ends" }, reminders: [30], fields: [f("plan", "Plan")], labels: { reference: "Account number" }, identity: policy },
-    { key: "phone", account: true, label: "Phone", use: "A mobile or home phone plan.", due: { means: "ends", label: "Contract ends" }, reminders: [30], fields: [f("plan", "Plan"), f("phone_number", "Phone number", "phone")], labels: { reference: "Account number" }, identity: policy },
+    { key: "energy", bill: "auto", account: true, label: "Electricity or gas", belongsTo: ["home.property"], use: "An electricity or gas account.", due: { means: "ends", label: "Plan or discount ends" }, reminders: [30], fields: [f("service", "Service", "text", { choices: ["electricity", "gas"] }), f("plan", "Plan"), f("meter_id", "NMI or MIRN")], labels: { provider: "Retailer", reference: "Account number", amount: "Typical bill" }, identity: policy },
+    { key: "water", bill: "auto", account: true, label: "Water", belongsTo: ["home.property"], use: "A water account.", labels: { reference: "Account number", amount: "Typical bill" }, identity: policy },
+    { key: "internet", bill: "auto", account: true, label: "Internet", belongsTo: ["home.property"], use: "An NBN or other internet plan.", due: { means: "ends", label: "Contract ends" }, reminders: [30], fields: [f("plan", "Plan")], labels: { reference: "Account number" }, identity: policy },
+    { key: "phone", bill: "auto", account: true, label: "Phone", use: "A mobile or home phone plan.", due: { means: "ends", label: "Contract ends" }, reminders: [30], fields: [f("plan", "Plan"), f("phone_number", "Phone number", "phone")], labels: { reference: "Account number" }, identity: policy },
   ],
   vehicles: [
     { key: "vehicle", label: "Vehicle", anchor: true, use: "A car, motorcycle, caravan, trailer or boat. Its rego, insurance, servicing and bookings belong to it.", fields: [f("body", "Type", "text", { choices: ["car", "motorcycle", "van", "truck", "caravan", "trailer", "boat"] }), f("make", "Make"), f("model", "Model"), f("year", "Year", "number"), f("plate", "Number plate"), f("state", "State", "text", { choices: STATES }), f("vin", "VIN")], labels: { name: "Nickname or make and model" }, identity: [["plate"], ["vin"]] },
-    { key: "registration", account: true, label: "Registration", belongsTo: ["vehicles.vehicle"], use: "A vehicle's rego: when it expires, what it costs, and the CTP (green slip) insurer.", due: { means: "expires", label: "Expires" }, reminders: [30, 7], fields: [f("plate", "Number plate"), f("state", "State", "text", { choices: STATES }), f("term", "Term", "text", { choices: ["3 months", "6 months", "12 months"] }), f("ctp_insurer", "CTP or green slip insurer"), f("inspection", "Inspection needed", "text", { hint: "For example a pink slip or safety certificate." })], labels: { provider: "Registration authority", reference: "Billing or customer number", amount: "Renewal cost" }, identity: [["plate"], ["parent"]] },
-    { key: "insurance", account: true, label: "Vehicle insurance", belongsTo: ["vehicles.vehicle"], use: "Comprehensive or third-party insurance for a vehicle.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["comprehensive", "third party fire and theft", "third party property"]), f("sum_insured", "Sum insured", "amount"), f("excess", "Excess", "amount"), f("claims_phone", "Claims phone", "phone")], labels: ins, identity: policy },
+    { key: "registration", bill: "manual", account: true, label: "Registration", belongsTo: ["vehicles.vehicle"], use: "A vehicle's rego: when it expires, what it costs, and the CTP (green slip) insurer.", due: { means: "expires", label: "Expires" }, reminders: [30, 7], fields: [f("plate", "Number plate"), f("state", "State", "text", { choices: STATES }), f("term", "Term", "text", { choices: ["3 months", "6 months", "12 months"] }), f("ctp_insurer", "CTP or green slip insurer"), f("inspection", "Inspection needed", "text", { hint: "For example a pink slip or safety certificate." })], labels: { provider: "Registration authority", reference: "Billing or customer number", amount: "Renewal cost" }, identity: [["plate"], ["parent"]] },
+    { key: "insurance", bill: "auto", account: true, label: "Vehicle insurance", belongsTo: ["vehicles.vehicle"], use: "Comprehensive or third-party insurance for a vehicle.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["comprehensive", "third party fire and theft", "third party property"]), f("sum_insured", "Sum insured", "amount"), f("excess", "Excess", "amount"), f("claims_phone", "Claims phone", "phone")], labels: ins, identity: policy },
     { key: "service", label: "Servicing", belongsTo: ["vehicles.vehicle"], use: "When a vehicle's next service is due and who services it.", due: { means: "due", label: "Next service" }, reminders: [14], fields: [f("last_service", "Last service", "date"), f("odometer", "Odometer at last service", "number", { unit: "km" })], labels: { provider: "Workshop" }, identity: [["parent"]] },
-    { key: "roadside", account: true, label: "Roadside assistance", belongsTo: ["vehicles.vehicle"], use: "Roadside assistance membership, such as NRMA, RACV or RACQ.", due: { means: "renews", label: "Renews" }, fields: [f("tier", "Level")], labels: { reference: "Member number", contact: "Assistance phone" }, identity: policy },
-    { key: "toll", account: true, label: "Toll account", belongsTo: ["vehicles.vehicle"], use: "A toll account or e-TAG.", labels: { provider: "Toll provider", reference: "Account number" }, identity: policy },
+    { key: "roadside", bill: "auto", account: true, label: "Roadside assistance", belongsTo: ["vehicles.vehicle"], use: "Roadside assistance membership, such as NRMA, RACV or RACQ.", due: { means: "renews", label: "Renews" }, fields: [f("tier", "Level")], labels: { reference: "Member number", contact: "Assistance phone" }, identity: policy },
+    { key: "toll", bill: "auto", account: true, label: "Toll account", belongsTo: ["vehicles.vehicle"], use: "A toll account or e-TAG.", labels: { provider: "Toll provider", reference: "Account number" }, identity: policy },
     { key: "booking", label: "Vehicle booking", lifecycle: "booking", use: "A service, pink slip, tyre or repair booking for a vehicle.", defaultMinutes: 240, fields: [f("booking_kind", "What", "text", { choices: ["service", "pink slip", "safety check", "tyres", "repair"] }), f("loan_car", "Loan car", "boolean")], labels: { provider: "Workshop" } },
   ],
   travel: [
@@ -332,8 +363,8 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
     { key: "insurance", account: true, label: "Trip insurance", belongsTo: ["travel.trip"], use: "Travel insurance for one trip.", due: { means: "ends", label: "Cover ends" }, reminders: [7], fields: [f("region", "Where"), f("emergency_phone", "Emergency phone", "phone"), f("excess", "Excess", "amount")], labels: ins, identity: policy },
   ],
   health: [
-    { key: "insurance", account: true, label: "Health insurance", use: "Private health cover: the fund, hospital and extras cover, and who is covered.", due: { means: "renews", label: "Renews or extras reset" }, reminders: [45], fields: [f("hospital_cover", "Hospital cover", "text", { choices: ["gold", "silver plus", "silver", "bronze plus", "bronze", "basic", "none"] }), f("extras_cover", "Extras cover"), f("excess", "Excess", "amount"), f("scale", "Who is covered", "text", { choices: ["single", "couple", "family", "single parent"] }), f("ambulance", "Ambulance cover")], labels: { provider: "Fund", reference: "Membership number", amount: "Premium" }, identity: policy },
-    { key: "ambulance", account: true, label: "Ambulance cover", use: "Ambulance cover bought separately from health insurance.", due: { means: "renews", label: "Renews" }, labels: { reference: "Membership number" }, identity: policy },
+    { key: "insurance", bill: "auto", account: true, label: "Health insurance", use: "Private health cover: the fund, hospital and extras cover, and who is covered.", due: { means: "renews", label: "Renews or extras reset" }, reminders: [45], fields: [f("hospital_cover", "Hospital cover", "text", { choices: ["gold", "silver plus", "silver", "bronze plus", "bronze", "basic", "none"] }), f("extras_cover", "Extras cover"), f("excess", "Excess", "amount"), f("scale", "Who is covered", "text", { choices: ["single", "couple", "family", "single parent"] }), f("ambulance", "Ambulance cover")], labels: { provider: "Fund", reference: "Membership number", amount: "Premium" }, identity: policy },
+    { key: "ambulance", bill: "auto", account: true, label: "Ambulance cover", use: "Ambulance cover bought separately from health insurance.", due: { means: "renews", label: "Renews" }, labels: { reference: "Membership number" }, identity: policy },
     { key: "provider", label: "Doctor or provider", use: "A GP, dentist, specialist or other provider the person sees, and when the next visit is due. Never diagnoses, medicines or results.", due: { means: "due", label: "Next visit" }, reminders: [14], fields: [f("provider_kind", "Kind", "text", { choices: ["GP", "dentist", "specialist", "physio", "optometrist", "psychologist", "pharmacy"] })], labels: { name: "Doctor or provider", provider: "Practice" }, identity: [["provider", "name"]] },
     { key: "script", label: "Script repeat", use: "When a script's next repeat is due. Never the medicine itself.", due: { means: "due", label: "Repeat due" }, reminders: [7], fields: [f("repeats_left", "Repeats left", "number")], labels: { name: "What to call it", provider: "Pharmacy" } },
     { key: "appointment", label: "Health appointment", lifecycle: "booking", use: "A GP, dental, specialist, physio or other health appointment.", fields: [f("appointment_kind", "Kind", "text", { choices: ["GP", "dentist", "specialist", "physio", "optometrist", "psychologist", "pathology", "imaging"] }), f("telehealth", "Telehealth", "boolean")], labels: { provider: "Clinic or practitioner" } },
@@ -345,8 +376,8 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
   ],
   banking: [
     { key: "account", account: true, label: "Bank account", use: "A bank or savings account: the bank and the last 4 digits only. Never the BSB and full account number.", due: { means: "ends", label: "Rate or term ends" }, fields: [f("account_kind", "Kind", "text", { choices: ["everyday", "savings", "offset", "term deposit"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Bank" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
-    { key: "card", account: true, label: "Credit card", use: "A credit card's issuer, last 4 digits, expiry and annual fee date. Never the card number.", due: { means: "due", label: "Annual fee" }, reminders: [30], fields: [f("card_product", "Card"), f("last4", "Card (last 4)", "last4"), f("card_expiry", "Card expires", "month_year"), f("annual_fee", "Annual fee", "amount"), f("promo_ends", "Interest-free or balance transfer ends", "date")], labels: { provider: "Issuer" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
-    { key: "loan", account: true, label: "Loan", use: "A car, personal or student loan, novated lease or buy-now-pay-later plan.", due: { means: "ends", label: "Ends or fixed rate ends" }, reminders: [60], fields: [f("loan_kind", "Kind", "text", { choices: ["car", "personal", "novated lease", "buy now pay later"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "card", bill: "auto", account: true, label: "Credit card", use: "A credit card's issuer, last 4 digits, expiry and annual fee date. Never the card number.", due: { means: "due", label: "Annual fee" }, reminders: [30], fields: [f("card_product", "Card"), f("last4", "Card (last 4)", "last4"), f("card_expiry", "Card expires", "month_year"), f("annual_fee", "Annual fee", "amount"), f("promo_ends", "Interest-free or balance transfer ends", "date")], labels: { provider: "Issuer" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
+    { key: "loan", bill: "auto", account: true, label: "Loan", use: "A car, personal or student loan, novated lease or buy-now-pay-later plan.", due: { means: "ends", label: "Ends or fixed rate ends" }, reminders: [60], fields: [f("loan_kind", "Kind", "text", { choices: ["car", "personal", "novated lease", "buy now pay later"] }), f("last4", "Account (last 4)", "last4"), f("rate", "Interest rate")], labels: { provider: "Lender", amount: "Repayment" }, identity: [["provider", "last4"]], fallbackIdentity: ["provider", "name"] },
     { key: "application", label: "Application", lifecycle: "case", use: "A card, account or loan application in progress.", fields: [f("application_kind", "For")], labels: { provider: "Bank or lender" } },
   ],
   investing: [
@@ -363,9 +394,9 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
     { key: "appointment", label: "Government appointment", lifecycle: "booking", use: "An appointment with a government agency, post office or service centre.", labels: { provider: "Agency" } },
   ],
   insurance: [
-    { key: "life", account: true, label: "Life or income protection", use: "Life, TPD, trauma, income protection or funeral cover, including cover held inside super.", due: { means: "renews", label: "Anniversary" }, reminders: [30], fields: [f("covers", "What it covers"), f("benefit", "Benefit"), f("held_in_super", "Held inside super", "boolean")], labels: ins, identity: policy },
-    { key: "travel", account: true, label: "Annual travel insurance", use: "An annual or multi-trip travel insurance policy.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("region", "Where"), f("emergency_phone", "Emergency phone", "phone")], labels: ins, identity: policy },
-    { key: "other", account: true, label: "Other insurance", belongsTo: ["any"], use: "Any other insurance policy, including one for a thing in a category of your own.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [f("covers", "What it covers")], labels: ins, identity: policy },
+    { key: "life", bill: "auto", account: true, label: "Life or income protection", use: "Life, TPD, trauma, income protection or funeral cover, including cover held inside super.", due: { means: "renews", label: "Anniversary" }, reminders: [30], fields: [f("covers", "What it covers"), f("benefit", "Benefit"), f("held_in_super", "Held inside super", "boolean")], labels: ins, identity: policy },
+    { key: "travel", bill: "auto", account: true, label: "Annual travel insurance", use: "An annual or multi-trip travel insurance policy.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("region", "Where"), f("emergency_phone", "Emergency phone", "phone")], labels: ins, identity: policy },
+    { key: "other", bill: "auto", account: true, label: "Other insurance", belongsTo: ["any"], use: "Any other insurance policy, including one for a thing in a category of your own.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [f("covers", "What it covers")], labels: ins, identity: policy },
     { key: "claim", label: "Insurance claim", lifecycle: "case", use: "An insurance claim in progress, for any policy.", fields: [f("policy", "Policy")], labels: { provider: "Insurer", reference: "Claim number" } },
   ],
   id: [
@@ -380,26 +411,26 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
   ],
   work: [
     { key: "job", label: "Job", use: "An employer, role and payroll contact.", due: { means: "ends", label: "Contract ends" }, fields: [f("role", "Role"), f("starts_on", "Started", "date")], labels: { provider: "Employer", contact: "Payroll or HR contact" }, identity: [["provider"]] },
-    { key: "licence", label: "Licence or registration", use: "A professional registration, trade licence or certificate (AHPRA, RSA, white card, first aid) and when it expires.", due: { means: "expires", label: "Expires" }, reminders: [60, 14], fields: [f("licence_kind", "What")], labels: { provider: "Issuing body", reference: "Registration number" }, identity: policy },
+    { key: "licence", bill: "manual", label: "Licence or registration", use: "A professional registration, trade licence or certificate (AHPRA, RSA, white card, first aid) and when it expires.", due: { means: "expires", label: "Expires" }, reminders: [60, 14], fields: [f("licence_kind", "What")], labels: { provider: "Issuing body", reference: "Registration number" }, identity: policy },
     { key: "study", label: "Study", use: "A course: the institution, student number and census date.", due: { means: "due", label: "Census date" }, reminders: [14, 3], fields: [f("course", "Course")], labels: { provider: "Institution", reference: "Student number" }, identity: [["provider", "course"]] },
   ],
   business: [
     { key: "entity", label: "Business", anchor: true, use: "A business the person runs. Its registrations, insurance and domains belong to it.", fields: [f("structure", "Structure", "text", { choices: ["sole trader", "company", "partnership", "trust"] }), f("abn", "ABN")], labels: { name: "Business name" }, identity: [["abn"], ["name"]] },
-    { key: "registration", account: true, label: "Business registration", belongsTo: ["business.entity"], use: "A business name registration or ASIC annual review.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("registration_kind", "What", "text", { choices: ["business name", "ASIC annual review", "licence"] })], labels: { provider: "Registry" }, identity: [["registration_kind", "parent"]] },
-    { key: "insurance", account: true, label: "Business insurance", belongsTo: ["business.entity"], use: "Public liability, professional indemnity or other business insurance.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["public liability", "professional indemnity", "business pack"])], labels: ins, identity: policy },
-    { key: "domain", account: true, label: "Domain or hosting", belongsTo: ["any"], use: "A domain name, hosting or cloud account and when it renews.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("domain_name", "Domain")], labels: { provider: "Registrar or host" }, identity: [["domain_name"], ["provider", "reference"]] },
+    { key: "registration", bill: "manual", account: true, label: "Business registration", belongsTo: ["business.entity"], use: "A business name registration or ASIC annual review.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("registration_kind", "What", "text", { choices: ["business name", "ASIC annual review", "licence"] })], labels: { provider: "Registry" }, identity: [["registration_kind", "parent"]] },
+    { key: "insurance", bill: "auto", account: true, label: "Business insurance", belongsTo: ["business.entity"], use: "Public liability, professional indemnity or other business insurance.", due: { means: "renews", label: "Renews" }, reminders: [30, 7], fields: [cover(["public liability", "professional indemnity", "business pack"])], labels: ins, identity: policy },
+    { key: "domain", bill: "auto", account: true, label: "Domain or hosting", belongsTo: ["any"], use: "A domain name, hosting or cloud account and when it renews.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("domain_name", "Domain")], labels: { provider: "Registrar or host" }, identity: [["domain_name"], ["provider", "reference"]] },
   ],
   family: [
     { key: "child", label: "Child", anchor: true, use: "A child (first name only). Their school, activities and immunisations belong to them.", fields: [f("school", "School"), f("year_level", "Year")], labels: { name: "First name" }, identity: [["name"]] },
-    { key: "school", label: "School or childcare", belongsTo: ["family.child"], use: "A school, childcare or OSHC enrolment, and the Child Care Subsidy percentage.", due: { means: "due", label: "Fees due" }, fields: [f("school_kind", "Kind", "text", { choices: ["school", "childcare", "OSHC"] }), f("ccs_percent", "Child Care Subsidy", "number", { unit: "%" })], labels: { provider: "School or centre" }, identity: [["provider", "parent"]] },
-    { key: "activity", label: "Activity", belongsTo: ["family.child"], use: "A sport, club or lesson and when its fees are due.", due: { means: "due", label: "Fees due" }, labels: { provider: "Club or activity" }, identity: [["provider", "parent"]] },
+    { key: "school", bill: "manual", label: "School or childcare", belongsTo: ["family.child"], use: "A school, childcare or OSHC enrolment, and the Child Care Subsidy percentage.", due: { means: "due", label: "Fees due" }, fields: [f("school_kind", "Kind", "text", { choices: ["school", "childcare", "OSHC"] }), f("ccs_percent", "Child Care Subsidy", "number", { unit: "%" })], labels: { provider: "School or centre" }, identity: [["provider", "parent"]] },
+    { key: "activity", bill: "manual", label: "Activity", belongsTo: ["family.child"], use: "A sport, club or lesson and when its fees are due.", due: { means: "due", label: "Fees due" }, labels: { provider: "Club or activity" }, identity: [["provider", "parent"]] },
     { key: "immunisation", label: "Immunisations due", belongsTo: ["family.child"], use: "When the next scheduled immunisations are due.", due: { means: "due", label: "Due" }, reminders: [30, 7], labels: { name: "What's due" }, identity: [["parent", "name"]] },
   ],
   pets: [
     { key: "pet", label: "Pet", anchor: true, use: "A pet. Its insurance, vaccinations, registration and vet visits belong to it.", fields: [f("species", "Species"), f("breed", "Breed"), f("born_on", "Born", "date"), f("microchip", "Microchip number")], labels: { provider: "Vet clinic", contact: "Vet phone" }, identity: [["name"], ["microchip"]] },
-    { key: "insurance", account: true, label: "Pet insurance", belongsTo: ["pets.pet"], use: "A pet insurance policy.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [cover([])], labels: ins, identity: policy },
+    { key: "insurance", bill: "auto", account: true, label: "Pet insurance", belongsTo: ["pets.pet"], use: "A pet insurance policy.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [cover([])], labels: ins, identity: policy },
     { key: "care", label: "Vaccination or treatment", belongsTo: ["pets.pet"], use: "A vaccination, heartworm, flea or worm treatment and when it is next due.", due: { means: "due", label: "Next due" }, reminders: [14], fields: [f("care_kind", "What"), f("last_done", "Last done", "date")], labels: { provider: "Clinic" }, identity: [["parent", "care_kind"]] },
-    { key: "registration", label: "Council registration", belongsTo: ["pets.pet"], use: "A pet's council registration.", due: { means: "renews", label: "Renews" }, reminders: [30], labels: { provider: "Council", reference: "Registration number" }, identity: [["parent"]] },
+    { key: "registration", bill: "manual", label: "Council registration", belongsTo: ["pets.pet"], use: "A pet's council registration.", due: { means: "renews", label: "Renews" }, reminders: [30], labels: { provider: "Council", reference: "Registration number" }, identity: [["parent"]] },
     { key: "appointment", label: "Vet or pet booking", lifecycle: "booking", use: "A vet, groomer or boarding booking.", fields: [f("appointment_kind", "What", "text", { choices: ["vet", "groomer", "boarding"] })], labels: { provider: "Vet, groomer or boarding" } },
   ],
   belongings: [
@@ -407,8 +438,8 @@ const KINDS: Readonly<Record<string, readonly KindSpec[]>> = {
     { key: "valuable", label: "Valuable", anchor: true, use: "Something valuable you own, with its serial number and value. Its insurance can belong to it.", fields: [f("item", "Item"), f("serial_number", "Serial number"), f("value", "Value", "amount")], identity: [["serial_number"], ["name"]] },
   ],
   subscriptions: [
-    { key: "service", account: true, label: "Subscription", storedKind: "subscription", belongsTo: ["any"], use: "Streaming, software, a box or anything else billed on repeat.", due: { means: "renews", label: "Renews" }, fields: [f("plan", "Plan"), f("trial_ends", "Free trial ends", "date"), f("paid_with", "Paid with", "text", { hint: "For example Visa ending 1234." }), f("how_to_cancel", "How to cancel")], labels: { provider: "Service", reference: "Account number" }, identity: [["title"]] },
-    { key: "membership", account: true, label: "Membership", belongsTo: ["any"], storedKind: "subscription", use: "A gym, club, professional association or other membership.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("tier", "Level"), f("how_to_cancel", "How to cancel")], labels: { provider: "Organisation", reference: "Member number" }, identity: policy },
+    { key: "service", bill: "auto", account: true, label: "Subscription", storedKind: "subscription", belongsTo: ["any"], use: "Streaming, software, a box or anything else billed on repeat.", due: { means: "renews", label: "Renews" }, fields: [f("plan", "Plan"), f("trial_ends", "Free trial ends", "date"), f("how_to_cancel", "How to cancel")], labels: { provider: "Service", reference: "Account number" }, identity: [["title"]] },
+    { key: "membership", bill: "auto", account: true, label: "Membership", belongsTo: ["any"], storedKind: "subscription", use: "A gym, club, professional association or other membership.", due: { means: "renews", label: "Renews" }, reminders: [30], fields: [f("tier", "Level"), f("how_to_cancel", "How to cancel")], labels: { provider: "Organisation", reference: "Member number" }, identity: policy },
     { key: "loyalty", account: true, label: "Loyalty programme", use: "A frequent flyer or loyalty programme: member number, tier and when points expire.", due: { means: "expires", label: "Points expire" }, fields: [f("tier", "Tier"), f("points", "Points", "number")], labels: { provider: "Programme", reference: "Member number" }, identity: policy },
   ],
   outings: [

@@ -18,6 +18,7 @@ import { ProfileBuildBlock } from "@/components/home/profile-build-block";
 import type { ProfileBuildView } from "@/domain/home/profile-build";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import type { CategoryDef, RecordTypeDef } from "@/domain/life-admin/record-types";
+import type { MonthlyCost } from "@/domain/life-admin/costs";
 import { categoryIcon } from "./category-icons";
 import { ADD_TAB_HREF } from "./tab-address";
 import {
@@ -29,6 +30,7 @@ import {
   joinWords,
   listedRecords,
   historyHref,
+  monthlyWords,
   recordsHref,
   recordsView,
   sectionOf,
@@ -450,18 +452,25 @@ function StatusLine({ view, filter, inHistory }: { view: RecordsViewModel<LifeAd
   );
 }
 
-// "You pay about AUD 284.79 and USD 16.00 a month for 9 recurring records." What's active and
-// repeating in the chosen categories, worked out by Warthog (costs.ts); "about" because weekly,
-// quarterly and yearly amounts are spread over months. Nothing when no active record has a price.
-function CostLine({ monthly }: { monthly: RecordsViewModel<LifeAdminRecordView>["monthly"] }) {
+// "You pay about AUD 284.79 and USD 16.00 a month for 9 recurring records." The live bills in the
+// chosen categories, worked out by Warthog with the one bills rule (domain/life-admin/bills.ts:
+// a card's annual fee counts, income doesn't), each currency apart, never added together; "about"
+// because weekly, quarterly and yearly amounts are spread over months. Nothing when no bill has a
+// price. The Bills tab says it of its bills (`noun`), outside a toolbar (`className`).
+export function CostLine({
+  monthly,
+  noun = "recurring record",
+  className = "wh-toolbar-status text-fg",
+}: {
+  monthly: readonly MonthlyCost[];
+  noun?: string;
+  className?: string;
+}) {
   if (monthly.length === 0) return null;
-  // The currency most of them are in leads.
-  const amounts = [...monthly].sort((a, b) => b.records - a.records || b.amount - a.amount).map((cost) => `${cost.currency} ${cost.amount.toFixed(2)}`);
-  const amountWords = amounts.length === 1 ? amounts[0] : `${amounts.slice(0, -1).join(", ")} and ${amounts.at(-1)}`;
   const records = monthly.reduce((sum, cost) => sum + cost.records, 0);
   return (
-    <p className="wh-toolbar-status text-fg">
-      You pay about {amountWords} a month for {plural(records, "recurring record")}.
+    <p className={className}>
+      You pay about {monthlyWords(monthly)} a month for {plural(records, noun)}.
     </p>
   );
 }

@@ -179,3 +179,30 @@ test("accounts, policies and memberships have an account name, their number and 
   assert.equal(label("investing.super", "account_name"), "Account name");
   assert.equal(label("investing.super", "account_email"), "Account email");
 });
+
+// Founder, 25 Nov 2026: "a place to see all those recurring bills and the date they are due and
+// the accounts they are going to come out of and the emails associated with them". A bill kind
+// has Paid with after its cycle, and Next payment only when its own date isn't the payment.
+test("bills: which kinds, which date is the payment, and Paid with after the cycle", () => {
+  const bills = BUILT_IN_TYPES.filter((type) => type.bill);
+  assert.deepEqual(bills.filter((type) => type.bill!.paid === "manual").map((type) => type.id).sort(), [
+    "business.registration", "family.activity", "family.school", "home.rates", "pets.registration", "vehicles.registration", "work.licence",
+  ]);
+  assert.equal(bills.length, 29);
+  for (const id of ["government.payment", "investing.pension", "work.job", "government.help", "travel.insurance", "subscriptions.loyalty", "banking.account", "belongings.receipt"]) {
+    assert.ok(!BUILT_IN.type(id)!.bill, `${id} isn't a bill`);
+  }
+  const nextPayment = bills.filter((type) => type.bill!.date === "next_payment").map((type) => type.id).sort();
+  assert.deepEqual(nextPayment, ["banking.loan", "home.lease", "home.mortgage", "utilities.energy", "utilities.internet", "utilities.phone", "utilities.water", "vehicles.toll"]);
+  for (const type of bills) {
+    const keys = type.fields.map((field) => field.key);
+    assert.ok(type.account, `${type.id} has the account fields`);
+    assert.equal(keys.filter((key) => key === "paid_with").length, 1, type.id);
+    assert.equal(keys[keys.indexOf("cycle") + 1], type.bill!.date === "next_payment" ? "next_payment" : "paid_with", type.id);
+    assert.equal(keys.includes("next_payment"), type.bill!.date === "next_payment", type.id);
+  }
+  const paidWith = BUILT_IN.type("subscriptions.service")!.fields.find((field) => field.key === "paid_with")!;
+  assert.match(paidWith.hint!, /Visa ending 1234\. Last 4 digits only\./, "a generic example, never someone's card");
+  assert.equal(paidWith.suggest, "payment_sources");
+  assert.ok(!BUILT_IN.type("investing.super")!.fields.some((field) => field.key === "paid_with"), "not a bill");
+});

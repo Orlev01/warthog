@@ -17,9 +17,10 @@
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { statusFor, WINDOWS, type Phase } from "@/domain/life-admin/lifecycle";
 import type { CategoryDef, RecordTypeDef, StoredKind } from "@/domain/life-admin/record-types";
-import { recordName } from "./record-format";
-import type { CategoryStateView, HistoryFilter, RecordFilter, RecordListStatus, RecordPhaseView } from "./record-view-types";
-import { monthlyCost, type MonthlyCost } from "@/domain/life-admin/costs";
+import { moneyText, recordName } from "./record-format";
+import type { BillsGrouping, CategoryStateView, HistoryFilter, RecordFilter, RecordListStatus, RecordPhaseView } from "./record-view-types";
+import { billsMonthlyCost } from "@/domain/life-admin/bills";
+import type { MonthlyCost } from "@/domain/life-admin/costs";
 
 // A calendar date `days` after `isoDate` (both YYYY-MM-DD), computed on the calendar in
 // UTC so no local offset or daylight-saving change can shift it.
@@ -248,7 +249,8 @@ export type RecordsView<T> = {
   readonly others: StatusSection<T>[];
   // How many records the chosen filters show.
   readonly shown: number;
-  // What the active, recurring records in the chosen categories cost a month, per currency.
+  // What the bills in the chosen categories cost a month, per currency (the bills rule, as on
+  // the Bills tab and in list_records: a card's annual fee counts, income doesn't).
   readonly monthly: MonthlyCost[];
 };
 
@@ -314,8 +316,9 @@ export function recordsView<T extends Recordish & { readonly status: string }>(
     }))
     .filter((section) => section.rows.length > 0);
 
-  // What the person pays is what's active, whichever statuses they chose to show.
-  const monthly = monthlyCost(records.filter((record) => inCategory(record) && statusOf.get(record.id) === "active"));
+  // What the person pays is their live bills (domain/life-admin/bills.ts), whichever statuses
+  // they chose to show.
+  const monthly = billsMonthlyCost(records.filter(inCategory), (record) => typeOf.get(record.id) ?? null);
   return { categoryOptions, statusOptions, active, others, shown: shownRecords.length, monthly };
 }
 
@@ -328,6 +331,28 @@ export function recordsHref(filter: RecordFilter): string {
   if (!isDefault) for (const status of statuses) query.append("status", status);
   const search = query.toString();
   return search ? `/life-admin?${search}` : "/life-admin";
+}
+
+/** Monthly amounts in words, the currency most of them are in first: "AUD 284.79 and USD 16.00". Never added across currencies. */
+export function monthlyWords(monthly: readonly MonthlyCost[]): string {
+  const amounts = [...monthly].sort((a, b) => b.records - a.records || b.amount - a.amount).map((cost) => `${cost.currency} ${moneyText(cost.amount)}`);
+  return joinWords(amounts);
+}
+
+// ─── Bills ───────────────────────────────────────────────────────────────────────────
+
+/** The Bills tab, grouped by date (the default, no parameter) or by account (`&bills=account`). */
+export function billsHref(group: BillsGrouping): string {
+  return group === "account" ? "/life-admin?tab=bills&bills=account" : "/life-admin?tab=bills";
+}
+
+/**
+ * The prompt the person can paste into their agent to fill in their bills: the amount, how
+ * often, the next payment date and the card or account each comes out of (its last 4 only), as
+ * changes for them to check.
+ */
+export function billsPrompt(): string {
+  return 'Please fill in my bills in Warthog. For each recurring payment in my Life admin (list_records view "bills"), find the latest bill or receipt you can read and save its amount, how often, the next payment date and which of my cards or accounts it comes out of (paid_with, last 4 only), for me to check. Read Warthog\'s "Life admin records" skill first.';
 }
 
 // ─── Fill in the rest ────────────────────────────────────────────────────────────────

@@ -44,7 +44,8 @@ Nothing built here would be wasted.
 **Filed by what it's about.** Records are filed by the thing they're about (the motorcycle, the
 home, health), not by what kind of paperwork they are. People's questions are about things, and every
 record then has one obvious home. "What do I pay for" and "all my insurance" are views calculated
-across categories (monthly totals, `*.insurance`), not filing places.
+across categories (monthly totals, `*.insurance`), not filing places. The Bills tab (amended 25
+November 2026) is the first of those views: nothing is filed under it.
 
 **Checked against real data (amended 23 November 2026).** The founder asked whether, after agents
 had filled Life admin from two real inboxes, filing by document type would be better.
@@ -72,7 +73,8 @@ had filled Life admin from two real inboxes, filing by document type would be be
     already can. An eSIM is filed under the trip it was for, and a software plan under the business
     that pays it.
   - The Records tab shows what the active, recurring records in the chosen categories cost a month
-    (`src/domain/life-admin/costs.ts`, which `list_records`' `monthlyCost` also uses).
+    (`src/domain/life-admin/costs.ts`, which `list_records`' `monthlyCost` also uses). Since 25
+    November 2026 both use the bills rule (`bills.ts`): card annual fees count, income doesn't.
 
 **The catalogue.** `src/domain/life-admin/record-types.ts` holds 20 built-in categories (19 plus
 Other) in 8 life areas. They come from the research and from a sample of the founder's own inbox.
@@ -309,7 +311,7 @@ a row on the tab shown (a booking, something finished) opens the item's page.
   day.
 
 **Account details.** Kinds the person holds an account, policy or membership with are marked
-`account` (31 built-in kinds; a person's own standing kind can take `account: true`). Each gets two
+`account` (35 built-in kinds, every bill kind among them; a person's own standing kind can take `account: true`). Each gets two
 fields beside its number, `ACCOUNT_FIELDS` in `record-types.ts`:
 
 - `account_name`: the name the account is in, as the provider shows it.
@@ -371,7 +373,7 @@ after Records.
 | Tool | Change |
 |---|---|
 | `get_context` | Adds `lifeAdmin`: counts by category; up to 5 things due or starting within 60 days (or up to 30 days overdue), each with its phase; how many wait for the person; open cases and upcoming bookings; the person's own categories, "not for me" ones and how many built-ins are unused; `otherMailAccounts`; the hand-over block. Counts cover exactly the records this agent may see. An agent that can read mail and save records gets `next`: an offer to fill life admin in, or to find bookings. |
-| `list_records` | Filters by category (built-in or the person's own), kind (`*.insurance`), lifecycle (booking, case), words, `forWhom`, due window and parent, and pages with a cursor. `include` is `live` by default, or `finished` or `all`. `id` returns one record whatever its phase, and `view: "categories"` lists categories. Each record comes labelled with its kind and category, field labels, `due`, `phase`, `savedBy`, `checkedByPerson`, where it was found, who is handling it, and a journal summary. Recurring costs come with a monthly total worked out by Warthog. |
+| `list_records` | Filters by category (built-in or the person's own), kind (`*.insurance`), lifecycle (booking, case), words, `forWhom`, due window and parent, and pages with a cursor. `include` is `live` by default, or `finished` or `all`. `id` returns one record whatever its phase, `view: "categories"` lists categories, and `view: "bills"` lists the bills (see the Bills tab). Each record comes labelled with its kind and category, field labels, `due`, `phase`, `savedBy`, `checkedByPerson`, where it was found, who is handling it, and a journal summary. Recurring costs come with a monthly total worked out by Warthog. |
 | `save_record` | Takes typed records, or a batch of up to 25 with `ref`/`parentRef` (a trip and its flights; a vehicle and its rego). Also takes `details`, `journal` and `takeOver`, and `newCategory` to suggest a category of the person's own whose kinds the call's records use as `new.<kind>`. Calls with the older `kind` still work. |
 | `update_record` | Takes `set` as a patch (`null` removes a field), `details`, `journal` and `takeOver` (journal-only updates are fine). Can link a record to its parent, or give an older record its kind. |
 | `create_task` | Takes `recordId`, for a task about one item. |
@@ -422,6 +424,7 @@ Each item's journal and hand-over between agents is in [the journal ADR](life-ad
 - **One date per record.** A receipt reminds for its return-by date. Its warranty end is a field
   that doesn't remind.
 - **No recurrence.** A monthly subscription's next renewal date doesn't roll forward by itself yet.
+  The Bills tab estimates the next payment for showing only; stored dates and reminders don't move.
 - **No per-category grants.** Agents with records access see every category. A separate grant for
   health or money is a possible follow-up; [resource audiences](resource-audiences.md) chosen
   records still apply.
@@ -477,3 +480,70 @@ saved only the NAB card.
     key when it's updated.
 
 The skill's size guard moved from 33,000 to 35,000 characters.
+
+## The Bills tab (amended 25 November 2026)
+
+The founder asked for "a place to see all those recurring bills and the date they are due and the
+accounts they are going to come out of and the emails associated with them". They chose a tab of its
+own, after Upcoming (Records | Add | Upcoming | Bills | History | Tasks), grouped by date by default
+with a switch to group by account (`?tab=bills`, `?tab=bills&bills=account`).
+
+**What is a bill** (`src/domain/life-admin/bills.ts`, one rule for the Bills tab, the Records cost
+line and `list_records`):
+- **Kinds marked `bill`:** 29 built-in kinds.
+  - **Charged by themselves ("auto"):** subscriptions and memberships, utilities, a lease, a
+    mortgage, insurance, roadside, tolls, a loan, a card's annual fee.
+  - **Paid by the person ("manual"):** rates, rego, business and pet registration, school and
+    activity fees, a professional licence.
+- **The person's own kinds, or Other,** count when they carry a cost on a repeating cycle.
+- **Not bills:** income (a government payment, a pension, a job), balances (HELP), one-offs
+  (receipts, trip insurance, bookings, cases), loyalty, bank accounts and investing.
+- **Live records only.** Paused, cancelled and finished records are left out. Unchecked suggestions
+  count, and say so.
+- **A card's bill is its annual fee.** A fee of 0, or none known, means the card isn't a bill. A
+  card's fee and its amount are never both counted.
+
+**Its two fields.** Bill kinds have the account fields, and `paid_with` after their cycle. Kinds
+whose own date isn't the payment (a lease ends, a phone contract ends, water and tolls have no date)
+also have `next_payment`. A renewal, an annual fee or a rego expiry is the payment, so those kinds
+get no second date to drift from the first.
+
+**The next payment:**
+- It comes from `next_payment`, else the kind's own date when that date is the payment.
+- On a cycle, the next payment is the first one on or after today at anchor + k × interval. It is
+  counted from the anchor each time, so a 31st doesn't drift. A rego's term stands in for a cycle.
+- It is marked estimated unless it is the anchor itself, and the tab says "about".
+- A bill the person pays by hand stays Overdue for 30 days at its date, so an unpaid rego isn't
+  silently moved a year ahead. One that charges itself moves on straight away. Upcoming still
+  calls an auto-renewing date in those 30 days overdue, because it follows the stored date.
+- Estimates are for showing only: stored dates and reminders don't move.
+
+**Which card or account it comes out of.** `paid_with` names one of the person's own cards or
+accounts by its last 4 digits ("Visa ending 1234"). It is never how to pay: a payee, BSB, biller
+code or payment link is refused as before. It is matched to a banking.account or banking.card
+record only when exactly one fits:
+- **Four digits** must match a last 4, with the bank in the text breaking a tie. Digits that match
+  nothing are never guessed by name.
+- **Three digits** match a last 4 ending in them, or else go to words among the accounts with no
+  last 4.
+- **Words** pick the single account or card with the most of its own distinctive words in the
+  text. Failing that, the bank alone matches when it has only one account of that kind.
+- A card's own fee comes out of the card.
+
+A matched account links to its item page, and a closed one is flagged ("This card is closed: N bills
+still point to it"). Unmatched text is shown as written. The email associated is the address the
+provider writes to (`account_email`) and where the record was found (the sender's domain), both
+shown as text: nothing an agent read from email is ever a link.
+
+**Agents:**
+- `list_records view: "bills"` returns each bill (when, next, estimated, cost, every, monthly,
+  paidWith, paidFrom, accountEmail), the account groups, the monthly totals and what's missing.
+  It matches only against records that agent may see.
+- `list_records`' `monthlyCost` now totals live bills only.
+- The skill marks bill kinds `[bill]` and asks agents to carry over `paid_with` and the payment
+  date. This guidance change moves "Life admin records" to version 2, so people who edited the skill
+  are offered the new text.
+- The tab has a "Fill in my bills" prompt to copy.
+
+The skill's size stays under its 35,000-character guard (34,927).
+

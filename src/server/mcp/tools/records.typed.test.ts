@@ -245,3 +245,63 @@ test("Warthog's check needs the same sender domain, not a part of it, and the sa
     assert.deepEqual(byName, { "Part of a domain": false, "Same domain": true, "Anyone on gmail": false, "Same gmail address": true, "Its subdomain": true, "Named sender": true });
   });
 });
+
+// Founder, 25 Nov 2026: one place for every recurring payment, when it's due and what it comes
+// out of. view "bills" is that list for agents, worked out by Warthog (`domain/life-admin/bills.ts`).
+test("list_records view bills: next payments on their cycle, estimated, and the card or account each comes out of", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    await t.save.handle({
+      records: [
+        { type: "banking.card", fields: { name: "NAB Qantas Rewards Signature card", provider: "NAB", last4: "2686" } },
+        { type: "banking.card", fields: { name: "Westpac Altitude Black", provider: "Westpac", annual_fee: "295", currency: "AUD" }, dueDate: "2027-06-22" },
+        { type: "subscriptions.service", fields: { name: "Amazon Prime", amount: "12.99", cycle: "monthly", currency: "AUD", paid_with: "Visa ending 2686", account_email: "me@example.com" } },
+        { type: "home.lease", fields: { name: "Lease", amount: "4766.68", cycle: "monthly", currency: "AUD", next_payment: "2026-05-03" } },
+        { type: "subscriptions.service", fields: { name: "Microsoft 365" }, dueDate: "2027-06-11" },
+        { type: "government.payment", fields: { payment_kind: "JobSeeker", amount: "850", cycle: "fortnightly" } },
+        { type: "subscriptions.service", fields: { name: "Old gym", amount: "20", cycle: "fortnightly" }, status: "cancelled" },
+      ],
+    }, t.connection);
+    const result = await t.list.handle({ view: "bills" }, t.connection);
+    if (result.status !== "ok" || !("view" in result) || result.view !== "bills") throw new Error("expected the bills view");
+    assert.equal(result.today, "2026-11-23");
+    const byName = new Map(result.bills.map((bill) => [bill.name, bill]));
+    assert.deepEqual([...byName.keys()], ["Lease", "Microsoft 365", "Westpac Altitude Black", "Amazon Prime"], "by when, then not known");
+    assert.deepEqual(byName.get("Lease")!.next, { date: "2026-12-03", estimated: true });
+    assert.equal(byName.get("Lease")!.when, "next_30_days");
+    assert.equal(byName.get("Amazon Prime")!.when, "not_known");
+    assert.deepEqual(byName.get("Amazon Prime")!.paidFrom, { id: result.byAccount[0]!.id, name: "NAB Qantas Rewards Signature card ending 2686" });
+    assert.equal(byName.get("Amazon Prime")!.accountEmail, "me@example.com");
+    assert.equal(byName.get("Westpac Altitude Black")!.paidFrom?.name, "Westpac Altitude Black", "a card's fee comes out of the card");
+    assert.equal(byName.get("Westpac Altitude Black")!.every, "a year");
+    assert.ok(!byName.has("Old gym") && ![...byName.keys()].some((name) => /JobSeeker|payment/i.test(name)), "no cancelled bills and no income");
+    assert.deepEqual(result.missing, { amount: 1, date: 1, paidWith: 2 });
+    assert.deepEqual(result.monthlyCost, [{ currency: "AUD", amount: Math.round((12.99 + 4766.68 + 295 / 12) * 100) / 100, records: 3 }]);
+  });
+});
+
+test("list_records totals only live bills, whatever else matched, and never names a card the agent can't see", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    await t.save.handle({
+      records: [
+        { type: "subscriptions.service", fields: { name: "Netflix", amount: "18.99", cycle: "monthly", currency: "AUD" } },
+        { type: "subscriptions.service", fields: { name: "Old gym", amount: "20", cycle: "monthly", currency: "AUD" }, status: "cancelled" },
+        { type: "government.payment", fields: { payment_kind: "Carer payment", amount: "900", cycle: "fortnightly", currency: "AUD" } },
+      ],
+    }, t.connection);
+    const all = await t.list.handle({ include: "all" }, t.connection);
+    if (all.status !== "ok" || !("records" in all)) throw new Error("refused");
+    assert.deepEqual(all.monthlyCost, [{ currency: "AUD", amount: 18.99, records: 1 }], "cancelled bills and income don't count");
+  });
+  const limited = await setup({ recordIds: [] });
+  await closing(limited.db, async () => {
+    const { createRecord } = await import("../../db/life-admin-records");
+    await createRecord(limited.db, { userId: limited.userId, kind: "item", type: "banking.card", fields: { name: "Hidden card", provider: "NAB", last4: "2686" }, status: "active", source: { kind: "person" } }, limited.dek);
+    await limited.save.handle({ type: "subscriptions.service", fields: { name: "Prime", amount: "12.99", cycle: "monthly", paid_with: "Visa ending 2686" } }, limited.connection);
+    const result = await limited.list.handle({ view: "bills" }, limited.connection);
+    if (result.status !== "ok" || !("view" in result) || result.view !== "bills") throw new Error("expected the bills view");
+    assert.deepEqual(result.bills.map((bill) => [bill.name, bill.paidFrom ?? null]), [["Prime", null]]);
+    assert.ok(!JSON.stringify(result).includes("Hidden card"));
+  });
+});

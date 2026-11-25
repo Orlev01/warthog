@@ -7,6 +7,7 @@ import { LifeAdminScreen } from "@/components/life-admin/life-admin-screen";
 import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
 import { firstParam } from "@/lib/href";
 import {
+  billsGrouping,
   historyFilters,
   requestedLifeAdminTab,
   recordTab,
@@ -31,7 +32,7 @@ import { loadProfileBuildChoice } from "@/server/home/profile-build";
 // from the host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into
 // the person's own records and tasks — content decrypted, each task's assignee + note authors
 // resolved to agent names — and mounts the already-render-tested <LifeAdminScreen/>: one row of
-// tabs, Records | Add | Upcoming | History | Tasks (`?tab=` picks the one shown first, else Records,
+// tabs, Records | Add | Upcoming | Bills | History | Tasks (`?tab=` picks the one shown first, else Records,
 // or Add while nothing is on file; all stay mounted, so switching keeps a half-typed record or task). An older address (`?view=…`, the
 // Bookings tab, the moving checklist, older reminder links) opens the tab it meant, and the view
 // puts today's address in the browser. Every control
@@ -42,8 +43,9 @@ import { loadProfileBuildChoice } from "@/server/home/profile-build";
 // boundary is reported as a plain problem, never swallowed (no dead controls). The Records tab's
 // `?category=…&status=…` filters and History's `?history_category=…&history_status=…` (each
 // repeatable) are validated against the person's own catalogue and the known statuses here
-// (unknown values are dropped; no Records status means Active), and record actions return to the
-// tab and filters they were submitted under. The Tasks view's `?assignee=` filter is validated
+// (unknown values are dropped; no Records status means Active), as is the Bills tab's
+// `?bills=account` (anything else groups by date), and record actions return to the tab and
+// filters they were submitted under. The Tasks view's `?assignee=` filter is validated
 // against the person's own agents here (anything else shows every task), and task actions return
 // to the filter they were submitted under.
 //
@@ -269,6 +271,8 @@ export default async function LifeAdminPage({
           profileBuild: await loadProfileBuildChoice(db, session.userId),
           recordFilter,
           historyFilter,
+          // The Bills tab's grouping: by account, or by date.
+          billsGroup: billsGrouping(firstParam(params.bills)),
           // A kind from the person's own catalogue (their categories included), else none.
           addType: data.catalogue.types.some((type) => type.id === firstParam(params.add)) ? firstParam(params.add) : null,
           records: data.records,

@@ -1,5 +1,6 @@
-// Review fix G10 — the Life admin section switcher is a real tab list (now one row of four tabs:
-// Records, Upcoming, History and Tasks, no counts in their names; docs/adr/life-admin-profile.md).
+// Review fix G10 — the Life admin section switcher is a real tab list (now one row of six tabs:
+// Records, Add, Upcoming, Bills, History and Tasks, no counts in their names;
+// docs/adr/life-admin-profile.md).
 //
 // The section buttons carried aria-selected on plain role=button elements (which
 // assistive technology does not announce), with no tablist/tabpanel relationship, and the
@@ -17,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
 // Tasks is a tab when the page passes its content (LifeAdminScreen does).
-function render(initialTab?: "records" | "add" | "upcoming" | "history" | "tasks", records: React.ComponentProps<typeof LifeAdminView>["records"] = []): string {
+function render(initialTab?: "records" | "add" | "upcoming" | "bills" | "history" | "tasks", records: React.ComponentProps<typeof LifeAdminView>["records"] = []): string {
   return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={records} initialTab={initialTab} tasks={<p>No tasks yet.</p>} />);
 }
 
@@ -42,7 +43,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Records", "Add", "Upcoming", "History", "Tasks"],
+    ["Records", "Add", "Upcoming", "Bills", "History", "Tasks"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
@@ -51,12 +52,12 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   assert.equal(selected[0]!.text, "Tasks");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
-    4,
+    5,
   );
   // Roving tabindex: only the selected tab is in the tab order.
   assert.deepEqual(
     tabs.map((t) => attr(t.attrs, "tabindex")),
-    ["-1", "-1", "-1", "-1", "0"],
+    ["-1", "-1", "-1", "-1", "-1", "0"],
   );
 
   const panelId = attr(selected[0]!.attrs, "aria-controls");
@@ -103,13 +104,14 @@ test("every panel stays mounted with only the selected panel visible; Records op
     ["records", [], 0],
     ["add", onFile, 1],
     ["upcoming", [], 2],
-    ["history", [], 3],
-    ["tasks", [], 4],
+    ["bills", [], 3],
+    ["history", [], 4],
+    ["tasks", [], 5],
   ] as const) {
     const panels = [
       ...render(initialTab, records).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
     ].map((match) => match[1]!);
-    assert.equal(panels.length, 5);
-    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [0, 1, 2, 3, 4].map((index) => index !== shownIndex), `${String(initialTab)} with ${records.length} records`);
+    assert.equal(panels.length, 6);
+    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [0, 1, 2, 3, 4, 5].map((index) => index !== shownIndex), `${String(initialTab)} with ${records.length} records`);
   }
 });

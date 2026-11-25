@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { combineDateTime, currentLifeAdminHref, historyFilters, itemPath, journalInput, lifeAdminTab, requestedLifeAdminTab, noticeField, recordDate, recordFields, recordFilters, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
+import { billsGrouping, combineDateTime, currentLifeAdminHref, historyFilters, itemPath, journalInput, lifeAdminTab, requestedLifeAdminTab, noticeField, recordDate, recordFields, recordFilters, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -69,7 +69,7 @@ test("the older tabs (things, the checklist, and subscriptions, receipts, renewa
 
 test("the tab an address opens, today's and older ones", () => {
   assert.equal(lifeAdminTab({}), "records");
-  for (const tab of ["records", "upcoming", "history", "tasks"] as const) assert.equal(lifeAdminTab({ tab }), tab);
+  for (const tab of ["records", "add", "upcoming", "bills", "history", "tasks"] as const) assert.equal(lifeAdminTab({ tab }), tab);
   assert.equal(lifeAdminTab({ view: "tasks" }), "tasks");
   assert.equal(lifeAdminTab({ view: "life", tab: "bookings" }), "upcoming");
   assert.equal(lifeAdminTab({ view: "life", tab: "checklist" }), "records");
@@ -78,7 +78,7 @@ test("the tab an address opens, today's and older ones", () => {
 });
 
 test("an older address redirects to today's, keeping the rest of its query; a current one doesn't", () => {
-  for (const current of [{}, { tab: "upcoming" }, { tab: "history", history_status: "cancelled" }, { tab: "tasks", assignee: "any" }, { category: "vehicles", status: ["active", "on_hold"] }]) {
+  for (const current of [{}, { tab: "upcoming" }, { tab: "bills", bills: "account" }, { tab: "history", history_status: "cancelled" }, { tab: "tasks", assignee: "any" }, { category: "vehicles", status: ["active", "on_hold"] }]) {
     assert.equal(currentLifeAdminHref(current), null, JSON.stringify(current));
   }
   assert.equal(currentLifeAdminHref({ view: "tasks", assignee: "any" }), "/life-admin?tab=tasks&assignee=any");
@@ -236,4 +236,33 @@ test("an address names a tab only when it asks for one; picking a kind to add as
   assert.equal(requestedLifeAdminTab({ view: "life", tab: "renewals" }), "records", "reminder links still open the record's tab");
   assert.equal(requestedLifeAdminTab({ add: "vehicles.registration" }), "add");
   assert.equal(requestedLifeAdminTab({ tab: "nonsense" }), "records", "an unknown tab is Records, as before");
+});
+
+// Bills (founder, 25 Nov 2026): grouped by date unless the address asks for by account, and what's
+// done there comes back to it, grouped the same way.
+test("Bills groups by account only when asked for exactly that", () => {
+  assert.equal(billsGrouping("account"), "account");
+  for (const value of [undefined, null, "", "date", "Account", "account ", "accounts", ["account"], "https://evil.test"]) {
+    assert.equal(billsGrouping(value), "date", String(value));
+  }
+  assert.equal(requestedLifeAdminTab({ tab: "bills", bills: "account" }), "bills");
+});
+
+test("an action on Bills comes back to Bills, by date or by account, and nowhere else", () => {
+  assert.equal(recordTab("bills"), "bills");
+  const byAccount = new FormData();
+  byAccount.set("returnTab", "bills");
+  byAccount.set("returnBills", "account");
+  byAccount.append("returnCategory", "vehicles");
+  assert.equal(recordReturnPath(byAccount), "/life-admin?tab=bills&bills=account", "Bills carries its grouping, no filters");
+  for (const value of [null, "date", "https://evil.test", "account&notice=saved"]) {
+    const form = new FormData();
+    form.set("returnTab", "bills");
+    if (value !== null) form.set("returnBills", value);
+    assert.equal(recordReturnPath(form), "/life-admin?tab=bills", String(value));
+  }
+  const elsewhere = new FormData();
+  elsewhere.set("returnTab", "upcoming");
+  elsewhere.set("returnBills", "account");
+  assert.equal(recordReturnPath(elsewhere), "/life-admin?tab=upcoming", "only Bills reads its grouping");
 });
