@@ -129,8 +129,9 @@ from calls made **to Warthog**. Nothing an agent does elsewhere is captured or i
 - **How it works.** `get_context` with both `run` and `working_on` replaces that conversation's
   description. No new tool is added, so the agent tool set is unchanged. `RUN_NOTE`, which every
   run's context carries, and the `working_on` description tell agents they can do this when their
-  work changes. The house skill gets the same sentence once editable Warthog skills
-  (`claude/builtin-skills`, which rewrites it) have landed.
+  work changes. So does the house skill ("Using Warthog", `src/domain/skills/house.ts`), whose
+  guidance moved to version 2 for this sentence, so a person's edited copy shows it is based on the
+  older text.
 - **Cleaning.** The new description is cleaned, redacted, cut and encrypted like a new run's.
 - **Ownership.** It only applies to the calling agent's own run, as `resolveRun` checks. Another
   agent's run, or a malformed one, starts a new conversation as before.
