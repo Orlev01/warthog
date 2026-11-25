@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Bills follow-up, 25 November:** main `50be4ca` runs as `warthog--r45548430007a1`. PR #72:
+- every bill has Next payment;
+- a bank account's debit card matches Paid with;
+- a total names the bill that makes up most of it.
+
+No migrations (98). See the [release record](bills-next-payment-release-2026-11-25.md).
+
 **The Bills tab, 25 November:** main `27ff35f` runs as `warthog--r45537740803a1`. PR #71 adds a
 Bills tab that shows every recurring payment. Each shows when it's next due (estimated on its
 cycle) and the card or account it comes out of. Bills can be grouped by date or by account, and the

@@ -1,4 +1,19 @@
-# Delivery status — 25 November 2026 (the Bills tab)
+# Delivery status — 25 November 2026 (Bills follow-up)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`50be4ca0a638238a842f59e513d6c5352c3b60b2` runs as `warthog--r45548430007a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #72:**
+  - every bill has Next payment;
+  - a bank account's debit card (`card_last4`) matches Paid with;
+  - a total names the bill that makes up most of it;
+  - "Life admin records" is now version 3.
+
+No migrations (98). See the [release record](docs/audit/bills-next-payment-release-2026-11-25.md).
+
+# Earlier delivery status — 25 November 2026 (the Bills tab)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
