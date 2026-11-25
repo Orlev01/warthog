@@ -40,6 +40,7 @@ import { UNDO_CLAIM_JOIN_SQL } from "./undo-claims";
 import { isRunId } from "../agents/runs";
 import {
   ACTIVITY_CATEGORIES,
+  AGENT_ACTION_KINDS,
   ATTENTION_OUTCOMES,
   OUTCOME_GROUPS,
   type ActivityCategory,
@@ -70,6 +71,9 @@ export interface ActivityFilters {
   // Only entries recorded under one agent run (docs/adr/agent-runs.md), through the
   // plaintext `activity_entry_runs` link. A value that is not a run id matches nothing.
   runId?: string;
+  // Only an agent's own actions recorded outside any run (AGENT_ACTION_KINDS with no
+  // `activity_entry_runs` link): what an agent that doesn't pass its run back did.
+  noRun?: boolean;
   // Only entries that touched one life-admin record, through the `activity_entry_records` link.
   recordId?: string;
 }
@@ -199,6 +203,10 @@ export function activityConditions(userId: string, filters: ActivityFilters, val
     conditions.push(isRunId(filters.runId)
       ? `EXISTS (SELECT 1 FROM activity_entry_runs AS run_link WHERE run_link.user_id = $1 AND run_link.entry_seq = activity_entries.seq AND run_link.run_id = ${param(filters.runId.toLowerCase())}::uuid)`
       : "FALSE");
+  }
+  if (filters.noRun) {
+    conditions.push(`kind = ANY(${param(AGENT_ACTION_KINDS)}::text[])`);
+    conditions.push("NOT EXISTS (SELECT 1 FROM activity_entry_runs AS run_link WHERE run_link.user_id = $1 AND run_link.entry_seq = activity_entries.seq)");
   }
   if (filters.recordId !== undefined) {
     conditions.push(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(filters.recordId)

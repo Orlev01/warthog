@@ -237,7 +237,7 @@ const CATEGORY_TONES: Record<ActivityCategory, string> = {
 type FormAction = (formData: FormData) => void | Promise<void>;
 
 // The outcome in words, with a tone icon (the icon carries colour, the word carries meaning).
-function OutcomeBadge({ outcome, group }: { outcome: string; group?: OutcomeGroup }) {
+export function OutcomeBadge({ outcome, group }: { outcome: string; group?: OutcomeGroup }) {
   if (!outcome) return null;
   const badge = OUTCOME_BADGES[group ?? "other"];
   return (

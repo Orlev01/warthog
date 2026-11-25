@@ -90,7 +90,8 @@ Migration `0113_agent_runs.sql` is additive:
   same person's run.
 
 The runtime role may insert and select both tables and update only `last_seen_at`. Links are
-append-only. Account deletion cascades.
+append-only. Account deletion cascades. (Amended 25 November 2026: migration
+`0127_run_status.sql` lets it also update `label_ct` and `label_changed_at`; see below.)
 
 ## Limits
 
@@ -114,3 +115,77 @@ append-only. Account deletion cascades.
   recorded for current clients. Fixed on 16 November with a de-duplicated list of each agent's
   recent apps ([amendment](agent-evidence-and-controls.md#recent-apps-amendment-16-november-2026)).
   "Via" now uses the same reading.
+
+## Amendment: status updates and Now (25 November 2026)
+
+The founder runs several agents at once (Claude, ChatGPT, Gemini, and several of each) and asked
+to see which agent is doing what. The founder set the boundary: show only what Warthog records
+from calls made **to Warthog**. Nothing an agent does elsewhere is captured or inferred.
+
+### Status updates
+
+- **How it works.** `get_context` with both `run` and `working_on` replaces that conversation's
+  description. No new tool is added, so the agent tool set is unchanged. `RUN_NOTE`, which every
+  run's context carries, and the `working_on` description tell agents they can do this when their
+  work changes. The house skill gets the same sentence once editable Warthog skills
+  (`claude/builtin-skills`, which rewrites it) have landed.
+- **Cleaning.** The new description is cleaned, redacted, cut and encrypted like a new run's.
+- **Ownership.** It only applies to the calling agent's own run, as `resolveRun` checks. Another
+  agent's run, or a malformed one, starts a new conversation as before.
+- **When nothing changes.** Nothing changes, and nothing is recorded, when the description is the
+  same words, is empty after cleaning, or comes within a minute of the last change
+  (`RUN_LABEL_CHANGE_MS`). The first change after a run starts is always allowed. The response
+  carries whichever description then stands, and a failure never withholds the context.
+- **Each change is recorded.** Each change is an agent-reported entry of kind `run_status`,
+  titled "Conversation status update", in the run, carrying `run {id, label}` and `previous`. It
+  is written in the same transaction as the update, so the description never changes without its
+  record. Every other entry keeps the description it was recorded under, so the hash-chained
+  record holds the full history.
+- **The call's own entry.** The pipeline re-reads the request's run for the call's own entry, so
+  the `get_context` entry that made the change carries the new description.
+- **Storage.** `0127_run_status.sql` adds `agent_runs.label_changed_at` and an index over the
+  person's runs by last call. It grants the runtime role `UPDATE (label_ct, label_changed_at)`. It
+  still never rewrites whose a run is, when it started, or `via`.
+
+### Now
+
+**Agents › Now** (`/agents/now`) is a tab between Your agents and Connect an agent. It adds no
+sidebar item and doesn't depend on the open navigation decisions.
+
+**What it shows:**
+- Every agent's conversations seen in the last day, up to 50 (`listRuns` with `since`).
+- They are grouped by provider: Claude, ChatGPT, Gemini, then others by name, then agents that
+  name none. The provider comes from the same keywords as the agent's mark (`agentProvider`).
+- Within a provider, agents are listed by name and conversations by when they started, so a
+  refresh never moves rows.
+
+**Each conversation shows:**
+- The agent's description, quoted and attributed.
+- "via", its entry count and its last call.
+- When its description changed.
+- Its latest action in Warthog's words. This comes from plaintext metadata only, so no payload is
+  decrypted. It never reads a change's intent record, a status change or a `get_context`
+  check-in, which would otherwise hide the work after every status update.
+- An **Active** badge when it called Warthog in the last 15 minutes. The page says what Active
+  means. Nothing says "live", "online" or "running", and the page says Warthog can't tell whether
+  an app is still running or what it does elsewhere.
+
+**Agents that don't use runs** still show: their own calls in the window with no run are counted as
+"N actions not in a conversation", linking to `/activity?agent=…&run=none` (`ActivityFilters.noRun`).
+That count covers `AGENT_ACTION_KINDS`: the agent's calls, refused requests and reports. It never
+includes the person's changes to the agent. Connected agents with nothing in the window are named
+in one line.
+
+**Refreshing:** while the tab is in sight, the page reloads its data every 30 seconds through the
+router. It reloads at once on return to a stale tab and never while hidden. There is a "Pause
+updates" toggle (WCAG 2.2.2). "Updated 3:04 pm" is plain text, not a live region.
+
+### Limits
+
+- A status is still the agent's claim, and only agents that pass their run update it.
+- The window is a day and 50 conversations. Older conversations stay in Activity and on each
+  agent's Overview.
+- Provider grouping follows the platform and the person's name for the agent. An app that
+  connected through a callback on the person's computer is grouped by its name, which the person
+  can change.
+

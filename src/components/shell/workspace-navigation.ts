@@ -110,10 +110,12 @@ export function sectionNavigation(pathname: string): {
       ["Activity", "/activity"],
       ["Spending", "/spending"],
     ];
-  } else if (path === "/agents" || path === "/agents/connect") {
+  } else if (path === "/agents" || path === "/agents/now" || path === "/agents/connect") {
     label = "Agents";
     links = [
       ["Your agents", "/agents"],
+      // Every agent's recent conversations (docs/adr/agent-runs.md).
+      ["Now", "/agents/now"],
       ["Connect an agent", "/agents/connect"],
     ];
   }

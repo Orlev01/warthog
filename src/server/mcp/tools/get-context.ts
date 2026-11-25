@@ -23,7 +23,7 @@ export const getContextSchema = z.object({
     .max(2000)
     .optional()
     .catch(undefined)
-    .describe("A few words on what you are working on in this conversation, for example \"Fixing the website tests\". The person sees it next to everything this conversation does."),
+    .describe("A few words on what you are working on in this conversation, for example \"Fixing the website tests\". The person sees it next to everything this conversation does. Sent with run, it replaces this conversation's description when the work changes; the person sees each change."),
   run: z
     .string()
     .max(64)
@@ -65,7 +65,9 @@ import type { Clock } from "../../seams/clock";
 import type { Db } from "../../db/index";
 import { loadAgentContext, type AgentConnection } from "../context";
 import { requestObservation } from "../client-observation";
-import { startRun, type RunRef } from "../../agents/runs";
+import { startRun, updateRunLabel, type RunRef } from "../../agents/runs";
+import { createRedactingRecorder } from "../recorder";
+import type { ActivityRecorder } from "../../activity/recorder";
 import { releasedValueMatcher } from "../../crypto/hmac";
 import { listRecordsForUser } from "../../db/life-admin-records";
 import { summariseLifeAdmin, type LifeAdminSummary } from "../../../domain/life-admin/summary";
@@ -79,12 +81,15 @@ import { handoverItems } from "../../life-admin/journal-views";
 import { lookupForUser } from "../../db/release-fingerprints";
 
 // What the agent is told to do with its run.
-export const RUN_NOTE = "Pass this id as run on every Warthog call you make in this conversation, so the person can see this conversation's actions together. A new conversation starts its own run: call get_context without run.";
+export const RUN_NOTE = "Pass this id as run on every Warthog call you make in this conversation, so the person can see this conversation's actions together. When the work changes, call get_context with run and a new working_on. A new conversation starts its own run: call get_context without run.";
 
 export interface GetContextDeps {
   readonly db: Db;
   readonly keyWrapper: KeyWrapper;
   readonly clock: Clock;
+  // Writes a description change's agent-reported entry (docs/adr/agent-runs.md). The MCP
+  // dispatch passes its own; otherwise the production recorder over the same seams.
+  readonly recorder?: ActivityRecorder;
 }
 
 // One low-tier profile field as the agent sees it.
@@ -167,6 +172,7 @@ export function createGetContextTool(deps: GetContextDeps): {
     }
     return keyWrapper.unwrap(user.wrappedDek);
   }
+  const recorder = deps.recorder ?? createRedactingRecorder({ db, clock, dekFor: dataKeyFor });
 
   return {
     async handle(
@@ -262,6 +268,27 @@ export function createGetContextTool(deps: GetContextDeps): {
       // conversation that already has a run and must not start a stray one.
       const observed = requestObservation.getStore();
       let run: RunRef | undefined = observed?.run;
+      if (run && pageInput.working_on !== undefined) {
+        // The conversation's work changed: its description is replaced, and the change is
+        // recorded as the agent's own claim in the same transaction. A change that changes
+        // nothing (the same words, too soon after the last) leaves the description that stands;
+        // like the run itself, it never withholds the context.
+        try {
+          const matches = releasedValueMatcher(dek, await lookupForUser(db, userId, clock));
+          const change = await updateRunLabel(db, connection, run.id, pageInput.working_on, dek, clock, matches, async (tx, { run: next, previous }) => {
+            await (recorder.forTransaction?.(tx, async () => dek) ?? recorder).record({
+              userId, agentId, kind: "run_status", source: "agent_reported", outcome: "reported",
+              payload: { run: next, ...(previous === undefined ? {} : { previous }) },
+            });
+          });
+          if (change) {
+            run = change.run;
+            if (observed) observed.run = change.run;
+          }
+        } catch {
+          console.error("[warthog mcp] a conversation's description could not be updated");
+        }
+      }
       if (!run && pageInput.memory_cursor === undefined && pageInput.skill_cursor === undefined) {
         // A run is bookkeeping, not permission: if one can't be started the context is still
         // returned (without a run), and the failure is logged without any content.

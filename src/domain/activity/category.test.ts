@@ -41,6 +41,7 @@ test("a tool whose effect Warthog cannot confirm counts as a change, never a rea
 
 test("an agent's own report is never counted as a read or change", () => {
   assert.equal(cat("agent_report", undefined, "agent_reported"), "report");
+  assert.equal(cat("run_status"), "report", "a conversation's status is the agent's own claim");
   assert.equal(cat("tool_call", "log_activity"), "report", "the Warthog row of the reporting call");
   assert.equal(cat("tool_attempt", "log_activity"), "report");
   assert.equal(cat("tool_call", "search_memory", "agent_reported"), "report", "agent-reported source always wins");
@@ -99,6 +100,7 @@ test("outcomes group into done, waiting, blocked and failed; anything else is ot
 test("an agent acts in its calls and reports, but is the subject of an owner's change", () => {
   assert.equal(agentRole("tool_call"), "actor");
   assert.equal(agentRole("agent_report"), "actor");
+  assert.equal(agentRole("run_status"), "actor");
   assert.equal(agentRole("tool_rejected"), "actor");
   assert.equal(agentRole("permission_change"), "subject");
   assert.equal(agentRole("approval_decision"), "subject");

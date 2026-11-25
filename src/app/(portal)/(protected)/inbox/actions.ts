@@ -2,6 +2,7 @@ import { vaultFieldAllowed } from "../../../../server/agents/resource-access";
 import { getAgentById, listAgentsForUser, type Agent } from "../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../server/db/agent-permissions";
 import { formatAccountTime } from "@/server/display-time";
+import { agoText } from "@/domain/display-time";
 // Time left before a pending request expires, in plain words: minutes under an hour, then
 // hours and minutes (the person's expiry runs up to 24 hours).
 import { timeLeftLabel } from "@/domain/approvals/expiry-copy";
@@ -411,14 +412,6 @@ function sourceText(source: RecentRead["sources"][number]): string {
     case "message": return `a message${from}`;
     default: return `something${from}`;
   }
-}
-
-function agoText(at: Date, now: Date): string {
-  const minutes = Math.round((now.getTime() - at.getTime()) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
 }
 
 // The Details line: what the agent read from others in the last hour, each with its own time.

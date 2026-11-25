@@ -55,6 +55,8 @@ const KIND_LABELS: Record<string, string> = {
   tool_rejected: "Request blocked",
   protocol_rejected: "Request couldn't be read",
   agent_report: "Agent report",
+  // An agent changed what its conversation says it is working on (docs/adr/agent-runs.md).
+  run_status: "Conversation status update",
   client_observed: "Client details reported",
   approval_decision: "Approval decision",
   card_release: "Card release",
