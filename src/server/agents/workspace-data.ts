@@ -1,4 +1,5 @@
 import { readClientObservation } from "../mcp/client-observation";
+import { reportedApp } from "@/domain/agents/known-clients";
 import { activityEvidence } from "@/domain/activity/evidence";
 import { getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
@@ -128,6 +129,8 @@ export async function agentWorkspaceData(
     accessKey,
     performance,
     agent,
+    // What its apps say they are ("Gemini CLI"), when the ones Warthog knows agree.
+    reportedApp: clientObservation ? reportedApp(clientObservation.seen)?.label ?? null : null,
     clientObservation: clientObservation ? {
       ...clientObservation,
       displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone),

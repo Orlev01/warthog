@@ -43,6 +43,7 @@ test("an agent call is titled by its tool; any other entry by its kind's plain l
 test("titles use the same plain labels as the Event filter", () => {
   assert.equal(entryTitle({ kind: "agent_key_replaced" }), "Access key replaced");
   assert.equal(entryTitle({ kind: "agent_key_revoked" }), "Access key revoked");
+  assert.equal(entryTitle({ kind: "agent_renamed" }), "Agent renamed");
   assert.equal(entryTitle({ kind: "tool_rejected", tool: "remember" }), "Request blocked");
   assert.equal(entryTitle({ kind: "protocol_rejected" }), "Request couldn't be read");
   assert.equal(entryTitle({ kind: "client_observed" }), "Client details reported");

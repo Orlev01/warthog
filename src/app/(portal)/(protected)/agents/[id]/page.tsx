@@ -34,6 +34,8 @@ import {
   type SaveResult,
 } from "./actions";
 import { PermissionsForm } from "./permissions-form";
+import { createRenameActions, renameNotice, renameNoticeKey, type RenameResult } from "./rename";
+import { AgentNameForm } from "@/components/agents/agent-name-form";
 import { createAccessKeyActions, type ReplaceResult, type RevokeResult } from "../access-key/actions";
 import { AccessKeyPanel } from "@/components/agents/access-key-panel";
 import type { Db } from "@/server/db/index";
@@ -148,6 +150,34 @@ async function revokeAccessKey(agentId: string): Promise<RevokeResult> {
     if (error instanceof HttpError) return { ok: false, reason: "invalid" };
     throw error;
   }
+}
+
+// Rename this agent, from the "Name" panel in its Settings section
+// (docs/adr/agent-names-and-providers.md). A thin "use server" wrapper over the tested rename
+// actions: re-derive the verified session (never a client value), act only on that person's
+// own agent, then come back to Settings with the outcome in plain words. The name shows in
+// the sidebar too, so the whole layout is revalidated. A malformed id or value is a 4xx at the
+// actions' boundary, reported as a plain refusal.
+async function renameAgentAction(agentId: string, formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let result: RenameResult | null = null;
+  try {
+    const config = loadConfig();
+    result = await createRenameActions({
+      db,
+      clock: systemClock,
+      keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
+    }).rename(session, agentId, String(formData.get("name") ?? ""));
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+  }
+  if (result?.ok && result.changed) revalidatePath("/", "layout");
+  redirect(`/agents/${encodeURIComponent(agentId)}?section=settings&notice=${renameNoticeKey(result)}`);
 }
 
 // The tab names the agent, and the section after the Overview: "Dev console · Warthog",
@@ -271,6 +301,14 @@ export default async function AgentPermissionsPage({
       ) : (
         <>
           <AgentResources data={data} section={section} />
+          {section === "settings" ? (
+            // Naming is labelling only, so it stays open for a disconnected agent too.
+            <AgentNameForm
+              agentName={data.agent.displayName}
+              renameAction={renameAgentAction.bind(null, id)}
+              notice={renameNotice(search.notice)}
+            />
+          ) : null}
           {section !== "activity" ? (
             // A disconnected agent's settings stay visible but can't be changed: the
             // controls are disabled and the Save bar explains why (interaction-08).

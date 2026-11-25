@@ -69,6 +69,8 @@ export const REJECTED_KINDS: readonly string[] = ["tool_rejected", "protocol_rej
 
 export const ACCESS_KINDS: readonly string[] = [
   "agent_connected",
+  // The person renamed an agent (docs/adr/agent-names-and-providers.md).
+  "agent_renamed",
   "agent_key_revoked",
   "agent_key_replaced",
   "connection_change",

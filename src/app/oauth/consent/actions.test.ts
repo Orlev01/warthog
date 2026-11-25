@@ -157,6 +157,39 @@ test("a known platform callback is marked verified (the Verified-platform badge)
   }
 });
 
+// Google's account-linking relay is the platform "Google", not a product: nothing measured ties
+// it to Gemini, which connects through Gemini CLI (docs/adr/agent-names-and-providers.md).
+test("Google's callback relay is verified as Google", async () => {
+  const db = await freshDb();
+  try {
+    const props = await loadConsentView(await seedPending(db, "https://oauth-redirect.googleusercontent.com/r/some-project"), SESSION_USER);
+    assert.ok(props != null);
+    assert.equal(props!.platform, "Google");
+    assert.equal(props!.defaultName, "Google");
+    assert.equal(props!.redirect.verified, true);
+  } finally {
+    await db.close();
+  }
+});
+
+// An app that signs in on the person's own computer (Gemini CLI, Codex, Claude Code connecting
+// directly) returns to a loopback callback. It is never verified, its stored platform stays the
+// host, and the name it starts with says what it is rather than "localhost".
+test("a callback on this computer starts with a name in words, unverified", async () => {
+  const db = await freshDb();
+  try {
+    for (const uri of ["http://localhost:7777/oauth/callback", "http://127.0.0.1:53682/callback"]) {
+      const props = await loadConsentView(await seedPending(db, uri), SESSION_USER);
+      assert.ok(props != null, uri);
+      assert.equal(props!.platform, new URL(uri).hostname, `${uri}: the platform recorded is the callback host`);
+      assert.equal(props!.defaultName, "App on your computer", uri);
+      assert.equal(props!.redirect.verified, false, uri);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 // =====================================================================================
 // Any other callback host → NOT verified (shown prominently, never a silent trust); a
 // look-alike host that a naive suffix/substring check would accept is NOT verified either.

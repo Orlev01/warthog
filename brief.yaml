@@ -260,7 +260,11 @@ features:
     disconnected agent can be reconnected only by going through consent again.
   - >-
     Agent list — every agent with platform, status, connected date, last active time, request count
-    and spend in its current budget period, with filters to its activity.
+    and spend in its current budget period, with filters to its activity. (Amended 25 November 2026,
+    founder: the person can rename an agent from its Settings; its platform stays as Warthog recorded
+    it, an app that signed in on the person's own computer reads "App on your computer", and what an
+    agent's apps report about themselves is shown beside the platform as their claim. See
+    docs/adr/agent-names-and-providers.md.)
 
   # --- What agents can do through Warthog (the agent-facing tool set) ---
   - >-

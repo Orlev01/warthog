@@ -75,6 +75,7 @@ type AgentListItem = {
   budget: number; // major unit
   budgetPeriod: "day" | "week" | "month";
   activityHref: string; // link to this agent's filtered activity
+  reportedApp?: string | null; // what its apps say they are ("Gemini CLI"), as they reported it
 };
 
 type AgentListViewProps = {
@@ -614,4 +615,13 @@ test("the view keeps the order the loader gives", () => {
 
 test("an empty list shows no summary count", () => {
   assert.doesNotMatch(headerText(render(base({ agents: [] }))), /\b0 agents\b/);
+});
+
+test("an agent's row adds what its app reported when its platform doesn't say it", () => {
+  const local = { ...AGENT_A, id: "agent-local", name: "Research helper", platform: "localhost", reportedApp: "Gemini CLI" };
+  const text = visibleText(render(base({ agents: [local] })));
+  assert.match(text, /App on your computer · says it’s Gemini CLI/, `text="${text}"`);
+  assert.doesNotMatch(text, /localhost/, "the callback host never shows as the platform");
+  const connector = visibleText(render(base({ agents: [{ ...AGENT_B, reportedApp: "Claude" }] })));
+  assert.doesNotMatch(connector, /says it/, "the claude.ai connector already reads Claude");
 });

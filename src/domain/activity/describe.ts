@@ -60,6 +60,7 @@ const KIND_LABELS: Record<string, string> = {
   card_release: "Card release",
   identity_release: "Identity detail release",
   agent_connected: "Agent connected",
+  agent_renamed: "Agent renamed",
   agent_key_revoked: "Access key revoked",
   agent_key_replaced: "Access key replaced",
   connection_change: "Connection change",
