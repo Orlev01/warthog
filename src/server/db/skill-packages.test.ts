@@ -98,3 +98,22 @@ test("supporting-file reads cannot cross into nested skills or root plugin confi
     assert.doesNotMatch((await getSkillText(db, user.id, "agent", "Nested kit / Child", dek))!, /nested\//);
   } finally { await db.close(); }
 });
+
+// docs/adr/editable-builtin-skills.md and review, 25 Nov 2026: a package saved from the Skills page
+// can't take a Warthog skill's title, but one that already had it still opens, exports and saves.
+test("a Warthog skill's title is refused for a new package skill, never for one that already had it", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await createUser(db, { email: "reserved@example.test", wrappedDek: "wrapped", role: "member" });
+    const dek = randomBytes(32);
+    const taxTime = [{ path: "SKILL.md", content: makeSkillFile("Tax time", "When it's tax time", "My way") }];
+    await assert.rejects(savePackage(db, owner.id, { files: taxTime }, dek, { refuseNewReservedNames: true }), /one of Warthog's skills/);
+    // An import (or a package saved before the name was Warthog's) keeps it.
+    const kept = await savePackage(db, owner.id, { files: taxTime }, dek);
+    assert.equal((await listPackages(db, owner.id, dek)).length, 1, "it still lists");
+    const edited = [{ path: "SKILL.md", content: makeSkillFile("Tax time", "When it's tax time", "My newer way") }];
+    await savePackage(db, owner.id, { id: kept.id, revision: kept.revision, files: edited }, dek, { refuseNewReservedNames: true });
+  } finally {
+    await db.close();
+  }
+});

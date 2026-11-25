@@ -30,7 +30,7 @@ test("the skill stays short, points to Life admin records, and says which of its
   assert.ok(text.length < 10_000, `${text.length} characters`);
   assert.match(text, new RegExp(`"${LIFE_ADMIN_SKILL.title}"`));
   assert.match(text, /Only when the person asked you to build their profile/);
-  assert.match(text, /every category below, in batches of up to 4/);
+  assert.match(text, /every category in the order below, in batches of up to 4/);
   assert.match(text, /up to 3 new categories/);
   assert.match(text, /keep going between batches unless the person says stop/);
   assert.match(text, /8 emails, events or files per category still applies/);
