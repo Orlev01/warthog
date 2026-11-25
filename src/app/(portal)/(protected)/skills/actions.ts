@@ -369,7 +369,11 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     input: EditSkillInput,
   ): Promise<ActionResult> {
     const valid = parseParams(editSkillSchema, input);
-    if (isReservedSkillTitle(valid.title)) return { ok: false, reason: "reserved_title" };
+    // A skill that already had a Warthog skill's title keeps it; a new one can't take it.
+    if (isReservedSkillTitle(valid.title)) {
+      const current = (await listSkillsForUser(db, session.userId, await dataKeyFor(session.userId), { omitPackageText: true })).find((skill) => skill.id === valid.id);
+      if (!current || current.title.trim().toLowerCase() !== valid.title.trim().toLowerCase()) return { ok: false, reason: "reserved_title" };
+    }
     if (await isPackagedSkill(db, session.userId, valid.id))
       return { ok: false, reason: "edit_package" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];
@@ -482,8 +486,11 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
         await change({ basedOnVersion: def.version });
         break;
       case "edit": {
-        const useThisWhen = valid.useThisWhen === def.useThisWhen.trim() ? null : valid.useThisWhen;
-        const guidance = valid.guidance === def.guidance.trim() ? null : valid.guidance;
+        // Browsers post a textarea's line breaks as CRLF: compare and keep LF, so Warthog's own
+        // wording posted back unchanged isn't kept as an edit.
+        const lf = (text: string) => text.replace(/\r\n?/g, "\n").trim();
+        const useThisWhen = lf(valid.useThisWhen) === lf(def.useThisWhen) ? null : lf(valid.useThisWhen);
+        const guidance = lf(valid.guidance) === lf(def.guidance) ? null : lf(valid.guidance);
         await change({ useThisWhen, guidance, basedOnVersion: def.version });
         break;
       }

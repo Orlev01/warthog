@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 
 import { decrypt, encrypt } from "../crypto/envelope";
-import type { Db, Row } from "./index";
+import { withTransaction, type Db, type Row } from "./index";
 
 const TABLE = "builtin_skills";
 
@@ -71,6 +71,22 @@ export async function listBuiltinSkillSettings(db: Db, userId: string, dek: Uint
 // Change one of Warthog's skills for this person, creating their row on the first change.
 // `defaults` is Warthog's state for a skill with no row (on, or off for an opt-in pack).
 export async function changeBuiltinSkill(
+  db: Db,
+  userId: string,
+  key: string,
+  change: BuiltinSkillChange,
+  defaults: { readonly state: BuiltinSkillState },
+  dek: Uint8Array,
+): Promise<void> {
+  // One change at a time per person: two first edits at once would each pick a row id, and the
+  // second would store envelopes bound to an id the row doesn't have (review, 25 Nov 2026).
+  await withTransaction(db, async (tx) => {
+    await tx.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
+    await changeLocked(tx, userId, key, change, defaults, dek);
+  });
+}
+
+async function changeLocked(
   db: Db,
   userId: string,
   key: string,

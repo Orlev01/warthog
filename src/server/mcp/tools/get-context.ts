@@ -51,7 +51,8 @@ import { vaultFieldAllowed } from "../../agents/resource-access";
 // connection's user id and parameter-bound by the stores (INV-102).
 
 import { type SkillIndexEntry } from "../../../domain/skills/index";
-import { builtinAvailableTo, HOUSE_KEY } from "../../../domain/skills/builtins";
+import { builtinAvailableTo, HOUSE_KEY, LIFE_ADMIN_KEY, PROFILE_KEY } from "../../../domain/skills/builtins";
+import { LIFE_ADMIN_RULES } from "../../../domain/life-admin/skill";
 import { houseInstructions } from "../../../domain/skills/house";
 import { agentGatesFor, builtinSkillsFor } from "../../skills/builtin-skills";
 import { ruleSentence } from "../../../domain/rules/rules";
@@ -216,6 +217,12 @@ export function createGetContextTool(deps: GetContextDeps): {
       const skills = [...builtIn, ...skillPage.items];
       // The house skill's rules always reach the agent; its guidance only while it's given to it.
       const house = given.find((skill) => skill.def.key === HOUSE_KEY);
+      // Life admin's rules reach an agent that can use Life admin even when the person switched
+      // that skill off for it: switching a skill off never drops a protection.
+      const lifeAdminGiven = given.some((skill) => skill.def.key === LIFE_ADMIN_KEY);
+      const moreRules = !lifeAdminGiven && gates.passes.has("records_read") ? LIFE_ADMIN_RULES : [];
+      // Offers that send the agent to the profile build or Life admin skill only while it has both.
+      const offersSkills = lifeAdminGiven && given.some((skill) => skill.def.key === PROFILE_KEY);
       const memoryPage = permissions.memoryRead
         ? await pageMemories(db, userId, dek, {
             agentId,
@@ -297,7 +304,7 @@ export function createGetContextTool(deps: GetContextDeps): {
         const savedByLife = await savedByResolver(db, userId, agentId);
         const handover = await handoverItems(db, userId, visible, person.catalogue, dek, savedByLife, now, person.zone);
         lifeAdmin = summariseLifeAdmin(visible, person.catalogue, now, person.zone, {
-          offerSources: writes ? sources : [],
+          offerSources: writes && offersSkills ? sources : [],
           settings: person.settings,
           otherMailAccounts,
           handover,
@@ -309,7 +316,7 @@ export function createGetContextTool(deps: GetContextDeps): {
       return {
         connection: { agentId: connection.agentId, name: agent?.displayName ?? "This connection", platform: agent?.platform ?? "other", identitySource: "Warthog credential; display name and platform are owner supplied, not verification of the chat user or model." },
         run: run ? { id: run.id, workingOn: run.label ?? null, note: RUN_NOTE } : null,
-        instructions: houseInstructions(house ? house.guidance : null),
+        instructions: houseInstructions(house ? house.guidance : null, moreRules),
         // Every account this agent may use, with its own settings (docs/adr/several-accounts-per-agent.md).
         // An agent names one in a tool's `account` by its address or handle; no internal ids.
         serviceAccounts: [...permissions.accounts].sort((a, b) => {

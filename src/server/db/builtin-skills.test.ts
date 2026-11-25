@@ -74,3 +74,21 @@ test("the table refuses wording that isn't an envelope, or an edit without the v
     await db.close();
   }
 });
+
+// Review, 25 Nov 2026: two first edits at once (two tabs, a retry) mustn't leave a row whose
+// wording can't be read, or get_context fails for every agent.
+test("two changes at once both land, and the row still reads", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await person(db, "builtin-race");
+    const dek = randomBytes(32);
+    await Promise.all([
+      changeBuiltinSkill(db, userId, "using_warthog", { guidance: "First.", basedOnVersion: 1 }, { state: "on" }, dek),
+      changeBuiltinSkill(db, userId, "using_warthog", { guidance: "Second.", basedOnVersion: 1 }, { state: "on" }, dek),
+    ]);
+    const setting = (await listBuiltinSkillSettings(db, userId, dek)).get("using_warthog")!;
+    assert.ok(["First.", "Second."].includes(setting.guidance!));
+  } finally {
+    await db.close();
+  }
+});

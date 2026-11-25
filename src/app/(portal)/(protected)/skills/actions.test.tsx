@@ -1014,6 +1014,12 @@ test("changeWarthogSkill: switch off, edit, choose agents and restore one of War
 
     assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: ` ${house.warthogGuidance} ` })), true);
     assert.equal((await view("using_warthog")).edited, false, "Warthog's own wording isn't kept as an edit");
+    // Review, 25 Nov 2026: a browser posts the textarea with CRLF line breaks.
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: house.warthogGuidance.replace(/\n/g, "\r\n") })), true);
+    assert.equal((await view("using_warthog")).edited, false, "posted back with CRLF, it's still Warthog's");
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: "Line one.\r\nLine two." })), true);
+    assert.equal((await view("using_warthog")).guidance, "Line one.\nLine two.", "kept with LF");
+    await actions.changeWarthogSkill(session, { key: "using_warthog", action: "edit", useThisWhen: house.useThisWhen, guidance: house.warthogGuidance });
 
     assert.equal(okOf(await actions.changeWarthogSkill(session, { key: "life_admin_records", action: "scope", scope: "chosen", scopedAgentIds: [myAgent] })), true);
     assert.deepEqual((await view("life_admin_records")).scopedAgentIds, [myAgent]);
@@ -1028,6 +1034,25 @@ test("changeWarthogSkill: switch off, edit, choose agents and restore one of War
     assert.equal(restored.scope, "all");
 
     await assert.rejects(actions.changeWarthogSkill(session, { key: "not_a_skill", action: "on" }), "an unknown key is refused at the boundary");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review, 25 Nov 2026: a skill the person made before "Tax time" was Warthog's keeps its title.
+test("editSkill lets an older skill keep a title Warthog now uses, but not take one", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "reserved-edit");
+    const actions = makeActions(db, keyWrapper);
+    await actions.createSkill(sessionFor(userId), createInput({ title: "My tax", useThisWhen: "when x", fullText: "y", scope: "all" }));
+    const mine = (await listSkillsForUser(db, userId, dek))[0]!;
+    const renamed = await actions.editSkill(sessionFor(userId), { id: mine.id, title: "Tax time", useThisWhen: "when x", fullText: "y", scope: "all" } as never);
+    assert.equal((renamed as { reason?: string }).reason, "reserved_title", "can't take it");
+    const older = await seedSkill(db, { userId, title: "Tax time", useThisWhen: "when x", fullText: "y", scope: "all", scopedAgentIds: [] }, dek);
+    const kept = await actions.editSkill(sessionFor(userId), { id: (older as { id: string }).id, title: "Tax time", useThisWhen: "when x", fullText: "z", scope: "all" } as never);
+    assert.equal(okOf(kept), true, "keeps it");
   } finally {
     await db.close();
   }

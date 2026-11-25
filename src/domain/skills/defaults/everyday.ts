@@ -59,7 +59,7 @@ const RENEWALS_SWITCHING: DefaultSkillText = {
     "",
     "1. Find what's coming up. list_records with dueWithinDays 60 shows what renews or expires soon, and its monthlyCost says what those cost a month. Starting from a notice, find its record with list_records and a query (the provider or the plate).",
     "2. Compare the newest notice with last year's. Insurance renewal notices usually show last year's premium; if not, use the amount on the record or last year's notice in their email. Say what changed.",
-    "3. Compare like for like. For insurance, keep the cover, sum insured and excess the same before comparing prices. For energy, use the usage on a recent bill with Energy Made Easy, or Victorian Energy Compare in Victoria: a big discount off a high rate can still cost more.",
+    "3. Compare like for like. For insurance, keep the cover, sum insured and excess the same before comparing prices. For energy, use the usage on a recent bill with Energy Made Easy, or Victorian Energy Compare in Victoria (WA and the NT have their own retailers to ask): a big discount off a high rate can still cost more.",
     "4. Give the person two or three options and the trade-offs. Asking the current provider for a better price is a real option.",
     "5. Record the outcome with update_record: journal: {decision: \"...\"} saying what was chosen and why, and journal: {next: {text, due}} for what's left, due before the renewal date.",
     "",

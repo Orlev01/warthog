@@ -156,10 +156,11 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
         const dek = await dataKeyFor(connection.userId);
         const skill = (await builtinSkillsFor(db, connection.userId, dek)).find((entry) => entry.def.key === builtin.key)!;
         const gates = permissions ? await agentGatesFor(db, connection.userId, permissions) : { passes: new Set<never>() };
-        if (!builtinAvailableTo(skill, connection.agentId, gates) || (skill.def.reference && !permissions)) {
-          return { status: "not_available", reason: NOT_AVAILABLE_REASON };
+        // Not given to this agent: an older skill of the person's own with that title is
+        // still theirs to use, so look for one below rather than refusing outright.
+        if (builtinAvailableTo(skill, connection.agentId, gates) && !(skill.def.reference && !permissions)) {
+          return { status: "found", title: builtin.title, text: await builtinText(skill, connection, permissions!, dek) };
         }
-        return { status: "found", title: builtin.title, text: await builtinText(skill, connection, permissions!, dek) };
       }
 
       // A personal skill: taking the OWNING person and the agent from the connection
