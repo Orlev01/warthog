@@ -1,4 +1,20 @@
-# Delivery status — 25 November 2026 (seeing which agent is doing what)
+# Delivery status — 25 November 2026 (the Bills tab)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`27ff35f2a7d8c648ea0b62ecf2e3b23031071b17` runs as `warthog--r45537740803a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #71:** Life admin gains a Bills tab:
+  - every recurring payment, with its next due date (estimated on its cycle) and the card or account
+    it comes out of;
+  - grouped by date or by account;
+  - one monthly figure for Records, Bills and agents;
+  - `list_records view: "bills"`.
+
+No migrations (98). See the [release record](docs/audit/bills-release-2026-11-25.md).
+
+# Earlier delivery status — 25 November 2026 (seeing which agent is doing what)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

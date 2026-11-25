@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**The Bills tab, 25 November:** main `27ff35f` runs as `warthog--r45537740803a1`. PR #71 adds a
+Bills tab that shows every recurring payment. Each shows when it's next due (estimated on its
+cycle) and the card or account it comes out of. Bills can be grouped by date or by account, and the
+same monthly figure is used everywhere. No migrations (98). See the
+[release record](bills-release-2026-11-25.md).
+
 **Seeing which agent is doing what, 25 November:** main `18dac62` runs as `warthog--r45524200877a1`.
 - **PR #68:** apps on the person's computer read "App on your computer"; the app an agent reported
   shows beside its platform (measured client names only); agents can be renamed.
