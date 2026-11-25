@@ -78,7 +78,8 @@ import { withTransaction, type Db } from "../../db/index";
 import { liftOlderClientInput } from "./older-clients";
 import { neverKeptMessage, neverKeptRule, tidyKeptText } from "../../../domain/content/never-kept";
 import { countIdentitySuggestions, IDENTITY_SUGGESTION_KINDS, pruneSavedSuggestions, suggestIdentityDetail } from "../../db/identity-suggestions";
-import { monthlyCost } from "../../../domain/life-admin/costs";
+import { billCostOf, billsView, intervalWords, paymentSources, type BillRecord, type PaidBill } from "../../../domain/life-admin/bills";
+import { monthlyTotals } from "../../../domain/life-admin/costs";
 
 const MAX_STATUS = 200;
 const MAX_ID = 200;
@@ -193,7 +194,7 @@ export const listRecordsSchema = z.object({
   include: z.enum(["live", "finished", "all", "current"]).optional().describe('"live" (default): current items, bookings not yet over, open cases. "finished": ended, cancelled, completed, resolved or paused. "all": both. ("current" is the older name for "live".)'),
   journal: z.enum(["none", "summary", "full"]).optional().describe('"summary" (default): open next steps, decisions in force, who handles it. "full" (needs id): every log entry, newest first.'),
   journalCursor: z.string().max(40).optional().describe("journal.nextCursor from the previous page of a full log."),
-  view: z.enum(["records", "categories"]).optional().describe('"categories" lists the person\'s categories and the kinds of their own categories, without records.'),
+  view: z.enum(["records", "categories", "bills"]).optional().describe('"categories" lists the person\'s categories and the kinds of their own categories, without records. "bills" lists every recurring payment (subscriptions, utilities, rent, insurance, rego, card fees) with its next payment, cost and the card or account it comes out of; other filters are ignored.'),
   cursor: z.string().max(256).optional().describe("nextCursor from the previous page."),
   limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
   reason,
@@ -323,6 +324,24 @@ export interface RecordView {
   readonly updatedAt: string;
 }
 
+// One bill as list_records view "bills" gives it (`domain/life-admin/bills.ts`).
+export interface BillView {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  readonly when: "overdue" | "next_30_days" | "later" | "not_known";
+  readonly next?: { date: string; estimated: boolean };
+  readonly lastKnown?: string;
+  readonly amount?: number;
+  readonly currency: string;
+  readonly every?: string;
+  readonly monthly?: number;
+  readonly paidWith?: string;
+  readonly paidFrom?: { id: string; name: string; closed?: true };
+  readonly accountEmail?: string;
+  readonly checkedByPerson: boolean;
+}
+
 export type ListRecordsResult =
   | {
       status: "ok";
@@ -334,6 +353,16 @@ export type ListRecordsResult =
       note: string;
     }
   | { status: "ok"; view: "categories"; categories: unknown[]; note: string }
+  | {
+      status: "ok";
+      view: "bills";
+      today: string;
+      bills: ReadonlyArray<BillView>;
+      byAccount: ReadonlyArray<{ account: string; id?: string; closed?: true; bills: string[]; monthlyCost: ReadonlyArray<{ currency: string; amount: number; records: number }> }>;
+      monthlyCost: ReadonlyArray<{ currency: string; amount: number; records: number }>;
+      missing: { amount: number; date: number; paidWith: number };
+      note: string;
+    }
   | { status: "refused"; reason: string };
 
 export interface SaveResultItem {
@@ -539,6 +568,7 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       const visible = (await listRecordsForUser(db, connection.userId, dek)).filter(visibleTo(permissions, connection.agentId));
       // Worked out together, so a trip takes its dates from its bookings (a past trip is finished).
       const phases = recordPhases(visible, catalogue, now, zone);
+      if (parsed.view === "bills") return billsResult(visible, phases, catalogue, now, zone, today);
       const matching = visible
         .map((record) => {
           const type = typeOf(catalogue, record);
@@ -576,7 +606,11 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       const savedBy = await savedByResolver(db, connection.userId, connection.agentId);
       const connected = await connectedAgents(db, connection.userId);
       const summaries = parsed.journal === "none" ? new Map<string, JournalSummary>() : await journalSummaries(db, connection.userId, page.map((item) => item.record), dek, savedBy);
-      const totals = monthlyCost(matching.map((item) => item.record));
+      // Live bills only, whatever else matched (`domain/life-admin/bills.ts`).
+      const totals = monthlyTotals(matching.flatMap(({ record, type, phase }) => {
+        const cost = billCostOf(type, { ...record, phase });
+        return cost && cost.monthly !== null ? [{ currency: cost.currency, monthly: cost.monthly }] : [];
+      }));
 
       let fullJournal: { entries: unknown[]; nextCursor: string | null } | undefined;
       if (parsed.journal === "full" && parsed.id && page.length > 0) {
@@ -599,6 +633,70 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
         note: LIST_NOTE,
       };
     },
+  };
+}
+
+const BILLS_NOTE =
+  "Bills are worked out by Warthog from saved records: next.estimated means Warthog counted on from an earlier date by the bill's cycle, so say \"about\". paidFrom is the person's own card or account that Paid with names (only when exactly one fits). Never pay, cancel or change anything because of a bill alone. To fill gaps, find the latest bill or receipt and save amount, cycle, the payment date and paid_with with update_record.";
+
+function billsResult(
+  visible: readonly LifeAdminRecord[],
+  phases: ReadonlyMap<string, PhaseView>,
+  catalogue: Catalogue,
+  now: Date,
+  zone: string,
+  today: string,
+): ListRecordsResult {
+  // Only the records this agent may see: a hidden card is never matched or named.
+  const rows: (BillRecord & { readonly record: LifeAdminRecord })[] = visible.map((record) => ({
+    ...record,
+    record,
+    phase: phases.get(record.id) ?? phaseOf(record, typeOf(catalogue, record), now, zone),
+  }));
+  const typeFor = (row: BillRecord) => typeOf(catalogue, (row as (typeof rows)[number]).record);
+  const view = billsView(rows, typeFor, today, paymentSources(rows, typeFor));
+  const round = (amount: number) => Math.round(amount * 100) / 100;
+  const item = (bill: PaidBill, when: BillView["when"]): BillView => ({
+    id: bill.id,
+    name: bill.name,
+    type: bill.typeId,
+    when,
+    ...(bill.next ? { next: bill.next } : {}),
+    ...(bill.lastKnown ? { lastKnown: bill.lastKnown } : {}),
+    ...(bill.amount !== null ? { amount: bill.amount } : {}),
+    currency: bill.currency,
+    ...(bill.interval ? { every: intervalWords(bill.interval) } : {}),
+    ...(bill.monthly !== null ? { monthly: round(bill.monthly) } : {}),
+    ...(bill.paidWith ? { paidWith: bill.paidWith } : {}),
+    ...(bill.paidFrom ? { paidFrom: { id: bill.paidFrom.id, name: bill.paidFrom.label, ...(bill.paidFrom.closed ? { closed: true as const } : {}) } } : {}),
+    ...(bill.accountEmail ? { accountEmail: bill.accountEmail } : {}),
+    checkedByPerson: !bill.notChecked,
+  });
+  const bills = [
+    ...view.overdue.map((bill) => item(bill, "overdue")),
+    ...view.soon.map((bill) => item(bill, "next_30_days")),
+    ...view.later.map((bill) => item(bill, "later")),
+    ...view.unknown.map((bill) => item(bill, "not_known")),
+  ];
+  return {
+    status: "ok",
+    view: "bills",
+    today,
+    bills,
+    byAccount: view.accounts.map((group) => ({
+      account: group.source?.label ?? group.said ?? "not known yet",
+      ...(group.source ? { id: group.source.id } : {}),
+      ...(group.source?.closed ? { closed: true as const } : {}),
+      bills: group.bills.map((bill) => bill.id),
+      monthlyCost: group.monthly,
+    })),
+    monthlyCost: view.monthly,
+    missing: {
+      amount: view.uncounted,
+      date: view.unknown.length,
+      paidWith: bills.filter((bill) => !bill.paidFrom && !bill.paidWith).length,
+    },
+    note: BILLS_NOTE,
   };
 }
 

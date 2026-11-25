@@ -88,10 +88,15 @@ export type LifeAdminRecordView = {
   handling?: RecordHandlingView;
 };
 
-// Life admin's tabs (`?tab=`): Records (what's ongoing), Upcoming (what needs the person, and
-// every booking ahead), History (everything finished) and Tasks. The page maps older addresses
+// Life admin's tabs (`?tab=`): Records (what's ongoing), Add (what's still to fill in), Upcoming
+// (what needs the person, and every booking ahead), Bills (what they pay on repeat, across
+// categories), History (everything finished) and Tasks. The page maps older addresses
 // (`?view=tasks`, `?view=life&tab=…`, the Bookings tab, older reminder links) onto these.
-export type LifeAdminTab = "records" | "add" | "upcoming" | "history" | "tasks";
+export type LifeAdminTab = "records" | "add" | "upcoming" | "bills" | "history" | "tasks";
+
+// How the Bills tab groups what the person pays (`?bills=account`): by when the next payment is
+// (the default), or by the card or account it comes out of.
+export type BillsGrouping = "date" | "account";
 
 // Where a record stands, worked out from its phase (`listStatusOf`): active (live) or on hold
 // (paused) on Records; finished (ended, completed, resolved) or cancelled (cancelled, missed,

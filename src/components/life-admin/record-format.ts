@@ -160,6 +160,11 @@ function findKey(fields: Readonly<Record<string, string>>, keys: readonly string
 
 // A plain number ("25.99", "1,250") — never a value that already carries its own currency
 // ("A$18.50"), which reads as the person wrote it.
+/** An amount to two places with thousands grouped: 4766.68 → "4,766.68". */
+export function moneyText(amount: number): string {
+  return amount.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function plainAmount(value: string): number | null {
   const cleaned = value.trim().replace(/,/g, "");
   return /^\d+(\.\d+)?$/.test(cleaned) ? Number(cleaned) : null;
@@ -186,7 +191,7 @@ export function recordFacts(
     const cycleKey = findKey(fields, CYCLE_KEYS, titleKey);
     const currency = currencyKey ? fields[currencyKey]!.trim().toUpperCase() : "";
     const cycle = cycleKey ? CYCLE_WORDS[fields[cycleKey]!.trim().toLowerCase()] : undefined;
-    const money = `${currency ? `${currency} ` : ""}${amount.toFixed(2)}`;
+    const money = `${currency ? `${currency} ` : ""}${moneyText(amount)}`;
     facts.push({ key: amountKey, label: labelOf(amountKey), value: cycle ? `${money} ${cycle}` : money });
     used.add(amountKey);
     if (currencyKey) used.add(currencyKey);
@@ -212,7 +217,7 @@ export function costText(fields: Readonly<Record<string, string>>, skip: string 
   const amount = plainAmount(fields[amountKey]!);
   const currencyKey = findKey(fields, CURRENCY_KEYS, skip);
   const currency = currencyKey ? fields[currencyKey]!.trim().toUpperCase() : "";
-  const money = amount !== null ? `${currency ? `${currency} ` : ""}${amount.toFixed(2)}` : fields[amountKey]!.trim();
+  const money = amount !== null ? `${currency ? `${currency} ` : ""}${moneyText(amount)}` : fields[amountKey]!.trim();
   return cycle ? `${money} ${cycle}` : money;
 }
 

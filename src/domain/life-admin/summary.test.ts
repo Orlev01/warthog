@@ -90,7 +90,7 @@ test("the skill asks agents to carry over what identifies an account: its name, 
   assert.match(text, /Leave out balances and transactions, offers and marketing/);
   assert.match(text, /- investing\.super — Super fund \[account\]/);
   assert.doesNotMatch(text, /- travel\.flight — Flight \[account\]/);
-  assert.match(text, /kinds marked \[account\] also have account_name, account_email/);
+  assert.match(text, /kinds marked \[account\] or \[bill\] also have account_name, account_email/);
   assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);
 });
 
@@ -122,5 +122,18 @@ test("the skill reads service emails, not marketing, and finds bank accounts by 
   assert.match(text, /policy the person closed: status cancelled/);
   assert.match(text, /- banking\.account — Bank account[^\n]*\n(?:  [^\n]*\n)*  same record when: provider \+ last4 match; without those, provider \+ name/);
   assert.match(text, /without newer_than:, -category:promotions, brackets/);
+  assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);
+});
+
+// Founder, 25 Nov 2026: the Bills tab. Agents save what pays a bill and when, and ask list_records
+// for the bills.
+test("the skill marks bill kinds and says how to fill and find bills", () => {
+  const text = lifeAdminSkillText(BUILT_IN);
+  assert.match(text, /- subscriptions\.service — Subscription \[bill\]/);
+  assert.match(text, /- investing\.super — Super fund \[account\]/);
+  assert.match(text, /kinds marked \[account\] or \[bill\] also have account_name, account_email; \[bill\] kinds \(what the person pays on repeat\) also have paid_with/);
+  assert.match(text, /- home\.lease — Lease \[bill\][^\n]*\n  fields: starts_on, bond, bond_reference, next_payment/);
+  assert.match(text, /For a \[bill\] kind: paid_with as the bill or receipt shows it/);
+  assert.match(text, /"What do I pay for\?": list_records view "bills"/);
   assert.ok(text.length < 35_000, `still small enough to fetch once (${text.length})`);
 });

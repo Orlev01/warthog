@@ -217,3 +217,19 @@ test("the Records tab's monthly figure counts what's active and recurring in the
   assert.deepEqual(subscriptions.monthly, [{ currency: "AUD", amount: 12.99, records: 1 }, { currency: "USD", amount: 16, records: 1 }], "the category filter narrows it");
   assert.deepEqual(recordsView(priced, BUILT_IN, { categories: ["vehicles"], statuses: ["active"] }).monthly, []);
 });
+
+test("the monthly figure is the bills rule's: a card's annual fee over 12 months, never income, a one-off or a finished bill", () => {
+  const records = [
+    rec("prime", "subscriptions.service", { provider: "Amazon", amount: "12.99", currency: "AUD", cycle: "monthly" }, { dueDate: "2026-12-25" }),
+    rec("card", "banking.card", { provider: "Westpac", last4: "2460", annual_fee: "250" }, { dueDate: "2027-02-25" }),
+    rec("nofee", "banking.card", { provider: "ING", last4: "1111", annual_fee: "0" }),
+    rec("centrelink", "government.payment", { payment_kind: "JobSeeker", amount: "780", currency: "AUD", cycle: "fortnightly" }, { dueDate: "2026-12-01" }),
+    rec("job", "work.job", { provider: "Acme", amount: "9000", currency: "AUD", cycle: "monthly" }),
+    rec("rego", "vehicles.registration", { provider: "Transport for NSW", plate: "BX12AB", amount: "420", term: "6 months" }, { dueDate: "2027-01-10" }),
+    rec("stan", "subscriptions.service", { provider: "Stan", amount: "12", currency: "AUD", cycle: "monthly" }, { dueDate: "2025-03-28", status: "cancelled" }),
+  ];
+  const view = recordsView(records.filter((record) => sectionOf(record, BUILT_IN) === "records"), BUILT_IN, { categories: [], statuses: ["active"] });
+  assert.deepEqual(view.monthly, [{ currency: "AUD", amount: 103.82, records: 3 }], "12.99 + 250 ÷ 12 + 420 ÷ 6");
+  assert.deepEqual(recordsView(records, BUILT_IN, { categories: ["banking"], statuses: ["active"] }).monthly, [{ currency: "AUD", amount: 20.83, records: 1 }], "a fee of 0 isn't a bill");
+  assert.deepEqual(recordsView(records, BUILT_IN, { categories: ["government", "work"], statuses: ["active"] }).monthly, [], "income is never what you pay");
+});

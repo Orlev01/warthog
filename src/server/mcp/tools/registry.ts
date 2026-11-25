@@ -321,7 +321,7 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "list_records",
     description:
-      "Use this when the person asks about their own life admin: a vehicle's rego, number plate or insurance; health insurance; their super fund; electricity, internet or phone accounts; subscriptions and what they cost; when a passport, licence or visa expires; their lease, mortgage or home insurance; pets; receipts and warranties; or what is due soon. Returns the records saved in Warthog, each with what its due date means (expires, renews, due), who saved it and whether the person has checked it, plus a monthly total for recurring costs. Filter by category, type, words or dueWithinDays; follow nextCursor for more. Answers come from saved records, so no email search is needed when one matches.",
+      "Use this when the person asks about their own life admin: a vehicle's rego, number plate or insurance; health insurance; their super fund; electricity, internet or phone accounts; subscriptions and what they cost; when a passport, licence or visa expires; their lease, mortgage or home insurance; pets; receipts and warranties; or what is due soon. Returns the records saved in Warthog, each with what its due date means (expires, renews, due), who saved it and whether the person has checked it, plus a monthly total for recurring costs. For what they pay on repeat (bills, when each is next due and which card or account pays it), use view \"bills\". Filter by category, type, words or dueWithinDays; follow nextCursor for more. Answers come from saved records, so no email search is needed when one matches.",
     makesChange: false,
     schema: listRecordsSchema,
   },

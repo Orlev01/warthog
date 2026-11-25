@@ -82,7 +82,7 @@ function headings(markup: string, level: number): string[] {
   return [...markup.matchAll(new RegExp(`<h${level}\\b[^>]*>([\\s\\S]*?)</h${level}>`, "g"))].map((m) => text(m[1]!));
 }
 
-// The markup of one tab panel (0 Records, 1 Upcoming, 2 History).
+// The markup of one tab panel (0 Records, 1 Add, 2 Upcoming, 3 Bills, 4 History).
 function tabPanel(markup: string, index: number): string {
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
@@ -360,7 +360,7 @@ test("a booking reads its start in its own zone, and a phase is words and an ico
   const upcoming = tabPanel(markup, 2);
   assert.match(text(upcoming), /Sixpenny Upcoming Restaurant · Starts Wed 25 Nov, 7:30 pm AEDT · in 2 days/, "one ahead, in Upcoming");
   assert.match(upcoming.slice(upcoming.indexOf('href="/life-admin/items/dinner"')), /^[^]*?class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Upcoming/);
-  const past = rowOf(tabPanel(markup, 3), "lunch");
+  const past = rowOf(tabPanel(markup, 4), "lunch");
   assert.match(text(past), /Bennelong Completed Going out · Restaurant · Starts Sat 12 Sept, 12:30 pm AEST Details/, "one that's over, in History, in the zone of its own date");
   assert.match(text(past), /How many 4 people/);
   assert.match(past, /class="wh-badge[^"]*"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?Completed/);
@@ -416,6 +416,27 @@ test("record anchors keep working: the row is focusable, clears the sticky heade
   const attrs = markup.slice(markup.lastIndexOf("<div", panel), markup.indexOf(">", panel));
   assert.doesNotMatch(attrs, /hidden=""/, "Records is the tab shown first");
   assert.equal(markup.match(/id="record-rego"/g)?.length, 1, "one anchor per record, even when it is also in Upcoming");
+});
+
+test("with Bills mounted too, each record still has exactly one #record- anchor: Bills' rows carry data-record", () => {
+  const markup = render();
+  for (const record of ALL) {
+    const anchors = markup.match(new RegExp(`id="record-${record.id}"`, "g"))?.length ?? 0;
+    assert.equal(anchors, 1, `${record.id}: one anchor on the page`);
+  }
+  const bills = tabPanel(markup, 3);
+  assert.doesNotMatch(bills, /id="record-/);
+  const rows = [...bills.matchAll(/<li data-record="([^"]+)" tabindex="-1"/g)].map((m) => m[1]).sort();
+  assert.deepEqual(rows, ["health", "ins", "netflix", "power", "rego"], "the bills among them, each once");
+});
+
+test("the cost line uses the bills rule: a card's annual fee counts a twelfth a month, income doesn't", () => {
+  const card = rec("card", "banking.card", { provider: "Westpac", card_product: "Altitude Black", last4: "2460", annual_fee: "310" }, { dueDate: "2027-02-25" });
+  const centrelink = rec("centrelink", "government.payment", { payment_kind: "JobSeeker", amount: "780", currency: "AUD", cycle: "fortnightly" }, { dueDate: "2026-12-01" });
+  const pension = rec("pension", "investing.pension", { provider: "Services Australia", amount: "1100", currency: "AUD", cycle: "fortnightly" });
+  const words = text(toolbarOf(render({ records: [LEGACY_SUB, card, centrelink, pension] })));
+  assert.match(words, /You pay about AUD 51\.82 a month for 2 recurring records\./, "Netflix's 25.99 and the card's 310 a year");
+  assert.doesNotMatch(text(toolbarOf(render({ records: [centrelink, pension] }))), /You pay/, "income is never what you pay");
 });
 
 test("the organised view uses tokens, never raw hex", () => {

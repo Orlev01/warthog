@@ -1,7 +1,7 @@
 import { isTimeZone } from "@/domain/life-admin/lifecycle";
 import { canonicalDateTime, calendarDate } from "@/domain/life-admin/normalise";
-import { DEFAULT_LIST_STATUSES, HISTORY_STATUSES, RECORDS_TAB_STATUSES, historyHref, recordsHref } from "@/components/life-admin/record-groups";
-import type { HistoryFilter, LifeAdminTab, RecordFilter, RecordListStatus } from "@/components/life-admin/record-view-types";
+import { DEFAULT_LIST_STATUSES, HISTORY_STATUSES, RECORDS_TAB_STATUSES, billsHref, historyHref, recordsHref } from "@/components/life-admin/record-groups";
+import type { BillsGrouping, HistoryFilter, LifeAdminTab, RecordFilter, RecordListStatus } from "@/components/life-admin/record-view-types";
 import { allParams } from "@/lib/href";
 import { ADD_TAB_HREF, tabNamed } from "@/components/life-admin/tab-address";
 
@@ -70,8 +70,8 @@ export { currentLifeAdminHref, lifeAdminTab, requestedLifeAdminTab } from "@/com
 type Params = Readonly<Record<string, string | readonly string[] | undefined>>;
 const first = (value: string | readonly string[] | undefined): string | undefined => (typeof value === "string" ? value : value?.[0]);
 
-// The tab a record form was submitted from (`returnTab`): Records, Upcoming or History; older
-// forms' tab names map as their addresses do.
+// The tab a record form was submitted from (`returnTab`): Records, Add, Upcoming, Bills or
+// History; older forms' tab names map as their addresses do.
 export type RecordTab = Exclude<LifeAdminTab, "tasks">;
 export function recordTab(value: unknown): RecordTab {
   const tab = typeof value === "string" ? tabNamed(value) : undefined;
@@ -88,13 +88,20 @@ const pageNumber = (value: string | undefined): number | undefined =>
 // The Add tab: what's still to fill in, and adding a record (founder, 24 Nov 2026).
 export { ADD_TAB_HREF } from "@/components/life-admin/tab-address";
 
+// How the Bills tab groups (`?bills=`, or a form's `returnBills`): by account only when asked
+// for exactly that, else by date.
+export function billsGrouping(value: unknown): BillsGrouping {
+  return value === "account" ? "account" : "date";
+}
+
 // Where a record action lands afterwards: the tab it was submitted from and, on Records or in
 // History, the filters it was shown under (`returnCategory` / `returnStatus` / `returnPage`,
-// well-formed values only; the page validates them again).
+// well-formed values only; the page validates them again); on Bills, its grouping (`returnBills`).
 export function recordReturnPath(form: FormData): string {
   const tab = recordTab(form.get("returnTab"));
   if (tab === "upcoming") return "/life-admin?tab=upcoming";
   if (tab === "add") return ADD_TAB_HREF;
+  if (tab === "bills") return billsHref(billsGrouping(form.get("returnBills")));
   const strings = (name: string) => form.getAll(name).filter((value): value is string => typeof value === "string");
   const categories = allParams(strings("returnCategory")).filter((value) => CATEGORY_ID.test(value));
   const statuses = allParams(strings("returnStatus")).filter(isListStatus);

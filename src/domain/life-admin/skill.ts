@@ -62,7 +62,8 @@ const KIND_HINTS: Readonly<Record<string, string>> = {
 };
 const FORMATS = "Formats: dates YYYY-MM-DD; date-times with their zone, e.g. 2026-12-03T19:30[Australia/Sydney]; amounts as plain numbers with currency separately (e.g. AUD); cycle weekly|fortnightly|monthly|quarterly|yearly|one_off; yes/no; durations like \"45 minutes\"; websites as the site name only.";
 
-const SKIP = new Set([...COMMON_FIELD_KEYS, ...ACCOUNT_FIELD_KEYS, ...LIFECYCLE_FIELD_KEYS]);
+// next_payment stays in the field lists: only the bill kinds whose own date isn't the payment have it.
+const SKIP = new Set([...COMMON_FIELD_KEYS, ...ACCOUNT_FIELD_KEYS, ...LIFECYCLE_FIELD_KEYS, "paid_with"]);
 
 function fieldList(type: RecordTypeDef): string {
   return type.fields
@@ -97,7 +98,7 @@ function typeLine(type: RecordTypeDef, quote: boolean): string {
   const identity = type.identity.map((keys) => keys.join(" + ")).join(", or ");
   const anyAnchor = type.belongsTo?.length === 1 && type.belongsTo[0] === "any";
   const bits = [
-    `- ${type.id} — ${label}${type.anchor ? " [anchor]" : ""}${type.account ? " [account]" : ""}${type.lifecycle === "standing" ? "" : ` (${type.lifecycle})`}: ${type.use}`,
+    `- ${type.id} — ${label}${type.anchor ? " [anchor]" : ""}${type.bill ? " [bill]" : type.account ? " [account]" : ""}${type.lifecycle === "standing" ? "" : ` (${type.lifecycle})`}: ${type.use}`,
     own ? `  fields: ${own}` : "",
     names ? `  here: ${names}` : "",
     type.due && type.lifecycle !== "booking" ? `  dueDate: when it ${type.due.means === "return_by" ? "must be returned by" : type.due.means}` : "",
@@ -166,6 +167,7 @@ export const LIFE_ADMIN_GUIDANCE = [
     "- Only what someone needs to act later (call, log in, claim, switch, renew, cancel). Leave out balances and transactions, offers and marketing. Notes: a line or two, your own words.",
     "- A record you find without these: add them with update_record set.",
     "- An account, card or policy the person closed: status cancelled, and when in notes.",
+    "- For a [bill] kind: paid_with as the bill or receipt shows it (\"Visa ending 1234\"; last 4 only), and the payment date: dueDate where that is the payment, else next_payment. With only the latest payment, give its date: Warthog counts on from it by the cycle.",
     "",
     "Working on an item over time",
     "- Every item keeps a short log: decisions and why, notes, next steps, and Warthog's own record of what changed. get_context lifeAdmin.handover lists live items with work still open.",
@@ -184,7 +186,7 @@ export const LIFE_ADMIN_GUIDANCE = [
     "- The person sees it with your why and keeps or declines it; declining removes its records, and the same suggestion won't be accepted again. Tell them in one line what you suggested and why. At most one per conversation unless they ask.",
     "",
     "Answering",
-    '- list_records with a category, type, lifecycle (booking or case), words, forWhom or dueWithinDays; include: "all" for finished ones too. Each record says what its date means (due.label), whether it is live (phase), who saved it (savedBy), whether the person has checked it (checkedByPerson), and who is handling it.',
+    '- "What do I pay for?": list_records view "bills". Otherwise list_records with a category, type, lifecycle (booking or case), words, forWhom or dueWithinDays; include: "all" for finished ones too. Each record says what its date means (due.label), whether it is live (phase), who saved it (savedBy), whether the person has checked it (checkedByPerson), and who is handling it.',
 ].join("\n");
 
 /** What Warthog generates for this person: the searches, their own categories and every record kind. */
@@ -214,7 +216,7 @@ export function lifeAdminReference(catalogue: Catalogue, options: SkillOptions =
     own,
     "",
     FORMATS,
-    `Record kinds ([anchor]: other records can belong to it). Every kind has the common fields (${COMMON_FIELD_KEYS.join(", ")}); kinds marked [account] also have ${ACCOUNT_FIELD_KEYS.join(", ")}; bookings also have ${BOOKING_FIELDS.map((field) => field.key).join(", ")}; cases also have ${CASE_FIELDS.map((field) => field.key).join(", ")}. Bookings and cases can belong to any thing (parentId or parentRef). Unless a kind says otherwise, a record is the same one when ${DEFAULT_IDENTITY.standing} match (bookings: ${DEFAULT_IDENTITY.booking}; cases: ${DEFAULT_IDENTITY.case}). "here:" gives a common field's name for that kind. Unknown field names are kept as extra details.`,
+    `Record kinds ([anchor]: other records can belong to it). Every kind has the common fields (${COMMON_FIELD_KEYS.join(", ")}); kinds marked [account] or [bill] also have ${ACCOUNT_FIELD_KEYS.join(", ")}; [bill] kinds (what the person pays on repeat) also have paid_with; bookings also have ${BOOKING_FIELDS.map((field) => field.key).join(", ")}; cases also have ${CASE_FIELDS.map((field) => field.key).join(", ")}. Bookings and cases can belong to any thing (parentId or parentRef). Unless a kind says otherwise, a record is the same one when ${DEFAULT_IDENTITY.standing} match (bookings: ${DEFAULT_IDENTITY.booking}; cases: ${DEFAULT_IDENTITY.case}). "here:" gives a common field's name for that kind. Unknown field names are kept as extra details.`,
     "",
     types,
   ].join("\n");
