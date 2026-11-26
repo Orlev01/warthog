@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Agents save skills, 26 November:** main `ac31577` runs as `warthog--r45783723441a1`. PR #73 adds
+`save_skill`:
+- a skill an agent saves stays off until the person checks it;
+- once checked, an agent's changes wait as suggestions;
+- each agent has a "Let it save skills" switch.
+
+Migration 0128 (99). See the [release record](agent-saved-skills-release-2026-11-26.md).
+
 **Bills follow-up, 25 November:** main `50be4ca` runs as `warthog--r45548430007a1`. PR #72:
 - every bill has Next payment;
 - a bank account's debit card matches Paid with;

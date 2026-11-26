@@ -1,4 +1,18 @@
-# Delivery status — 25 November 2026 (Bills follow-up)
+# Delivery status — 26 November 2026 (agents save skills)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`ac31577e8d42c0dd30bdc435fdbfa264a11bba8c` runs as `warthog--r45783723441a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #73:**
+  - agents save skills with `save_skill`, switched off until the person checks them;
+  - once checked, an agent's changes wait as suggestions ("Use these changes" or "Keep mine");
+  - each agent has a "Let it save skills" switch.
+
+Migration 0128 (99). See the [release record](docs/audit/agent-saved-skills-release-2026-11-26.md).
+
+# Earlier delivery status — 25 November 2026 (Bills follow-up)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
