@@ -30,6 +30,7 @@ import { AgentScope, type SkillAgent } from "./agent-scope";
 import { DeleteSkillControl } from "./delete-skill";
 import { useWhenLine } from "./use-when";
 import { WarthogSkills, type WarthogSkillItem } from "./warthog-skills";
+import { LibraryCard, LibraryHeading } from "./library-card";
 import { PackageImport, CreatePackage } from "./package-import";
 import { PackageModal, downloadBlob } from "./package-editor";
 import { AgentSkillsToCheck } from "./agent-skills-to-check";
@@ -59,9 +60,11 @@ import type { StoredPackage, PackageSummary } from "@/server/db/skill-packages";
 // which persists member-scoped and reloads the screen.
 //
 // Warthog's own skills (the house skill, the Life admin skills and the defaults) follow the
-// person's library in their own section (./warthog-skills): each one's guidance can be
-// edited, switched off, scoped, removed and restored, and its fixed rules are shown
-// read-only. Colour comes from the design tokens (globals.css) — never a raw hex.
+// person's library in their own section (./warthog-skills), as cards that open the same editor
+// a package does: each one's guidance can be edited, switched off, scoped, removed and
+// restored, and its fixed rules are shown read-only. The library's search and its Show filter
+// (on, off, yours, Warthog's) cover both. Colour comes from the design tokens (globals.css) —
+// never a raw hex.
 
 // A control bound to a server action: submits its form to the action the page passes.
 type SkillAction = (formData: FormData) => void | Promise<void>;
@@ -100,8 +103,6 @@ export type SkillsViewProps = {
   preferences: SkillsViewPreferences | null;
   // Warthog's own skills as they stand for this person.
   warthogSkills?: ReadonlyArray<WarthogSkillItem>;
-  // The Warthog skill just changed, whose card opens again after the reload.
-  openWarthogSkill?: string;
   // Changes agents suggest to the person's skills (docs/adr/agent-saved-skills.md).
   suggestions?: ReadonlyArray<SkillSuggestionView>;
   // Controls bound to the server actions the page passes. OPTIONAL: the view renders
@@ -115,7 +116,6 @@ export type SkillsViewProps = {
   duplicateSkillAction?: SkillAction;
   toggleSkillAction?: SkillAction;
   deleteSkillAction?: SkillAction;
-  changeWarthogSkillAction?: SkillAction;
   useSuggestionAction?: SkillAction;
   keepSkillAction?: SkillAction;
 };
@@ -349,7 +349,6 @@ export function SkillsView({
   agents = [],
   preferences,
   warthogSkills = [],
-  openWarthogSkill,
   suggestions = [],
   notice,
   saveProfileAction,
@@ -357,7 +356,6 @@ export function SkillsView({
   duplicateSkillAction,
   toggleSkillAction,
   deleteSkillAction,
-  changeWarthogSkillAction,
   useSuggestionAction,
   keepSkillAction,
 }: SkillsViewProps) {
@@ -413,13 +411,18 @@ export function SkillsView({
   const standalone = skills.filter((s) => !packagedIds.has(s.id));
   const includes = (text: string) =>
     text.toLowerCase().includes(query.trim().toLowerCase());
+  // Show: everything, what's switched on or off, only the person's own, or only Warthog's.
   const matchesStatus = (enabled: boolean) =>
-    status === "all" || (status === "on" ? enabled : !enabled);
+    status === "on" ? enabled : status === "off" ? !enabled : true;
+  const showYours = status !== "warthog";
+  // Warthog's are all skills, never plugins.
+  const showWarthog = status !== "yours" && kind !== "plugin";
   const enabledCount = (p: PackageSummary) =>
     p.members.filter((m) => skills.some((s) => s.id === m.skillId && s.enabled))
       .length;
   const visiblePackages = packages.filter(
     (p) =>
+      showYours &&
       (kind === "all" || kind === p.kind) &&
       matchesStatus(enabledCount(p) > 0) &&
       includes(
@@ -428,12 +431,23 @@ export function SkillsView({
   );
   const visibleSkills = standalone.filter(
     (s) =>
+      showYours &&
       kind !== "plugin" &&
       matchesStatus(s.enabled) &&
       includes(`${s.title} ${s.useThisWhen}`),
   );
-  const matchedCount = visiblePackages.length + visibleSkills.length;
-  const pageCount = Math.max(1, Math.ceil(matchedCount / 24));
+  const warthogInLibrary = warthogSkills.filter((s) => s.state !== "removed");
+  const visibleWarthog = warthogInLibrary.filter(
+    (s) => showWarthog && matchesStatus(s.state === "on") && includes(`${s.title} ${s.useThisWhen}`),
+  );
+  // A removed skill is off for every agent; it's listed apart, under Warthog's.
+  const removedWarthog = warthogSkills.filter(
+    (s) => s.state === "removed" && showWarthog && status !== "on" && includes(`${s.title} ${s.useThisWhen}`),
+  );
+  const ownMatched = visiblePackages.length + visibleSkills.length;
+  const matchedCount = ownMatched + visibleWarthog.length;
+  // Only the person's own skills are paged; Warthog's follow them in full.
+  const pageCount = Math.max(1, Math.ceil(ownMatched / 24));
   const currentPage = Math.min(page, pageCount - 1);
   const start = currentPage * 24,
     end = start + 24;
@@ -447,15 +461,21 @@ export function SkillsView({
     setSkipped(omitted);
   };
   const count = packages.length + standalone.length;
+  const total = count + warthogInLibrary.length;
+  // With nothing of their own yet, the library says how to start (unless a search or
+  // Warthog's-only view is narrowing it).
+  const noOwnYet = count === 0 && (status === "all" || status === "yours") && !query.trim();
   const plugins = packages.filter((p) => p.kind === "plugin").length;
-  const switchedOn = skills.filter((s) => s.enabled).length;
+  // The person's skills and Warthog's count together, as the library shows them together.
+  const skillCount = skills.length + warthogInLibrary.length;
+  const switchedOn = skills.filter((s) => s.enabled).length + warthogInLibrary.filter((s) => s.state === "on").length;
   // "3 skills · 1 switched on"; plugins are named only when the library holds one.
   const meta = [
-    `${skills.length} ${skills.length === 1 ? "skill" : "skills"}`,
+    `${skillCount} ${skillCount === 1 ? "skill" : "skills"}`,
     ...(plugins > 0 ? [`${plugins} ${plugins === 1 ? "plugin" : "plugins"}`] : []),
     `${switchedOn} switched on`,
   ].join(" · ");
-  const itemsNoun = plugins > 0 ? "skills and plugins" : count === 1 ? "skill" : "skills";
+  const itemsNoun = plugins > 0 ? "skills and plugins" : total === 1 ? "skill" : "skills";
   const clearFilters = () => {
     setQuery("");
     setKind("all");
@@ -463,8 +483,7 @@ export function SkillsView({
     setPage(0);
   };
   // The outcome of the last action leads whichever tab is open, straight under the band.
-  // `skill` (the Warthog skill just changed) is one-shot too.
-  const outcome = notice ? <PageNotice tone={notice.tone} clearParams={["notice", "skill"]}>{notice.text}</PageNotice> : null;
+  const outcome = notice ? <PageNotice tone={notice.tone} clearParams={["notice"]}>{notice.text}</PageNotice> : null;
   return (
     <>
       <ViewPanels
@@ -502,7 +521,7 @@ export function SkillsView({
                   useSuggestionAction={useSuggestionAction}
                   keepSkillAction={keepSkillAction}
                 />
-                {count > 0 ? (
+                {total > 0 ? (
                   <ListToolbar
                     label="Find skills"
                     search={
@@ -537,7 +556,7 @@ export function SkillsView({
                         ) : null}
                         <SelectField
                           id="library-status"
-                          label="Availability"
+                          label="Show"
                           width="short"
                           value={status}
                           onChange={(e) => {
@@ -548,14 +567,16 @@ export function SkillsView({
                           <option value="all">All</option>
                           <option value="on">Switched on</option>
                           <option value="off">Switched off</option>
+                          <option value="yours">Yours</option>
+                          <option value="warthog">Warthog&apos;s</option>
                         </SelectField>
                       </div>
                     }
-                    status={`Showing ${matchedCount} of ${count} ${itemsNoun}.`}
+                    status={`Showing ${matchedCount} of ${total} ${itemsNoun}.`}
                   />
                 ) : null}
-                <div ref={libraryHeading} tabIndex={-1} data-skill-library="" className="flex min-w-0 flex-col gap-4 outline-none sm:gap-6">
-                  {!count ? (
+                <div ref={libraryHeading} tabIndex={-1} data-skill-library="" className="flex min-w-0 flex-col gap-6 outline-none sm:gap-8">
+                  {!total || (!matchedCount && !removedWarthog.length && noOwnYet) ? (
                     <EmptyState
                       heading="No skills of your own yet"
                       description="A skill is a short set of instructions with a line saying when to use it. Write one, or import skills you already have."
@@ -565,7 +586,7 @@ export function SkillsView({
                         </ButtonLink>
                       }
                     />
-                  ) : !visiblePackages.length && !visibleSkills.length ? (
+                  ) : !matchedCount && !removedWarthog.length ? (
                     <EmptyState
                       heading={plugins > 0 ? "No matching skills or plugins" : "No matching skills"}
                       description="Try a different name or clear your filters."
@@ -575,109 +596,93 @@ export function SkillsView({
                         </Button>
                       }
                     />
-                  ) : null}
-                  {pagedPackages.length + pagedSkills.length > 0 ? (
-                    <ul role="list" className="grid min-w-0 gap-4 md:grid-cols-2">
-                      {pagedPackages.map((p) => (
-                        <li key={p.id} className="min-w-0">
-                          <button
-                            type="button"
-                            className="wh-card flex h-full min-h-44 w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 text-start transition-colors hover:border-line-strong"
-                            aria-disabled={Boolean(opening)}
-                            aria-busy={opening === p.id}
-                            onClick={(event) => void openPackage(p.id, event.currentTarget)}
-                          >
-                            <div className="flex w-full items-start justify-between gap-3">
-                              <span className="flex min-w-0 items-start gap-3">
-                                {p.kind === "plugin" ? (
-                                  <Layers
-                                    aria-hidden
-                                    className="mt-1 h-5 w-5 shrink-0 text-accent"
+                  ) : (
+                    <>
+                      {ownMatched > 0 || noOwnYet ? (
+                        <section aria-labelledby="your-skills-heading" className="flex min-w-0 flex-col gap-4">
+                          <LibraryHeading id="your-skills-heading" title="Your skills" count={ownMatched} />
+                          {ownMatched === 0 ? (
+                            <EmptyState
+                              headingLevel={3}
+                              heading="No skills of your own yet"
+                              description="A skill is a short set of instructions with a line saying when to use it. Write one, or import skills you already have."
+                              action={
+                                <ButtonLink href="/skills?view=add" variant="primary">
+                                  Create or import a skill
+                                </ButtonLink>
+                              }
+                            />
+                          ) : (
+                            <ul role="list" className="grid min-w-0 gap-4 md:grid-cols-2">
+                              {pagedPackages.map((p) => (
+                                <li key={p.id} className="min-w-0">
+                                  <LibraryCard
+                                    icon={p.kind === "plugin" ? Layers : FileText}
+                                    name={p.name}
+                                    kind={p.kind === "plugin" ? "Plugin" : "Skill"}
+                                    description={p.description}
+                                    facts={[
+                                      `${p.skills.length} ${p.skills.length === 1 ? "skill" : "skills"} · ${p.fileCount} ${p.fileCount === 1 ? "file" : "files"}`,
+                                      p.awaitingCheck
+                                        ? `Saved by ${agentName(p.savedByAgentId)} · waiting for you`
+                                        : !p.members.length
+                                          ? "Files only"
+                                          : enabledCount(p)
+                                            ? `${enabledCount(p)} switched on`
+                                            : "Switched off",
+                                    ]}
+                                    opening={opening === p.id}
+                                    busy={Boolean(opening) && opening !== p.id}
+                                    onOpen={(opener) => void openPackage(p.id, opener)}
                                   />
-                                ) : (
-                                  <FileText
-                                    aria-hidden
-                                    className="mt-1 h-5 w-5 shrink-0 text-accent"
+                                </li>
+                              ))}
+                              {pagedSkills.map((skill) => (
+                                <li key={skill.id} className="min-w-0">
+                                  <SkillCard
+                                    skill={skill}
+                                    agents={agents}
+                                    editSkillAction={editSkillAction}
+                                    duplicateSkillAction={duplicateSkillAction}
+                                    toggleSkillAction={toggleSkillAction}
+                                    deleteSkillAction={deleteSkillAction}
                                   />
-                                )}
-                                <span className="font-semibold [overflow-wrap:anywhere]">
-                                  {p.name}
-                                </span>
-                              </span>
-                              <Badge className="shrink-0">{p.kind === "plugin" ? "Plugin" : "Skill"}</Badge>
-                            </div>
-                            <p className="text-sm leading-relaxed text-fg-muted [overflow-wrap:anywhere]">
-                              {p.description}
-                            </p>
-                            <div className="mt-auto flex w-full flex-wrap gap-x-4 gap-y-2 border-t border-line pt-3 text-xs text-fg-muted">
-                              <span>
-                                {p.skills.length}{" "}
-                                {p.skills.length === 1 ? "skill" : "skills"} ·{" "}
-                                {p.fileCount} {p.fileCount === 1 ? "file" : "files"}
-                              </span>
-                              <span>
-                                {p.awaitingCheck
-                                  ? `Saved by ${agentName(p.savedByAgentId)} · waiting for you`
-                                  : !p.members.length
-                                  ? "Files only"
-                                  : enabledCount(p)
-                                    ? `${enabledCount(p)} switched on`
-                                    : "Switched off"}
-                              </span>
-                              <span className="ms-auto text-sm font-medium text-fg">
-                                Open &amp; edit →
-                              </span>
-                            </div>
-                          </button>
-                        </li>
-                      ))}
-                      {pagedSkills.map((skill) => (
-                        <li key={skill.id} className="min-w-0">
-                          <SkillCard
-                            skill={skill}
-                            agents={agents}
-                            editSkillAction={editSkillAction}
-                            duplicateSkillAction={duplicateSkillAction}
-                            toggleSkillAction={toggleSkillAction}
-                            deleteSkillAction={deleteSkillAction}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {pageCount > 1 && (
-                    <nav aria-label="Library pages" className="wh-form-actions">
-                      <div className="wh-form-actions-buttons">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          disabled={currentPage === 0}
-                          onClick={() => setPage(currentPage - 1)}
-                        >
-                          Previous page
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          disabled={currentPage + 1 === pageCount}
-                          onClick={() => setPage(currentPage + 1)}
-                        >
-                          Next page
-                        </Button>
-                      </div>
-                      <p role="status">
-                        Page {currentPage + 1} of {pageCount}. Search covers your whole library.
-                      </p>
-                    </nav>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {pageCount > 1 && (
+                            <nav aria-label="Library pages" className="wh-form-actions">
+                              <div className="wh-form-actions-buttons">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={currentPage === 0}
+                                  onClick={() => setPage(currentPage - 1)}
+                                >
+                                  Previous page
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={currentPage + 1 === pageCount}
+                                  onClick={() => setPage(currentPage + 1)}
+                                >
+                                  Next page
+                                </Button>
+                              </div>
+                              <p role="status">
+                                Page {currentPage + 1} of {pageCount}. Search covers your whole library.
+                              </p>
+                            </nav>
+                          )}
+                        </section>
+                      ) : null}
+                      <WarthogSkills skills={visibleWarthog} removed={removedWarthog} agents={agents} />
+                    </>
                   )}
-                  <WarthogSkills
-                    skills={warthogSkills}
-                    agents={agents}
-                    changeAction={changeWarthogSkillAction}
-                    openKey={openWarthogSkill}
-                  />
                 </div>
               </>
             ),

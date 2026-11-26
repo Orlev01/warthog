@@ -72,6 +72,16 @@ everything agents do through Warthog, is summarised under Context.
    - choose which agents get it;
    - remove it, which moves it to a Removed list;
    - restore Warthog's version, with its default state and all agents.
+
+   **Amended 27 November 2026 (founder):** Warthog's skills now look and work like the person's
+   own skills.
+   - **Cards:** each skill is a card in the library, under its group.
+   - **Editor:** a card opens the same editor dialog as a package. It has Preview, Edit and Agent
+     access, with Restore and Remove in its footer. Agent access saves on or off and the agents in
+     one go (the `access` change).
+   - **Show filter:** All, Switched on, Switched off, Yours or Warthog's. It covers both kinds.
+   - **Needs JavaScript:** the editor does, as the package editor already did. The per-skill forms
+     that worked without it are gone.
 6. **Storage.** A row in `builtin_skills` (migration 0126) exists only once the person changes
    something. No row means Warthog's text, its default state, for all agents.
    - The person's wording is stored as `v1:` envelopes under their data key.

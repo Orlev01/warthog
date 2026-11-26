@@ -1,25 +1,28 @@
-import * as React from "react";
-import { Check, ChevronDown, Lock, Pencil, Power, PowerOff, RefreshCw, RotateCcw, Save, Trash2, Users } from "lucide-react";
+"use client";
 
-import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import * as React from "react";
+import { Check, FileText, Lock, Pencil, PowerOff, RefreshCw, RotateCcw, Save, Trash2, Users, X } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
-import { buttonClasses } from "@/components/ui/button";
-import { Field, TextareaField } from "@/components/ui/field";
-import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
-import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { Button } from "@/components/ui/button";
+import { Field, Label } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
-import type { SkillAgent } from "./agent-scope";
+import { changeWarthogSkillAction } from "@/app/(portal)/(protected)/skills/warthog-actions";
+import { AgentScope, SKILL_CONTROL, type SkillAgent } from "./agent-scope";
+import { LibraryCard, LibraryHeading } from "./library-card";
+import { EDITOR_FOOTER, EDITOR_HEADER, EditorViews, SkillDialog } from "./package-editor";
+import { createPackageOperation } from "./package-operation";
 import { useWhenLine } from "./use-when";
 
-// Warthog's own skills on the Skills page (docs/adr/editable-builtin-skills.md). Every one of
-// them is listed, in three groups, and the person can edit each one's guidance, switch it off,
-// choose which agents get it, remove it and restore Warthog's version. The fixed rules are
-// shown read-only. Each skill is a native <details> and every control a plain form submit, so
-// the section works before the page has hydrated (or without client JS at all).
+// Warthog's own skills on the Skills page (docs/adr/editable-builtin-skills.md), shown and
+// managed the way the person's own skills are (founder, 27 Nov 2026): a card each, in three
+// groups, and a card opens the same editor dialog — Preview, Edit, Agent access, with Restore
+// and Remove in its footer. The fixed rules are shown read-only. Removed skills are listed
+// apart, each with Restore.
 //
-// Every form posts the skill's `key` and the `change` it makes to the one server action the page
-// passes, which hands it to the seam's `changeWarthogSkill`
-// (src/app/(portal)/(protected)/skills/warthog-form.ts reads it).
+// Every change goes to `changeWarthogSkillAction` (../../app/(portal)/(protected)/skills/
+// warthog-actions.ts), which checks the session and hands it to the seam's
+// `changeWarthogSkill`; a saved change reloads the page, as a saved package does.
 
 // One of Warthog's skills as the page's loader shapes it (WarthogSkillView in the skills
 // actions); declared here so this view doesn't import server modules.
@@ -45,30 +48,16 @@ export type WarthogSkillItem = {
   readonly updateAvailable: boolean;
 };
 
-type SkillAction = (formData: FormData) => void | Promise<void>;
-
-// The seam's limits (skills actions), so the browser stops the person before the server does.
+// The seam's limits (skills actions), so the editor stops the person before the server does.
 const USE_THIS_WHEN_MAX = 500;
 const GUIDANCE_MAX = 20_000;
-// A value of only spaces counts as empty (the server trims before it checks too).
-const NOT_BLANK = ".*\\S.*";
+const ICON = "h-4 w-4 shrink-0";
 
-// A preview or render test with no action stores nothing.
-const noAction = async (_formData: FormData): Promise<void> => {};
-
-const GROUPS: ReadonlyArray<{ group: WarthogSkillItem["group"]; title: string; summary: string }> = [
+export const WARTHOG_GROUPS: ReadonlyArray<{ group: WarthogSkillItem["group"]; title: string; summary: string }> = [
   { group: "warthog", title: "How agents use Warthog", summary: "Warthog's own guides for your agents. Switched on to start." },
   { group: "everyday", title: "Everyday", summary: "Help with everyday jobs. Switched on to start." },
   { group: "pack", title: "Packs", summary: "Off until you switch one on." },
 ];
-
-// Same disclosure layout as the person's own skill cards and the memory rows: where the browser
-// supports it, the summary sits in the action row and the opened panel spans the width under it.
-const ROW_DISCLOSURE =
-  "min-w-0 open:basis-full supports-[selector(::details-content)]:contents details-content:basis-full details-content:order-last not-open:details-content:hidden";
-const DISCLOSURE_PANEL = "flex min-w-0 flex-col gap-3 rounded-card bg-surface-muted p-4";
-const ROW_SUMMARY = `${buttonClasses({ variant: "secondary", size: "sm" })} list-none [&::-webkit-details-marker]:hidden`;
-const ICON = "h-4 w-4 shrink-0";
 
 // The words a screen reader adds so a control names the skill it acts on.
 function Named({ children }: { children: string }) {
@@ -91,7 +80,7 @@ export function restoreCopy(skill: WarthogSkillItem): string | null {
   if (skill.edited) parts.push("puts back Warthog's wording");
   if (offButStartsOn) parts.push("switches it back on");
   if (skill.state === "on" && !startsOn) parts.push("switches it off");
-  if (skill.scope === "chosen") parts.push("sets Who gets it back to All agents");
+  if (skill.scope === "chosen") parts.push("gives it back to all agents");
   return `Restoring ${listed(parts)}.`;
 }
 
@@ -100,33 +89,19 @@ function onlyFor(needs: string): string {
   return `Only for ${needs.charAt(0).toLowerCase()}${needs.slice(1)}.`;
 }
 
-// A form that posts one change to one skill.
-function ChangeForm({
-  skill,
-  change,
-  action,
-  className,
-  children,
-}: {
-  skill: WarthogSkillItem;
-  change: string;
-  action: SkillAction;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <ActionForm action={action} className={className}>
-      <input type="hidden" name="key" value={skill.key} />
-      <input type="hidden" name="change" value={change} />
-      {children}
-    </ActionForm>
-  );
+// The card's footer facts, in words.
+export function warthogFacts(skill: WarthogSkillItem): string[] {
+  return [
+    ...(skill.edited ? ["Edited by you"] : []),
+    ...(skill.scope === "chosen" ? ["Chosen agents"] : []),
+    skill.state === "on" ? "Switched on" : "Switched off",
+  ];
 }
 
-// How the skill stands, in words (never colour alone).
+// How the skill stands, in words (never colour alone), under the editor's title.
 function Badges({ skill }: { skill: WarthogSkillItem }) {
   return (
-    <>
+    <div className="mt-3 flex flex-wrap items-center gap-2">
       {skill.state === "on" ? (
         <Badge tone="success" icon={Check}>
           On
@@ -141,13 +116,15 @@ function Badges({ skill }: { skill: WarthogSkillItem }) {
           Warthog updated this
         </Badge>
       ) : null}
-    </>
+    </div>
   );
 }
 
+type Send = (change: Record<string, unknown>, after: () => void) => void;
+
 // Warthog changed this skill after the person edited it: take the new version, keep theirs, or
 // read Warthog's first.
-function UpdateNotice({ skill, action }: { skill: WarthogSkillItem; action: SkillAction }) {
+function UpdateNotice({ skill, send, onSaved }: { skill: WarthogSkillItem; send: Send; onSaved: () => void }) {
   return (
     <Notice tone="info" announce={false}>
       <div className="flex min-w-0 flex-col gap-3">
@@ -156,16 +133,12 @@ function UpdateNotice({ skill, action }: { skill: WarthogSkillItem; action: Skil
           of your wording, or keep yours.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <ChangeForm skill={skill} change="use_new" action={action}>
-            <FormSubmit size="sm" pendingLabel="Saving…">
-              Use Warthog&apos;s new version<Named>{` of ${skill.title}`}</Named>
-            </FormSubmit>
-          </ChangeForm>
-          <ChangeForm skill={skill} change="keep_mine" action={action}>
-            <FormSubmit variant="secondary" size="sm" pendingLabel="Saving…">
-              Keep mine<Named>{` for ${skill.title}`}</Named>
-            </FormSubmit>
-          </ChangeForm>
+          <Button size="sm" onClick={() => send({ action: "use_new" }, onSaved)}>
+            Use Warthog&apos;s new version<Named>{` of ${skill.title}`}</Named>
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => send({ action: "keep_mine" }, onSaved)}>
+            Keep mine<Named>{` for ${skill.title}`}</Named>
+          </Button>
         </div>
         <details className="min-w-0">
           <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 font-medium text-fg underline underline-offset-4 [&::-webkit-details-marker]:hidden">
@@ -183,253 +156,381 @@ function UpdateNotice({ skill, action }: { skill: WarthogSkillItem; action: Skil
   );
 }
 
-// One of Warthog's skills: the summary says what it is and how it stands; opened, it shows the
-// fixed rules, the guidance and every control.
-function SkillCard({
-  skill,
-  agents,
-  action,
-  open,
-}: {
-  skill: WarthogSkillItem;
-  agents: readonly SkillAgent[];
-  action: SkillAction;
-  open: boolean;
-}) {
-  const id = `warthog-skill-${skill.key}`;
-  const restore = restoreCopy(skill);
-  const on = skill.state === "on";
+// The fixed rules, read-only.
+function Rules({ skill }: { skill: WarthogSkillItem }) {
+  if (!skill.rules.length) return null;
   return (
-    <details id={id} open={open || undefined} className="group min-w-0">
-      <summary className="flex min-h-11 cursor-pointer list-none items-start gap-3 py-3 [&::-webkit-details-marker]:hidden">
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-medium text-fg [overflow-wrap:anywhere]">{skill.title}</span>
-            <span className="flex flex-wrap items-center gap-2">
-              <Badges skill={skill} />
-            </span>
-          </span>
-          <span className="text-sm text-fg-muted [overflow-wrap:anywhere]">{useWhenLine(skill.useThisWhen)}</span>
-        </span>
-        <ChevronDown aria-hidden={true} className={`mt-1 ${ICON} text-fg-muted transition-transform group-open:rotate-180`} />
-      </summary>
-
-      <div className="flex min-w-0 flex-col gap-4 pb-4">
-        {skill.updateAvailable ? <UpdateNotice skill={skill} action={action} /> : null}
-
-        {skill.rules.length ? (
-          <div className="flex min-w-0 flex-col gap-2 rounded-card bg-surface-muted p-4">
-            <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
-              <Lock aria-hidden={true} className={`${ICON} text-fg-muted`} />
-              Always applies
-            </h4>
-            <p className="text-sm text-fg-muted">
-              Warthog&apos;s rules for every agent. They apply whatever this skill says.
-              {skill.key === "using_warthog" ? " Every agent gets them, even if you switch this skill off or remove it." : null}
-            </p>
-            <ul className="flex list-disc flex-col gap-1 ps-5 text-sm text-fg [overflow-wrap:anywhere]">
-              {skill.rules.map((rule) => (
-                <li key={rule}>{rule}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        <div className="flex min-w-0 flex-col gap-2">
-          <h4 className="text-sm font-semibold text-fg">Instructions</h4>
-          <p className="whitespace-pre-wrap text-sm text-fg [overflow-wrap:anywhere]">{skill.guidance}</p>
-        </div>
-
-        {skill.adds || skill.needs ? (
-          <div className="flex min-w-0 flex-col gap-1 text-xs text-fg-muted">
-            {skill.adds ? <p>{skill.adds}</p> : null}
-            {skill.needs ? <p>{onlyFor(skill.needs)}</p> : null}
-          </div>
-        ) : null}
-
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <ChangeForm skill={skill} change={on ? "off" : "on"} action={action}>
-            <FormSubmit variant="secondary" size="sm" pendingLabel="Saving…">
-              {on ? <PowerOff aria-hidden={true} className={ICON} /> : <Power aria-hidden={true} className={ICON} />}
-              {on ? "Switch off" : "Switch on"}
-              <Named>{` ${skill.title}`}</Named>
-            </FormSubmit>
-          </ChangeForm>
-
-          <details className={ROW_DISCLOSURE}>
-            <summary className={ROW_SUMMARY}>
-              <Pencil aria-hidden={true} className={ICON} />
-              Edit<Named>{` ${skill.title}`}</Named>
-            </summary>
-            <ChangeForm skill={skill} change="edit" action={action} className={DISCLOSURE_PANEL}>
-              <PendingFormFields>
-                <Field
-                  name="useThisWhen"
-                  label="When to use this"
-                  hint={`Agents read this line to decide whether to open the skill. Up to ${USE_THIS_WHEN_MAX} characters.`}
-                  required
-                  pattern={NOT_BLANK}
-                  maxLength={USE_THIS_WHEN_MAX}
-                  defaultValue={skill.useThisWhen}
-                />
-                <TextareaField
-                  name="guidance"
-                  label="Instructions"
-                  hint={`Up to 20,000 characters.${skill.rules.length ? " The rules under Always applies stay as they are." : ""}`}
-                  rows={12}
-                  required
-                  maxLength={GUIDANCE_MAX}
-                  defaultValue={skill.guidance}
-                />
-              </PendingFormFields>
-              <div className="flex flex-wrap items-center gap-2">
-                <FormSubmit pendingLabel="Saving…">
-                  <Save aria-hidden={true} className={ICON} />
-                  Save changes<Named>{` to ${skill.title}`}</Named>
-                </FormSubmit>
-              </div>
-            </ChangeForm>
-          </details>
-
-          <details className={ROW_DISCLOSURE}>
-            <summary className={ROW_SUMMARY}>
-              <Users aria-hidden={true} className={ICON} />
-              Who gets it<Named>{`: ${skill.title}`}</Named>
-            </summary>
-            <ChangeForm skill={skill} change="scope" action={action} className={DISCLOSURE_PANEL}>
-              <PendingFormFields>
-                <fieldset className="flex min-w-0 flex-col">
-                  <legend className="sr-only">Who gets it</legend>
-                  <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
-                    <input type="radio" name="scope" value="all" defaultChecked={skill.scope === "all"} className={ICON} />
-                    All agents
-                  </label>
-                  <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
-                    <input type="radio" name="scope" value="chosen" defaultChecked={skill.scope === "chosen"} className={ICON} />
-                    Only these agents
-                  </label>
-                  {agents.length ? (
-                    <fieldset className="ms-7 flex min-w-0 flex-col">
-                      <legend className="sr-only">Your agents</legend>
-                      {agents.map((agent) => (
-                        <label key={agent.id} className="flex min-h-11 items-center gap-3 text-sm text-fg [overflow-wrap:anywhere]">
-                          <input
-                            type="checkbox"
-                            name="scopedAgentIds"
-                            value={agent.id}
-                            defaultChecked={skill.scopedAgentIds.includes(agent.id)}
-                            className={ICON}
-                          />
-                          {agent.displayName}
-                        </label>
-                      ))}
-                    </fieldset>
-                  ) : null}
-                </fieldset>
-                <p className="text-sm text-fg-muted">
-                  {agents.length
-                    ? "Ticked agents get it when you choose Only these agents. With none ticked, no agent gets it."
-                    : "Connect an agent to choose it here."}
-                </p>
-              </PendingFormFields>
-              <div className="flex flex-wrap items-center gap-2">
-                <FormSubmit pendingLabel="Saving…">
-                  <Save aria-hidden={true} className={ICON} />
-                  Save<Named>{` who gets ${skill.title}`}</Named>
-                </FormSubmit>
-              </div>
-            </ChangeForm>
-          </details>
-
-          {restore ? (
-            <details className={ROW_DISCLOSURE}>
-              <summary className={ROW_SUMMARY}>
-                <RotateCcw aria-hidden={true} className={ICON} />
-                Restore Warthog&apos;s version<Named>{` of ${skill.title}`}</Named>
-              </summary>
-              <ChangeForm skill={skill} change="restore" action={action} className={DISCLOSURE_PANEL}>
-                <p className="text-sm text-fg">{restore}</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <FormSubmit size="sm" pendingLabel="Restoring…">
-                    <RotateCcw aria-hidden={true} className={ICON} />
-                    Restore<Named>{` ${skill.title}`}</Named>
-                  </FormSubmit>
-                </div>
-              </ChangeForm>
-            </details>
-          ) : null}
-
-          <ChangeForm skill={skill} change="remove" action={action}>
-            <FormSubmit variant="danger" size="sm" pendingLabel="Removing…">
-              <Trash2 aria-hidden={true} className={ICON} />
-              Remove<Named>{` ${skill.title}`}</Named>
-            </FormSubmit>
-          </ChangeForm>
-        </div>
-      </div>
-    </details>
+    <div className="flex min-w-0 flex-col gap-2 rounded-card bg-surface-muted p-4">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <Lock aria-hidden={true} className={`${ICON} text-fg-muted`} />
+        Always applies
+      </h3>
+      <p className="text-sm text-fg-muted">
+        Warthog&apos;s rules for every agent. They apply whatever this skill says.
+        {skill.key === "using_warthog" ? " Every agent gets them, even if you switch this skill off or remove it." : null}
+      </p>
+      <ul className="flex list-disc flex-col gap-1 ps-5 text-sm text-fg [overflow-wrap:anywhere]">
+        {skill.rules.map((rule) => (
+          <li key={rule}>{rule}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
+const TITLE_ID = "warthog-skill-dialog-title";
+
+// One of Warthog's skills in the editor: Preview (the rules, the instructions, who it's for),
+// Edit (the use-this-when line and the instructions) and Agent access (on or off, and which
+// agents), as the person's own skills have. The footer restores Warthog's version, removes it
+// or saves the edit.
+export function WarthogSkillEditor({
+  skill: initial,
+  agents,
+  onClose,
+  onSaved,
+}: {
+  skill: WarthogSkillItem;
+  agents: readonly SkillAgent[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [skill, setSkill] = React.useState(initial);
+  const [mode, setMode] = React.useState<"preview" | "edit" | "access">("preview");
+  const [useThisWhen, setUseThisWhen] = React.useState(initial.useThisWhen);
+  const [guidance, setGuidance] = React.useState(initial.guidance);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [message, setMessage] = React.useState("");
+  const [confirm, setConfirm] = React.useState<"remove" | "restore" | "close" | null>(null);
+  const [accessChanged, setAccessChanged] = React.useState(false);
+  const operationRef = React.useRef<ReturnType<typeof createPackageOperation> | null>(null);
+  if (!operationRef.current) operationRef.current = createPackageOperation({ onBusy: setBusy, onError: setError });
+  const operation = operationRef.current;
+  const uid = React.useId();
+  const dirty = useThisWhen !== initial.useThisWhen || guidance !== initial.guidance;
+  const validation = !useThisWhen.trim()
+    ? "Say when agents should use this skill."
+    : !guidance.trim()
+      ? "Write the instructions."
+      : "";
+  const restore = restoreCopy(skill);
+  const send: Send = (change, after) =>
+    void operation.run(async () => {
+      const result = await changeWarthogSkillAction({ key: skill.key, ...change });
+      if (result.ok) after();
+      else {
+        setError(result.error);
+        setConfirm(null);
+      }
+    });
+  const close = () => (accessChanged ? onSaved() : onClose());
+  const requestClose = () => {
+    if (operation.isBusy()) return;
+    if (dirty) setConfirm("close");
+    else close();
+  };
+  // Native dialog Escape is routed through the same unsaved-edits check.
+  React.useEffect(() => {
+    const handle = (e: Event) => {
+      e.preventDefault();
+      if (!busy) requestClose();
+    };
+    const dialog = document.getElementById(uid)?.closest("dialog");
+    dialog?.addEventListener("cancel", handle);
+    return () => dialog?.removeEventListener("cancel", handle);
+  });
+  const group = WARTHOG_GROUPS.find((g) => g.group === skill.group)?.title;
+
+  return (
+    <div id={uid} className="flex min-w-0 flex-col gap-5">
+      <header className={EDITOR_HEADER}>
+        <div className="min-w-0">
+          <p className="mb-1 text-sm text-fg-muted">Warthog&apos;s skills{group ? ` · ${group}` : ""}</p>
+          <h2 id={TITLE_ID} className="text-xl font-semibold [overflow-wrap:anywhere]">
+            {skill.title}
+          </h2>
+          <p className="mt-2 text-sm text-fg-muted [overflow-wrap:anywhere]">{useWhenLine(useThisWhen || skill.useThisWhen)}</p>
+          <Badges skill={skill} />
+        </div>
+        <Button variant="secondary" onClick={requestClose} disabled={busy} aria-label="Close editor" className="shrink-0 px-3">
+          <X aria-hidden className="h-5 w-5" />
+        </Button>
+      </header>
+
+      {confirm && (
+        <Notice tone="warning">
+          <p>
+            {confirm === "remove"
+              ? "Remove this skill? Your agents stop getting it. It stays under Removed, and you can restore it any time."
+              : confirm === "restore"
+                ? `${restore ?? "Restoring puts back Warthog's version."}${dirty ? " Your unsaved edits are lost." : ""}`
+                : "Discard your unsaved changes?"}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="secondary" autoFocus onClick={() => setConfirm(null)}>
+              Keep editing
+            </Button>
+            <Button
+              variant={confirm === "remove" ? "danger-solid" : "secondary"}
+              disabled={busy}
+              onClick={() => {
+                if (confirm === "close") close();
+                else send({ action: confirm }, onSaved);
+              }}
+            >
+              {confirm === "remove" ? "Yes, remove it" : confirm === "restore" ? "Yes, restore it" : "Discard changes"}
+            </Button>
+          </div>
+        </Notice>
+      )}
+      {error && <Notice tone="error">{error}</Notice>}
+      {busy && (
+        <p role="status" className="text-sm text-fg-muted">
+          Please wait while your skill is updated.
+        </p>
+      )}
+
+      <fieldset disabled={busy} className="contents">
+        <EditorViews
+          label="Skill views"
+          mode={mode}
+          onChange={setMode}
+          views={[
+            ["preview", "Preview"],
+            ["edit", "Edit"],
+            ["access", "Agent access"],
+          ]}
+        />
+
+        {mode === "preview" ? (
+          <div className="flex min-w-0 flex-col gap-4">
+            {skill.updateAvailable ? <UpdateNotice skill={skill} send={send} onSaved={onSaved} /> : null}
+            <Rules skill={skill} />
+            <div className="flex min-w-0 flex-col gap-2">
+              <h3 className="text-sm font-semibold text-fg">Instructions</h3>
+              <pre tabIndex={0} className="max-h-96 min-h-56 overflow-auto whitespace-pre-wrap rounded-card bg-surface-muted p-4 font-sans text-sm leading-relaxed [overflow-wrap:anywhere]">
+                {guidance}
+              </pre>
+            </div>
+            {skill.adds || skill.needs ? (
+              <div className="flex min-w-0 flex-col gap-1 text-xs text-fg-muted">
+                {skill.adds ? <p>{skill.adds}</p> : null}
+                {skill.needs ? <p>{onlyFor(skill.needs)}</p> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : mode === "edit" ? (
+          <div className="flex min-w-0 flex-col gap-3">
+            <Field
+              label="When to use this"
+              hint={`Agents read this line to decide whether to open the skill. Up to ${USE_THIS_WHEN_MAX} characters.`}
+              value={useThisWhen}
+              maxLength={USE_THIS_WHEN_MAX}
+              onChange={(e) => setUseThisWhen(e.target.value)}
+            />
+            <div className="space-y-1.5">
+              <Label htmlFor={`${uid}-guidance`}>Instructions</Label>
+              <textarea
+                id={`${uid}-guidance`}
+                className={`${SKILL_CONTROL} min-h-64 leading-relaxed`}
+                maxLength={GUIDANCE_MAX}
+                value={guidance}
+                onChange={(e) => setGuidance(e.target.value)}
+              />
+              <p className="text-xs text-fg-muted">
+                Up to 20,000 characters.{skill.rules.length ? " Warthog's rules under Always applies stay as they are." : ""}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <form
+            className="max-w-xl space-y-3 rounded-card border border-line p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = new FormData(e.currentTarget);
+              const access = {
+                enabled: form.get("enabled") === "on",
+                scope: form.get("scope") === "chosen" ? ("chosen" as const) : ("all" as const),
+                scopedAgentIds: form.getAll("scopedAgentIds").map(String),
+              };
+              setMessage("");
+              send({ action: "access", ...access }, () => {
+                setSkill((s) => ({ ...s, state: access.enabled ? "on" : "off", scope: access.scope, scopedAgentIds: access.scope === "chosen" ? access.scopedAgentIds : [] }));
+                setAccessChanged(true);
+                setMessage("Access saved.");
+              });
+            }}
+          >
+            <h3 className="font-medium [overflow-wrap:anywhere]">{skill.title}</h3>
+            <label className="flex min-h-11 items-center gap-3 text-sm">
+              <input type="checkbox" name="enabled" defaultChecked={skill.state === "on"} className="h-4 w-4" />
+              Available to agents
+            </label>
+            <AgentScope agents={agents} scope={skill.scope} selected={skill.scopedAgentIds} />
+            {skill.needs ? <p className="text-sm text-fg-muted">{onlyFor(skill.needs)}</p> : null}
+            <Button variant="secondary" type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save access"}
+            </Button>
+            {message && (
+              <p role="status" className="text-sm">
+                {message}
+              </p>
+            )}
+          </form>
+        )}
+      </fieldset>
+
+      {mode === "edit" && validation && <Notice tone="warning">{validation}</Notice>}
+      <footer className={EDITOR_FOOTER}>
+        <div className="flex flex-wrap gap-2">
+          {restore ? (
+            <Button variant="secondary" disabled={busy} onClick={() => setConfirm("restore")}>
+              <RotateCcw aria-hidden className="h-4 w-4" />
+              Restore Warthog&apos;s version
+            </Button>
+          ) : null}
+          <Button variant="danger" disabled={busy} onClick={() => setConfirm("remove")}>
+            <Trash2 aria-hidden className="h-4 w-4" />
+            Remove skill
+          </Button>
+        </div>
+        <Button
+          disabled={!dirty || Boolean(validation)}
+          aria-disabled={busy}
+          className="aria-disabled:opacity-50"
+          onClick={() => send({ action: "edit", useThisWhen, guidance }, onSaved)}
+        >
+          <Save aria-hidden className="h-4 w-4" />
+          {busy ? "Working…" : "Save changes"}
+        </Button>
+      </footer>
+    </div>
+  );
+}
+
+// Warthog's skills in the library: a heading, then each group's cards, then any removed ones.
+// `skills` and `removed` are what the library's search and filters leave.
 export function WarthogSkills({
   skills,
+  removed = [],
   agents = [],
-  changeAction,
-  openKey,
 }: {
   skills: readonly WarthogSkillItem[];
-  // The person's agents, for Who gets it.
+  removed?: readonly WarthogSkillItem[];
+  // The person's agents, for Agent access.
   agents?: readonly SkillAgent[];
-  // The page's server action; every form here posts to it.
-  changeAction?: SkillAction;
-  // The skill just changed, whose card opens again after the page reloads.
-  openKey?: string;
 }) {
-  if (skills.length === 0) return null;
-  const action = changeAction ?? noAction;
+  const [open, setOpen] = React.useState<string | null>(null);
+  const [restoring, setRestoring] = React.useState<string | null>(null);
+  const [error, setError] = React.useState("");
+  const opener = React.useRef<HTMLElement | null>(null);
+  const returnFocus = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (open !== null || !returnFocus.current) return;
+    returnFocus.current = false;
+    if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+  }, [open]);
+  if (skills.length === 0 && removed.length === 0) return null;
   const choosable = agents.filter((agent) => agent.status !== "disconnected");
-  const removed = skills.filter((skill) => skill.state === "removed");
+  const editing = skills.find((skill) => skill.key === open);
+  const reload = () => window.location.reload();
+
   return (
-    <WorkspacePanel
-      title="Warthog's skills"
-      description="Warthog writes these for your agents. Change the wording, switch one off or choose which agents get it."
-    >
-      {GROUPS.map(({ group, title, summary }) => {
-        const shown = skills.filter((skill) => skill.group === group && skill.state !== "removed");
+    <section aria-labelledby="warthog-skills-heading" className="flex min-w-0 flex-col gap-4">
+      <LibraryHeading
+        id="warthog-skills-heading"
+        title="Warthog's skills"
+        count={skills.length}
+        summary="Warthog writes these for your agents. Change the wording, switch one off or choose which agents get it."
+      />
+      {WARTHOG_GROUPS.map(({ group, title, summary }) => {
+        const shown = skills.filter((skill) => skill.group === group);
         return shown.length ? (
-          <ListGroup key={group} id={`warthog-skills-${group}`} title={title} count={shown.length} summary={summary} level={3}>
-            {shown.map((skill) => (
-              <li key={skill.key} className="min-w-0 border-b border-line last:border-0">
-                <SkillCard skill={skill} agents={choosable} action={action} open={skill.key === openKey} />
-              </li>
-            ))}
-          </ListGroup>
+          <section key={group} aria-labelledby={`warthog-skills-${group}-heading`} className="flex min-w-0 flex-col gap-3">
+            <LibraryHeading id={`warthog-skills-${group}-heading`} title={title} count={shown.length} summary={summary} level={3} />
+            <ul role="list" className="grid min-w-0 gap-4 md:grid-cols-2">
+              {shown.map((skill) => (
+                <li key={skill.key} className="min-w-0">
+                  <LibraryCard
+                    icon={FileText}
+                    name={skill.title}
+                    kind="Warthog"
+                    notes={
+                      skill.updateAvailable ? (
+                        <Badge tone="info" icon={RefreshCw}>
+                          Warthog updated this
+                        </Badge>
+                      ) : null
+                    }
+                    description={useWhenLine(skill.useThisWhen)}
+                    facts={warthogFacts(skill)}
+                    onOpen={(element) => {
+                      opener.current = element;
+                      setOpen(skill.key);
+                    }}
+                  />
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null;
       })}
       {removed.length ? (
-        <ListGroup
-          id="warthog-skills-removed"
-          title="Removed"
-          count={removed.length}
-          summary="Agents don't get these. Restoring one brings back Warthog's version."
-          level={3}
-        >
-          {removed.map((skill) => (
-            <li key={skill.key} className={`${LIST_ROW} gap-3 sm:flex-row sm:items-center sm:justify-between`}>
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <p className="font-medium text-fg">{skill.title}</p>
-                <p className="text-sm text-fg-muted">{useWhenLine(skill.useThisWhen)}</p>
-              </div>
-              <ChangeForm skill={skill} change="restore" action={action} className="shrink-0">
-                <FormSubmit variant="secondary" size="sm" pendingLabel="Restoring…">
+        <section aria-labelledby="warthog-skills-removed-heading" className="flex min-w-0 flex-col gap-3">
+          <LibraryHeading
+            id="warthog-skills-removed-heading"
+            title="Removed"
+            count={removed.length}
+            summary="Agents don't get these. Restoring one brings back Warthog's version."
+            level={3}
+          />
+          {error && <Notice tone="error">{error}</Notice>}
+          <ul role="list" className="flex min-w-0 flex-col rounded-card border border-line bg-surface px-4">
+            {removed.map((skill) => (
+              <li key={skill.key} className="flex min-w-0 flex-col gap-3 border-b border-line py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <p className="font-medium text-fg [overflow-wrap:anywhere]">{skill.title}</p>
+                  <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{useWhenLine(skill.useThisWhen)}</p>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={restoring !== null}
+                  onClick={async () => {
+                    setRestoring(skill.key);
+                    setError("");
+                    try {
+                      const result = await changeWarthogSkillAction({ key: skill.key, action: "restore" });
+                      if (result.ok) return reload();
+                      setError(result.error);
+                    } catch {
+                      setError("We couldn't restore that skill. Please try again.");
+                    }
+                    setRestoring(null);
+                  }}
+                >
                   <RotateCcw aria-hidden={true} className={ICON} />
-                  Restore<Named>{` ${skill.title}`}</Named>
-                </FormSubmit>
-              </ChangeForm>
-            </li>
-          ))}
-        </ListGroup>
+                  {restoring === skill.key ? "Restoring…" : "Restore"}
+                  <Named>{` ${skill.title}`}</Named>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
-    </WorkspacePanel>
+      {editing ? (
+        <SkillDialog
+          labelledBy={TITLE_ID}
+          onClose={() => {
+            returnFocus.current = true;
+            setOpen(null);
+          }}
+        >
+          {(dismiss) => <WarthogSkillEditor key={editing.key} skill={editing} agents={choosable} onClose={dismiss} onSaved={reload} />}
+        </SkillDialog>
+      ) : null}
+    </section>
   );
 }
