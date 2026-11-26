@@ -71,9 +71,11 @@ function SkillAccess({ skill, agents, onSaved, busy, perform }: {
   </form>;
 }
 
-export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDuplicate, skipped = [] }: {
+export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDuplicate, skipped = [], savedBy }: {
   draft: ParsedPackage | StoredPackage; agents: readonly SkillAgent[]; skills: readonly SkillsViewSkill[];
   onClose: () => void; onSaved: () => void; onDuplicate?: (draft: ParsedPackage) => void; skipped?: string[];
+  // The agent that saved it, while it waits for the person to check it (docs/adr/agent-saved-skills.md).
+  savedBy?: string;
 }) {
   const stored = "id" in draft ? draft : null;
   const [files, setFiles] = React.useState(draft.files);
@@ -124,6 +126,7 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
     {skipped.length > 0 && <Notice tone="warning" announce={false}><p>{skipped.length} system or binary file(s) were excluded. The saved package will contain only the files below.</p><details><summary className="min-h-11 cursor-pointer py-3">Show excluded files</summary><ul>{skipped.map((p) => <li key={p} className="[overflow-wrap:anywhere]">{p}</li>)}</ul></details></Notice>}
     {draft.kind === "plugin" && <Notice announce={false}>Warthog shares this package’s skills with your agents. It doesn’t run any scripts or commands inside it; those files stay here for editing and download.</Notice>}
     {!stored && <p className="text-sm text-fg-muted">New skills start switched off. After saving, choose which agents can use them.</p>}
+    {stored && savedBy && <Notice announce={false}>{savedBy} saved this skill, and no agent uses it yet. Read it here, then turn it on under Agent access if you&rsquo;re happy with it.</Notice>}
     {busy && <p role="status" className="text-sm text-fg-muted">Please wait while your package is updated. Editing will be available when this finishes.</p>}
     <fieldset disabled={busy} className="contents">
       <div className="flex flex-wrap gap-2" aria-label="Package views">

@@ -166,3 +166,17 @@ test("controls are matched by name, so a service or skill whose label says 'card
   assert.equal(r.input.card, false);
   assert.equal(r.input.learningSharing, false);
 });
+
+// docs/adr/agent-saved-skills.md: the Skills section's "Let it save skills" switch is carried
+// with the section, beside the tasks and records controls the settings section carries.
+test("the Let it save skills switch is carried with the Skills section, merged with the other controls", () => {
+  const skills = collectEdits([box("skillsWrite", false)], { ...OPTS, skills: [], section: "skills" });
+  assert.equal(skills.ok, true);
+  if (skills.ok) assert.deepEqual(skills.input.resourceControls, { skillsWrite: false });
+  const all = collectEdits([...FULL(), box("tasksWrite", true), box("skillsWrite", true)], { ...OPTS, skills: [] });
+  assert.equal(all.ok, true);
+  if (all.ok) assert.deepEqual(all.input.resourceControls, { tasksWrite: true, skillsWrite: true });
+  const settings = collectEdits([...FULL(), box("skillsWrite", false)], { ...OPTS, section: "settings" });
+  assert.equal(settings.ok, true);
+  if (settings.ok) assert.equal(settings.input.resourceControls?.skillsWrite, undefined, "another section doesn't carry it");
+});

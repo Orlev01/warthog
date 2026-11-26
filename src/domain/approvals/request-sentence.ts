@@ -65,6 +65,7 @@ export function highTierFieldLabel(field: string): string {
 // Warthog's own change-making core tools in plain words.
 const CORE_TOOL_WORDS: Record<string, string> = {
   remember: "save a memory",
+  save_skill: "save a skill for you to check",
   create_task: "add a task",
   update_task: "update a task",
   complete_task: "mark a task done",

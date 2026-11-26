@@ -85,7 +85,7 @@ export type PermissionsViewProps = {
   // which skills it receives, each grantable.
   skills: ReadonlyArray<SkillGrant>;
   // the person's tasks and life-admin records (their own grants, migration 0068).
-  resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; recordIds?: string[] | null };
+  resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; skillsWrite?: boolean; recordIds?: string[] | null };
   recordChoices?: readonly RecordGrant[];
   tasksAccess: boolean;
   recordsAccess: boolean;
@@ -411,6 +411,12 @@ export function PermissionsView({
                 label={skill.name}
               />
             ))}
+            <Toggle
+              name="skillsWrite"
+              on={resourceControls?.skillsWrite !== false}
+              label="Let it save skills"
+              description={`${agentName} can save a skill it wrote with you, and suggest changes to your skills. A new skill stays off and a change waits until you check it on Skills.`}
+            />
           </div>
         </>
       ) : null}

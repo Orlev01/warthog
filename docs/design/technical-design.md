@@ -260,10 +260,15 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   `<connector>__<tool>`. If the total exceeds 80, connector tools collapse into `find_tools` +
   `call_tool`. A service's tools are listed once however many of its accounts the agent has; each
   takes an optional `account` ([ADR](../adr/several-accounts-per-agent.md)).
-- Core tools: `get_context`, `get_skill`, `request_identity_detail`, `request_card`, `check_approval`
-  (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`, `list_tasks`,
-  `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`, `update_record`,
-  `log_activity`. Every tool takes an optional `reason`.
+- Core tools: `get_context`, `get_skill`, `save_skill`, `request_identity_detail`, `request_card`,
+  `check_approval` (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`,
+  `list_tasks`, `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`,
+  `update_record`, `log_activity`. Every tool takes an optional `reason`.
+- **Agent-saved skills** ([ADR](../adr/agent-saved-skills.md)): `save_skill` saves a SKILL.md an
+  agent wrote with the person as a library package, switched off and marked as that agent's, until
+  the person checks it. The saving agent may replace its draft until then. After that, and for any
+  skill the person has, a revision waits in `skill_suggestions` until the person uses it or keeps
+  theirs. Each agent's permissions have a "Let it save skills" switch (`resource_controls.skillsWrite`).
 - **Life admin** ([ADR](../adr/life-admin-profile.md)): records are typed by the catalogue in
   `src/domain/life-admin/record-types.ts` (12 categories, about 40 types). `get_context` carries a
   short `lifeAdmin` summary; `list_records` filters, pages and labels; `save_record` takes typed

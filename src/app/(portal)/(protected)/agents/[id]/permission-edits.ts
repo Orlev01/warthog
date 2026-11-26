@@ -83,6 +83,9 @@ export function collectEdits(
     if (changes) input.changeTools = changes.value as PermissionsSaveInput["changeTools"];
   }
   if (includes("skills") && opts.skills) input.skills = skillIds.map(id => ({ id, granted: find("checkbox", `skill:${id}`)!.checked }));
+  // Whether it may save skills for the person to check (docs/adr/agent-saved-skills.md).
+  const skillsWrite = includes("skills") ? find("checkbox", "skillsWrite") : undefined;
+  if (skillsWrite) input.resourceControls = { ...input.resourceControls, skillsWrite: skillsWrite.checked };
   if(includes("memory") && opts.memories) input.memories=memoryIds.map(id=>({id,granted:find("checkbox",`memory:${id}`)!.checked}));
   const identityScope=controls.find(c=>c.name==="identityScope");
   if(includes("vault") && identityScope) input.identityFields=identityScope.value==="all"?null:vaultIds.filter(id=>find("checkbox",`vaultField:${id}`)!.checked);

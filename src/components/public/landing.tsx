@@ -105,7 +105,7 @@ const RESOURCES = [
   {
     icon: BookOpen,
     title: "Memory & skills",
-    body: "Keep useful context and reusable instructions in one place. Decide which agents can use them.",
+    body: "Keep useful context and reusable instructions in one place, and decide which agents can use them. A skill you write with one AI can be saved here by that AI. No agent uses it until you’ve checked it.",
   },
   {
     icon: LockKeyhole,

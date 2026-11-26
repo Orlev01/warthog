@@ -32,6 +32,8 @@ import { useWhenLine } from "./use-when";
 import { WarthogSkills, type WarthogSkillItem } from "./warthog-skills";
 import { PackageImport, CreatePackage } from "./package-import";
 import { PackageModal, downloadBlob } from "./package-editor";
+import { AgentSkillsToCheck } from "./agent-skills-to-check";
+import type { SkillSuggestionView } from "@/server/skills/agent-skills";
 import { makeSkillFile, type ParsedPackage } from "@/domain/skills/package";
 import type { StoredPackage, PackageSummary } from "@/server/db/skill-packages";
 
@@ -100,6 +102,8 @@ export type SkillsViewProps = {
   warthogSkills?: ReadonlyArray<WarthogSkillItem>;
   // The Warthog skill just changed, whose card opens again after the reload.
   openWarthogSkill?: string;
+  // Changes agents suggest to the person's skills (docs/adr/agent-saved-skills.md).
+  suggestions?: ReadonlyArray<SkillSuggestionView>;
   // Controls bound to the server actions the page passes. OPTIONAL: the view renders
   // its controls live regardless (they submit to these when supplied); the page always
   // supplies them, so in the running app every control acts — never a dead button.
@@ -112,6 +116,8 @@ export type SkillsViewProps = {
   toggleSkillAction?: SkillAction;
   deleteSkillAction?: SkillAction;
   changeWarthogSkillAction?: SkillAction;
+  useSuggestionAction?: SkillAction;
+  keepSkillAction?: SkillAction;
 };
 
 // The six communication-style attributes the profile form reads back, each labelled in
@@ -344,6 +350,7 @@ export function SkillsView({
   preferences,
   warthogSkills = [],
   openWarthogSkill,
+  suggestions = [],
   notice,
   saveProfileAction,
   editSkillAction,
@@ -351,6 +358,8 @@ export function SkillsView({
   toggleSkillAction,
   deleteSkillAction,
   changeWarthogSkillAction,
+  useSuggestionAction,
+  keepSkillAction,
 }: SkillsViewProps) {
   const [query, setQuery] = React.useState("");
   const [kind, setKind] = React.useState("all");
@@ -372,6 +381,32 @@ export function SkillsView({
   }, [draft]);
   const [loadError, setLoadError] = React.useState("");
   const [skipped, setSkipped] = React.useState<string[]>([]);
+  // Open a package in the editor, from its library card or from Waiting for you.
+  const openPackage = async (id: string, opener: HTMLElement) => {
+    if (openingRef.current) return;
+    // Capture the initiating control before the asynchronous load can move focus or render
+    // a modal.
+    modalOpener.current = opener;
+    openingRef.current = true;
+    setOpening(id);
+    setLoadError("");
+    try {
+      const result = await loadPackageAction(id);
+      if (result.ok) {
+        setDraft(result.value);
+        setSkipped([]);
+      } else setLoadError(result.error);
+    } catch {
+      setLoadError("We couldn't open that package. Please try again.");
+    } finally {
+      openingRef.current = false;
+      setOpening(null);
+    }
+  };
+  // Who saved a skill or suggests a change, by the name the person gave the agent.
+  const agentName = (agentId: string | undefined) =>
+    agents.find((a) => a.id === agentId)?.displayName ?? "an agent that's no longer connected";
+  const waitingPackages = packages.filter((p) => p.awaitingCheck);
   const packagedIds = new Set(
     packages.flatMap((p) => p.members.map((m) => m.skillId)),
   );
@@ -458,6 +493,15 @@ export function SkillsView({
                 {outcome}
                 {loadError && <Notice tone="error">{loadError}</Notice>}
                 {opening && <Notice tone="info">Opening package…</Notice>}
+                <AgentSkillsToCheck
+                  drafts={waitingPackages}
+                  suggestions={suggestions}
+                  agentName={agentName}
+                  opening={opening}
+                  onOpen={(id, opener) => void openPackage(id, opener)}
+                  useSuggestionAction={useSuggestionAction}
+                  keepSkillAction={keepSkillAction}
+                />
                 {count > 0 ? (
                   <ListToolbar
                     label="Find skills"
@@ -541,29 +585,7 @@ export function SkillsView({
                             className="wh-card flex h-full min-h-44 w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 text-start transition-colors hover:border-line-strong"
                             aria-disabled={Boolean(opening)}
                             aria-busy={opening === p.id}
-                            onClick={async (event) => {
-                              if (openingRef.current) return;
-                              // Capture the initiating card before the asynchronous
-                              // load can move focus or render a modal.
-                              modalOpener.current = event.currentTarget;
-                              openingRef.current = true;
-                              setOpening(p.id);
-                              setLoadError("");
-                              try {
-                                const result = await loadPackageAction(p.id);
-                                if (result.ok) {
-                                  setDraft(result.value);
-                                  setSkipped([]);
-                                } else setLoadError(result.error);
-                              } catch {
-                                setLoadError(
-                                  "We couldn't open that package. Please try again.",
-                                );
-                              } finally {
-                                openingRef.current = false;
-                                setOpening(null);
-                              }
-                            }}
+                            onClick={(event) => void openPackage(p.id, event.currentTarget)}
                           >
                             <div className="flex w-full items-start justify-between gap-3">
                               <span className="flex min-w-0 items-start gap-3">
@@ -594,7 +616,9 @@ export function SkillsView({
                                 {p.fileCount} {p.fileCount === 1 ? "file" : "files"}
                               </span>
                               <span>
-                                {!p.members.length
+                                {p.awaitingCheck
+                                  ? `Saved by ${agentName(p.savedByAgentId)} · waiting for you`
+                                  : !p.members.length
                                   ? "Files only"
                                   : enabledCount(p)
                                     ? `${enabledCount(p)} switched on`
@@ -726,6 +750,11 @@ export function SkillsView({
           skills={skills}
           agents={agents}
           skipped={skipped}
+          savedBy={(() => {
+            const waiting = "id" in draft ? waitingPackages.find((p) => p.id === draft.id) : undefined;
+            const name = waiting ? agentName(waiting.savedByAgentId) : undefined;
+            return name ? name.charAt(0).toUpperCase() + name.slice(1) : undefined;
+          })()}
           onDuplicate={ready}
           onClose={() => {
             restoreOpener.current = true;

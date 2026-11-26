@@ -81,6 +81,7 @@ import { createToolRegistry, type ToolDefinition } from "./tools/registry";
 import type { AgentConnection } from "./context";
 
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
+import { createSaveSkillTool } from "./tools/save-skill";
 import { createGetSkillTool, SERVER_INSTRUCTIONS } from "./tools/get-skill";
 import { createGetContextTool } from "./tools/get-context";
 import { createCheckApprovalTool } from "./tools/check-approval";
@@ -368,6 +369,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
   const rememberTool = createRememberTool({ db, keyWrapper, clock });
   const searchMemoryTool = createSearchMemoryTool({ db, keyWrapper, clock });
   const getSkillTool = createGetSkillTool({ db, keyWrapper });
+  const saveSkillTool = createSaveSkillTool({ db, keyWrapper, clock, skillsPage: new URL("/skills", config.publicBaseUrl).toString() });
   const collectReleaseTool = createCollectReleaseTool({ releaseStore, canCollect: async (connection, approvalId) => {
     const approval = await getApproval(db, connection.userId, approvalId, await dataKeyFor(connection.userId));
     if (!approval || approval.agentId !== connection.agentId || approval.status !== "approved") return false;
@@ -430,6 +432,8 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
         return getContextTool.handle(connection,call.params);
       case "get_skill":
         return getSkillTool.handle(call.params, connection);
+      case "save_skill":
+        return saveSkillTool.handle(call.params, connection);
       case "remember":
         return rememberTool.handle(call.params, connection);
       case "search_memory":

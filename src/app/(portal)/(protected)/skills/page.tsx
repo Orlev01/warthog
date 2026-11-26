@@ -113,7 +113,7 @@ async function run(
     const result = await mutate(buildActions(db), session);
     if (!result.ok) {
       const reason = (result as { reason?: string }).reason;
-      notice = reason === "reserved_title" || reason === "unknown_agent" ? reason : "problem";
+      notice = reason === "reserved_title" || reason === "unknown_agent" || reason === "suggestion_gone" || reason === "suggestion_problem" ? reason : "problem";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {
@@ -192,8 +192,27 @@ async function changeWarthogSkillAction(formData: FormData): Promise<void> {
   );
 }
 
+// An agent's suggested change to one of the person's skills (docs/adr/agent-saved-skills.md).
+async function useSuggestionAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("suggestion_used", (actions, session) =>
+    actions.useSkillSuggestion(session, { id: str(formData, "id") }),
+  );
+}
+
+async function keepSkillAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("suggestion_kept", (actions, session) =>
+    actions.keepSkill(session, { id: str(formData, "id") }),
+  );
+}
+
 type Notice =
   | WarthogNotice
+  | "suggestion_used"
+  | "suggestion_kept"
+  | "suggestion_gone"
+  | "suggestion_problem"
   | "saved"
   | "created"
   | "updated"
@@ -222,6 +241,13 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   warthog_new: { done: true, text: "You're now using Warthog's new version." },
   warthog_kept: { done: true, text: "Kept your version." },
   warthog_scope: { done: true, text: "Saved who gets this skill." },
+  suggestion_used: { done: true, text: "Changes used. Agents that get this skill now get the new version." },
+  suggestion_kept: { done: true, text: "Kept your version. The suggested changes were removed." },
+  suggestion_gone: { done: false, text: "Those changes are no longer waiting. Refresh the page to see the latest." },
+  suggestion_problem: {
+    done: false,
+    text: "We couldn't use those changes. Another skill may already have that name. Keep yours, or edit the skill yourself.",
+  },
   storage_full: {
     done: false,
     text: "Storage limit reached. Remove unused items or reduce their size before saving.",
@@ -279,6 +305,9 @@ export default async function SkillsPage({
         }))}
         preferences={data.preferences}
         warthogSkills={data.warthogSkills}
+        suggestions={data.suggestions}
+        useSuggestionAction={useSuggestionAction}
+        keepSkillAction={keepSkillAction}
         openWarthogSkill={typeof params.skill === "string" ? params.skill : undefined}
         saveProfileAction={saveProfileAction}
         createSkillAction={createSkillAction}

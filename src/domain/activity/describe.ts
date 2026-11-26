@@ -16,6 +16,7 @@ const CORE_TOOL_LABELS: Record<string, string> = {
   check_approval: "Check on an approval",
   collect_release: "Collect a released detail",
   remember: "Save a memory",
+  save_skill: "Save a skill",
   search_memory: "Search memory",
   list_tasks: "List tasks",
   create_task: "Add a task",
