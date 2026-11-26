@@ -29,6 +29,10 @@ export type PackageSummary = Pick<
 > & {
   skills: { path: string; name: string; description: string }[];
   fileCount: number;
+  // The agent that saved it (docs/adr/agent-saved-skills.md); absent when the person did.
+  savedByAgentId?: string;
+  // An agent's save the person hasn't turned on, changed or saved yet.
+  awaitingCheck?: boolean;
 };
 
 export async function listPackageSummaries(
@@ -37,7 +41,7 @@ export async function listPackageSummaries(
   dek: Uint8Array,
 ): Promise<PackageSummary[]> {
   const rows = await db.query(
-    "SELECT id, revision, summary_ct FROM skill_packages WHERE user_id = $1 ORDER BY id",
+    "SELECT id, revision, summary_ct, saved_by_agent_id, awaiting_check FROM skill_packages WHERE user_id = $1 ORDER BY id",
     [userId],
   );
   return Promise.all(
@@ -53,6 +57,8 @@ export async function listPackageSummaries(
       ),
       id: row.id as string,
       revision: row.revision as number,
+      ...(row.saved_by_agent_id ? { savedByAgentId: row.saved_by_agent_id as string } : {}),
+      ...(row.awaiting_check ? { awaitingCheck: true } : {}),
     })),
   );
 }
@@ -123,7 +129,10 @@ export async function savePackage(
   dek: Uint8Array,
   // From the Skills page: a skill name that's one of Warthog's is refused unless the package
   // already had it (docs/adr/editable-builtin-skills.md). An import keeps what was exported.
-  options: { readonly refuseNewReservedNames?: boolean } = {},
+  // `savedByAgent`: an agent's save_skill (docs/adr/agent-saved-skills.md). A new package
+  // records that agent and waits for the person to check it, and so does a draft the agent
+  // replaces; any other save is the person's, so the package no longer waits.
+  options: { readonly refuseNewReservedNames?: boolean; readonly savedByAgent?: string } = {},
 ): Promise<StoredPackage> {
   const parsed = parsePackage(input.files, input.name);
   const save = async (tx: Db) => {
@@ -238,8 +247,8 @@ export async function savePackage(
     );
     if (previous) {
       await tx.query(
-        "UPDATE skill_packages SET content_ct = $3, revision = $4, summary_ct = $5 WHERE id = $1 AND user_id = $2",
-        [id, userId, ct, revision, summary],
+        "UPDATE skill_packages SET content_ct = $3, revision = $4, summary_ct = $5, awaiting_check = $6 WHERE id = $1 AND user_id = $2",
+        [id, userId, ct, revision, summary, options.savedByAgent !== undefined],
       );
       await tx.query(
         "DELETE FROM skill_package_members WHERE package_id = $1 AND user_id = $2",
@@ -255,8 +264,8 @@ export async function savePackage(
       }
     } else {
       await tx.query(
-        "INSERT INTO skill_packages (id, user_id, content_ct, summary_ct) VALUES ($1, $2, $3, $4)",
-        [id, userId, ct, summary],
+        "INSERT INTO skill_packages (id, user_id, content_ct, summary_ct, saved_by_agent_id, awaiting_check) VALUES ($1, $2, $3, $4, $5, $6)",
+        [id, userId, ct, summary, options.savedByAgent ?? null, options.savedByAgent !== undefined],
       );
     }
     for (const member of members) {

@@ -64,7 +64,9 @@ redirects to those flows.
     security code never kept, budgets checked before the person is asked, and a household
     budget. The scope note says the limits cover card requests through Warthog only.
   - **Your context** has four cards in pairs: memory and skills, the vault, tasks handed
-    between agents, and export.
+    between agents, and export. The memory and skills card says an AI can save a skill it wrote
+    with the person, and that no agent uses it until they've checked it
+    ([ADR](../adr/agent-saved-skills.md)).
   - **Life admin** (its own section, in the controls layout with a static example of the
     Records list): filled in by the person's own agent from email, active first with
     reminders, and a log any agent can continue. The scope note says Warthog doesn't read

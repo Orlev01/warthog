@@ -1057,3 +1057,42 @@ test("editSkill lets an older skill keep a title Warthog now uses, but not take 
     await db.close();
   }
 });
+
+// docs/adr/agent-saved-skills.md: the Skills page lists agents' suggested changes, and the person
+// uses one or keeps their skill as it is — only their own, by a well-formed id.
+test("load lists agents' suggested changes; the person uses one or keeps theirs", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "suggest");
+    const other = await makeUserWithDek(db, keyWrapper, "suggest-other");
+    const agentId = await makeAgent(db, userId, "ChatGPT");
+    const { createSkill } = await import("@/server/db/skills");
+    const { makeSkillFile } = await import("@/domain/skills/package");
+    const { saveSkillFromAgent } = await import("@/server/skills/agent-skills");
+    const skill = await createSkill(db, { userId, title: "Updates", useThisWhen: "When updating me", fullText: "Be brief.", scope: "all" }, dek);
+    const suggest = (body: string) =>
+      saveSkillFromAgent(db, { userId, agentId, now: NOW }, { id: skill.id, skillMd: makeSkillFile("Updates", "When updating me", body) }, dek);
+    const actions = makeActions(db, keyWrapper);
+
+    assert.equal((await suggest("Be brief.\nUse dot points.")).status, "suggested");
+    const [waiting] = (await actions.load(sessionFor(userId))).suggestions;
+    assert.equal(waiting!.agentId, agentId);
+    assert.equal(waiting!.suggested.body, "Be brief.\nUse dot points.");
+
+    await assert.rejects(() => actions.useSkillSuggestion(sessionFor(userId), { id: "not-a-uuid" }), HttpError);
+    assert.deepEqual(await actions.useSkillSuggestion(sessionFor(other.userId), { id: waiting!.id }), { ok: false, reason: "suggestion_gone" });
+    assert.deepEqual(await actions.useSkillSuggestion(sessionFor(userId), { id: waiting!.id }), { ok: true });
+    const used = (await actions.load(sessionFor(userId)));
+    assert.equal(used.suggestions.length, 0);
+    assert.equal(used.skills.find((s) => s.id === skill.id)!.fullText, "Be brief.\nUse dot points.");
+
+    await suggest("Be rude.");
+    const [next] = (await actions.load(sessionFor(userId))).suggestions;
+    assert.deepEqual(await actions.keepSkill(sessionFor(userId), { id: next!.id }), { ok: true });
+    assert.deepEqual(await actions.keepSkill(sessionFor(userId), { id: next!.id }), { ok: false, reason: "suggestion_gone" });
+    assert.equal((await actions.load(sessionFor(userId))).skills.find((s) => s.id === skill.id)!.fullText, "Be brief.\nUse dot points.");
+  } finally {
+    await db.close();
+  }
+});

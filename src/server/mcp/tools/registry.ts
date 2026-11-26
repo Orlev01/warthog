@@ -33,6 +33,7 @@ import { accountPolicy, toolPermitted, untagId } from "../../../domain/permissio
 import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
 import { rememberSchema, searchMemorySchema } from "./memory";
 import { getSkillSchema } from "./get-skill";
+import { saveSkillSchema } from "./save-skill";
 import { inputSchema as checkApprovalSchema } from "./check-approval";
 import { inputSchema as collectReleaseSchema } from "./collect-release";
 import {
@@ -236,6 +237,13 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
       "Fetch a skill by title and, when available, its ID from get_context. Supporting files use the optional file path.",
     makesChange: false,
     schema: getSkillSchema,
+  },
+  {
+    name: "save_skill",
+    description:
+      "Save a skill to the person's Warthog Skills: instructions for a task, such as a SKILL.md you wrote with them. Send skill_md (frontmatter with name and description, then the instructions), or name, description and instructions, plus any supporting files. It is saved switched off: no agent uses it until the person checks it on their Skills page and turns it on, so tell them it is waiting there. To revise a skill, pass its id: one you saved that they haven't checked yet is replaced; otherwise your version waits for them to accept, and the skill stays as it was until they do.",
+    makesChange: true,
+    schema: saveSkillSchema,
   },
   {
     name: "request_identity_detail",

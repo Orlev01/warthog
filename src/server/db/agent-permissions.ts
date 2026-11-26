@@ -45,7 +45,8 @@ export interface CardBudget {
 // sharing flags, its rules and its per-minute request limit.
 export interface PermissionGrants {
   readonly identityFields?: string[] | null;
-  readonly resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; recordIds?: string[] | null };
+  // skillsWrite: whether it may save skills and suggest changes (docs/adr/agent-saved-skills.md); absent ⇒ yes.
+  readonly resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; skillsWrite?: boolean; recordIds?: string[] | null };
   readonly userId: string;
   readonly connectionId: string;
   // The accounts this agent may use, each with its own settings. Optional on WRITE: left

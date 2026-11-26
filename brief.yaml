@@ -288,7 +288,13 @@ features:
     approval; save and search memory; create, read, update and complete tasks; create, read and
     update life-admin records; and log an activity summary (optionally with an amount, currency
     and the card release it relates to). Every tool accepts an optional plain reason that is shown to
-    the person and stored with the activity entry.
+    the person and stored with the activity entry. (Amended 26 November 2026, founder: an agent can
+    save a skill it wrote with the person, such as a SKILL.md made in ChatGPT, Claude or Gemini, and
+    suggest changes to the person's skills. A saved skill is switched off until the person checks it
+    and turns it on; until the person has checked it, the agent that saved it may replace it.
+    A change to any other skill waits for the person, who uses it or keeps theirs, and the skill
+    keeps working as it was meanwhile. Every agent may do this unless the person switches "Let it
+    save skills" off in its permissions. See docs/adr/agent-saved-skills.md.)
 
   # --- Identity vault ---
   - >-

@@ -141,7 +141,7 @@ const inputSchema = z.object({
     .array(z.object({ id: z.uuid(), granted: z.boolean() }))
     .max(1000)
     .optional(),
-  resourceControls: z.object({ tasksWrite: z.boolean().optional(), recordsWrite: z.boolean().optional(), recordIds: z.array(z.uuid()).max(5000).nullable().optional() }).optional(),
+  resourceControls: z.object({ tasksWrite: z.boolean().optional(), recordsWrite: z.boolean().optional(), skillsWrite: z.boolean().optional(), recordIds: z.array(z.uuid()).max(5000).nullable().optional() }).optional(),
   highTier: z.boolean().optional(),
   memoryRead: z.boolean().optional(),
   // Review fix W2.3 — the tasks and life-admin records grants (migration 0068).

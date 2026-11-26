@@ -24,6 +24,7 @@ const CORE: Readonly<Record<string, ToolAnnotations>> = {
   list_tasks: read("List tasks"),
   list_records: read("Find life-admin records"),
   remember: change("Save a memory"),
+  save_skill: change("Save a skill for the person to check"),
   create_task: change("Create a task"),
   update_task: change("Update a task", true),
   complete_task: change("Complete a task", true),

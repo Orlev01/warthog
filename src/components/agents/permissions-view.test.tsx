@@ -693,3 +693,14 @@ test("the permissions view uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// docs/adr/agent-saved-skills.md: the Skills section says whether the agent may save skills for
+// the person to check, on unless the person turned it off.
+test("the Skills section has a Let it save skills switch, on unless turned off", () => {
+  const on = toggle(render(base()), /Let it save skills/);
+  assert.ok(on, "the switch is shown");
+  assert.equal(on.on, true, "on by default");
+  assert.match(render(base()), /A new skill stays off and a change waits until you check it/);
+  const off = toggle(render(base({ resourceControls: { skillsWrite: false } })), /Let it save skills/);
+  assert.equal(off?.on, false);
+});

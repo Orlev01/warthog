@@ -92,7 +92,7 @@ const GRANT_LABELS: Record<string, string> = {
   connectorAccounts: "Service accounts",
   connectorPolicies: "Service rules",
   identityFields: "Everyday details it can read",
-  resourceControls: "Task and record controls",
+  resourceControls: "Task, record and skill controls",
   skillsScope: "Skills",
   rulesScope: "Rules",
   cardAccess: "Card requests",

@@ -43,6 +43,9 @@ export function createLibraryActions({ db, keyWrapper }: { db: Db; keyWrapper: K
         const result = await tx.query("UPDATE skills SET enabled = $3, scope = $4, scoped_agent_ids = $5::jsonb WHERE id = $1 AND user_id = $2 RETURNING id", [valid.id, session.userId, valid.enabled, valid.scope, JSON.stringify(valid.scope === "chosen" ? valid.scopedAgentIds : [])]);
         if (!result.rows.length) throw new PackageError("Skill not found. It may have been deleted.");
         await tx.query("DELETE FROM agent_skill_access WHERE user_id = $1 AND skill_id = $2", [session.userId, valid.id]);
+        // The person has checked an agent's save: from now on that agent's changes wait for them
+        // (docs/adr/agent-saved-skills.md).
+        await tx.query("UPDATE skill_packages SET awaiting_check = false WHERE user_id = $1 AND id IN (SELECT package_id FROM skill_package_members WHERE user_id = $1 AND skill_id = $2)", [session.userId, valid.id]);
         await createRedactingRecorder({ db: tx, clock: systemClock, dekFor: async () => dek }).record({ userId: session.userId, kind: "skill_access_change", source: "warthog", outcome: "saved", payload: valid });
       });
     },

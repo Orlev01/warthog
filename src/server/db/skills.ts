@@ -330,6 +330,20 @@ export async function listSkillsForUser(
   return skills;
 }
 
+// One of `userId`'s skills, decrypted, or null when they have none by that id.
+export async function getSkillForUser(
+  db: Db,
+  userId: string,
+  id: string,
+  dek: Uint8Array,
+): Promise<Skill | null> {
+  const result = await db.query(
+    `SELECT ${SELECT_COLUMNS} FROM skills WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  return result.rows[0] ? decryptRow(dek, result.rows[0]) : null;
+}
+
 // The agent-scoped index: ONLY the title + useThisWhen of the owner's ENABLED skills
 // whose scope covers `agentId` (scope 'all', or 'chosen' listing agentId). NO full
 // text — it is neither selected nor returned. Member-scoped (user_id bound);
@@ -425,6 +439,25 @@ export async function getSkillText(
       : body;
   }
   return null;
+}
+
+// Whether the agent may use the skill now: switched on, and given to it by the agent's own
+// choice or else the skill's scope — the same test getSkillText applies. Reads no content.
+export async function skillAvailableToAgent(
+  db: Db,
+  userId: string,
+  agentId: string,
+  skillId: string,
+): Promise<boolean> {
+  const result = await db.query(
+    `SELECT s.scope, s.scoped_agent_ids, a.allowed
+     FROM skills s LEFT JOIN agent_skill_access a ON a.skill_id = s.id AND a.user_id = s.user_id AND a.agent_id::text = $2
+     WHERE s.user_id = $1 AND s.enabled = true AND s.id = $3::uuid`,
+    [userId, agentId, skillId],
+  );
+  const row = result.rows[0];
+  if (!row) return false;
+  return Boolean(row.allowed ?? scopeCovers(row.scope as SkillScope, (row.scoped_agent_ids as string[]) ?? [], agentId));
 }
 
 /** Bounded metadata index; an ungranted skill is filtered before decryption. */

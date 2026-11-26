@@ -59,6 +59,7 @@ import { builtinByKey, isReservedSkillTitle, type BuiltinGroup, type EffectiveBu
 import type { SkillGate } from "@/domain/skills/gates";
 import { changeBuiltinSkill, restoreBuiltinSkill, type BuiltinSkillChange } from "@/server/db/builtin-skills";
 import { builtinSkillsFor } from "@/server/skills/builtin-skills";
+import { dismissSkillSuggestion, skillSuggestionsFor, useSkillSuggestion, type SkillSuggestionView } from "@/server/skills/agent-skills";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Session } from "@/server/auth/session";
 
@@ -78,6 +79,8 @@ export interface SkillsPageData {
   readonly preferences: PreferencesProfile | null;
   // Warthog's own skills as they stand for this person (docs/adr/editable-builtin-skills.md).
   readonly warthogSkills: readonly WarthogSkillView[];
+  // Changes agents suggest to the person's skills, waiting for them (docs/adr/agent-saved-skills.md).
+  readonly suggestions: readonly SkillSuggestionView[];
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
@@ -137,6 +140,9 @@ export interface SkillsActions {
   toggleSkill(session: Session, input: ToggleSkillInput): Promise<ActionResult>;
   deleteSkill(session: Session, input: SkillIdInput): Promise<ActionResult>;
   changeWarthogSkill(session: Session, input: WarthogSkillChangeInput): Promise<ActionResult>;
+  // An agent's suggested change: use it, or keep the skill as it is.
+  useSkillSuggestion(session: Session, input: SkillIdInput): Promise<ActionResult>;
+  keepSkill(session: Session, input: SkillIdInput): Promise<ActionResult>;
 }
 
 // One of Warthog's skills as the Skills page shows it: the person's wording or Warthog's,
@@ -311,7 +317,8 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     );
     const preferences = await getPreferences(db, session.userId, dek);
     const warthogSkills = (await builtinSkillsFor(db, session.userId, dek)).map(warthogSkillView);
-    return { skills, preferences, warthogSkills };
+    const suggestions = await skillSuggestionsFor(db, session.userId, dek);
+    return { skills, preferences, warthogSkills, suggestions };
   }
 
   // Upsert the session person's ONE communication-style profile (one row per person).
@@ -504,6 +511,22 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     return { ok: true };
   }
 
+  // Use an agent's suggested change (the id is the suggestion's): the skill takes the suggested
+  // wording and keeps who gets it. A suggestion that can't be used (its name is now taken) is a
+  // refusal, and it stays waiting.
+  async function useSuggestion(session: Session, input: SkillIdInput): Promise<ActionResult> {
+    const valid = parseParams(skillIdInputSchema, input);
+    const result = await useSkillSuggestion(db, session.userId, valid.id, await dataKeyFor(session.userId));
+    return result.ok ? { ok: true } : { ok: false, reason: result.reason === "not_found" ? "suggestion_gone" : "suggestion_problem" };
+  }
+
+  // Keep the skill as it is: the agent's suggestion is removed.
+  async function keepSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
+    const valid = parseParams(skillIdInputSchema, input);
+    const result = await dismissSkillSuggestion(db, session.userId, valid.id);
+    return result.ok ? { ok: true } : { ok: false, reason: "suggestion_gone" };
+  }
+
   return {
     load,
     savePreferences,
@@ -513,5 +536,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
     toggleSkill,
     deleteSkill,
     changeWarthogSkill,
+    useSkillSuggestion: useSuggestion,
+    keepSkill,
   };
 }

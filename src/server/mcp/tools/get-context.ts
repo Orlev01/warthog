@@ -132,7 +132,7 @@ export interface AgentContextView {
   // null without the records permission. list_records has the rest.
   readonly lifeAdmin: LifeAdminSummary | null;
   readonly permissions: {
-    readonly resources?: { tasks: { read: boolean; write: boolean }; records: { read: boolean; write: boolean; scope: string } };
+    readonly resources?: { tasks: { read: boolean; write: boolean }; records: { read: boolean; write: boolean; scope: string }; skills: { write: boolean } };
     readonly services: readonly string[];
     readonly vaultScope?: "all" | "chosen";
     readonly readTools: boolean;
@@ -373,7 +373,7 @@ export function createGetContextTool(deps: GetContextDeps): {
         lifeAdmin,
         permissions: {
           services: permissions.grantedConnectors,
-          resources: { tasks: { read: permissions.tasksAccess, write: permissions.tasksAccess && permissions.resourceControls?.tasksWrite !== false }, records: { read: permissions.recordsAccess, write: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, scope: permissions.resourceControls?.recordIds == null ? "all" : "chosen_and_created_by_this_agent" } },
+          resources: { tasks: { read: permissions.tasksAccess, write: permissions.tasksAccess && permissions.resourceControls?.tasksWrite !== false }, records: { read: permissions.recordsAccess, write: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, scope: permissions.resourceControls?.recordIds == null ? "all" : "chosen_and_created_by_this_agent" }, skills: { write: permissions.resourceControls?.skillsWrite !== false } },
           vaultScope: permissions.identityFields == null ? "all" : "chosen",
           readTools: permissions.readTools,
           changeTools: permissions.changeTools,
