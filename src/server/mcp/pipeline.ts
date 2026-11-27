@@ -129,6 +129,9 @@ export interface AgentCall {
   readonly purpose?: string;
   readonly params?: unknown;
   readonly reason?: string;
+  // Server-owned: the call hands back an approved hold's own stored outcome (check_approval),
+  // so a failed or unknown result keeps the held change's reason rather than a read's.
+  readonly reportsHeldOutcome?: boolean;
   // Server-owned, never read from agent arguments (docs/adr/agent-runs.md): the run this
   // call was made under, as Warthog resolved it for this agent, and the product the request
   // came through as the client reported it. A held call keeps both, so the entry for its
@@ -358,6 +361,12 @@ function searchLimits(call: AgentCall): { asked: string | undefined; limits: { d
 
 // A read the service answered with an error: nothing came back and nothing changed, so the
 // agent can fix the request and ask again (a change's failure may still have done something).
+// The reason an approved hold's stored failure carries (Warthog's own words, set when it ran).
+function heldReason(result: unknown): string | undefined {
+  const reason = result && typeof result === "object" ? (result as { reason?: unknown }).reason : undefined;
+  return typeof reason === "string" && reason.length > 0 ? reason : undefined;
+}
+
 function readFailed(status: unknown): string {
   const answer = typeof status === "number" ? `answered with an error (HTTP ${status})` : "didn't answer";
   return `The service ${answer}, so there is nothing to show. This was a read, so nothing changed: check the request and try again.`;
@@ -960,7 +969,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     const guarded = observed.outcome === "executed" ? await guardResult(call, result, connection) : { result };
     await record(connection, call, observed.outcome, result, recorder, true, guarded.evidence);
     if (observed.outcome === "failed" || observed.outcome === "unknown") {
-      const reason = call.makesChange ? "The service did not confirm success. Check the activity record before retrying a change." : readFailed(observed.evidence.status);
+      const held = call.reportsHeldOutcome ? heldReason(result) : undefined;
+      const reason = held ?? (call.makesChange ? "The service did not confirm success. Check the activity record before retrying a change." : readFailed(observed.evidence.status));
       return { result: { status: observed.outcome, reason }, errorCategory: CATEGORY_TOOL_ERROR };
     }
     return { result: { status: "executed", result: guarded.result } };

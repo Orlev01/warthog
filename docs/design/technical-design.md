@@ -261,7 +261,7 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   `call_tool`. A service's tools are listed once however many of its accounts the agent has; each
   takes an optional `account` ([ADR](../adr/several-accounts-per-agent.md)).
 - Core tools: `get_context`, `get_skill`, `save_skill`, `request_identity_detail`, `request_card`,
-  `check_approval` (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`,
+  `check_approval` (`wait_seconds` ≤ 50, long-poll), `collect_release`, `remember`, `search_memory`,
   `list_tasks`, `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`,
   `update_record`, `log_activity`. Every tool takes an optional `reason`.
 - **Agent-saved skills** ([ADR](../adr/agent-saved-skills.md)): `save_skill` saves a SKILL.md an
@@ -300,8 +300,11 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   are not counted. The pipeline applies the same limit, ahead of the policy context, for callers
   outside MCP (an undo's reversal).
 - **Ask** = the call is held (`held_requests`, encrypted args), an approval is created, the agent gets
-  `{status:"pending_approval", approval_id, expires_at, message}`. On approval Warthog executes the
+  `{status:"pending_approval", approval_id, expires_at, next}`. On approval Warthog executes the
   held call exactly once and the result is returned by `check_approval`. Denied / expired → refusal.
+  No agent's app lets Warthog start a new reply, so `next` tells the agent to wait in the reply it
+  is in: call `check_approval` straight away and again while it says `pending` (each wait ≤ 50 s,
+  under ChatGPT's 60 s tool-call limit) ([ADR](../adr/approval-continuation.md)).
   "Ask for more detail" → `check_approval` returns the question; the agent re-calls the tool with
   `in_reply_to: approval_id` and its answer, creating a linked approval.
 
