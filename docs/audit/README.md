@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Using Warthog v3, 27 November:** main `acc9504` runs as `warthog--r45953930855a1`. PR #75 adds
+two lines to the house skill:
+- an agent whose app has an old copy of Warthog's tools asks the person to refresh it;
+- agents use the person's services through Warthog, not their app's own integrations.
+
+No migrations (99). See the [release record](stale-tool-list-release-2026-11-27.md).
+
 **Skills cards, 27 November:** main `6f5ddb7` runs as `warthog--r45914516521a1`. PR #74:
 - Warthog's skills are cards that open the same editor as the person's own skills;
 - the library's filter is now Show, with Yours and Warthog's added.
