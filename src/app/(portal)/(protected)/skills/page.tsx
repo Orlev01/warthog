@@ -11,7 +11,6 @@ import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createSkillsActions, type SkillsActions } from "./actions";
-import { warthogNotice, warthogReturn, warthogSkillChange, type WarthogNotice } from "./warthog-form";
 import { SkillsView } from "@/components/skills/skills-view";
 import { PageContainer } from "@/components/shell/page-container";
 import { listPackageSummaries } from "@/server/db/skill-packages";
@@ -94,14 +93,13 @@ function skillContentOf(formData: FormData) {
 // Run one mutation against the seam under the verified session and redirect back with a
 // notice naming the outcome. A reported refusal ({ ok: false }) or a 4xx `HttpError` from
 // the validation boundary becomes `problem` — shown in plain words, never swallowed; a
-// genuine fault rethrows. `query` adds to the address it returns to (already encoded).
+// genuine fault rethrows.
 async function run(
   success: Notice,
   mutate: (
     actions: SkillsActions,
     session: Session,
   ) => Promise<{ ok: boolean }>,
-  query = "",
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -122,7 +120,7 @@ async function run(
     notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/skills");
-  redirect(`/skills?notice=${notice}${success === "saved" ? "&view=preferences" : ""}${query}`);
+  redirect(`/skills?notice=${notice}${success === "saved" ? "&view=preferences" : ""}`);
 }
 
 async function saveProfileAction(formData: FormData): Promise<void> {
@@ -180,18 +178,6 @@ async function deleteSkillAction(formData: FormData): Promise<void> {
   );
 }
 
-// One of Warthog's skills: switch, edit, choose who gets it, remove, restore, or take or
-// decline Warthog's newer version. The page comes back with that skill's card open.
-async function changeWarthogSkillAction(formData: FormData): Promise<void> {
-  "use server";
-  const change = warthogSkillChange(formData);
-  await run(
-    change ? warthogNotice(change.action) : "problem",
-    async (actions, session) => (change ? actions.changeWarthogSkill(session, change) : { ok: false }),
-    change ? warthogReturn(change.key) : "",
-  );
-}
-
 // An agent's suggested change to one of the person's skills (docs/adr/agent-saved-skills.md).
 async function useSuggestionAction(formData: FormData): Promise<void> {
   "use server";
@@ -208,7 +194,6 @@ async function keepSkillAction(formData: FormData): Promise<void> {
 }
 
 type Notice =
-  | WarthogNotice
   | "suggestion_used"
   | "suggestion_kept"
   | "suggestion_gone"
@@ -234,13 +219,6 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   problem: { done: false, text: "We couldn't save that change. Check every field is filled in, then try again." },
   reserved_title: { done: false, text: "That's the name of one of Warthog's skills. Choose another name, or change Warthog's skill instead." },
   unknown_agent: { done: false, text: "We couldn't find one of the agents you chose. Refresh the page and choose again." },
-  warthog_on: { done: true, text: "Skill switched on." },
-  warthog_off: { done: true, text: "Skill switched off. Your agents won't get it until you switch it back on." },
-  warthog_removed: { done: true, text: "Skill removed. It's under Removed if you want it back." },
-  warthog_restored: { done: true, text: "Skill restored to Warthog's version." },
-  warthog_new: { done: true, text: "You're now using Warthog's new version." },
-  warthog_kept: { done: true, text: "Kept your version." },
-  warthog_scope: { done: true, text: "Saved who gets this skill." },
   suggestion_used: { done: true, text: "Changes used. Agents that get this skill now get the new version." },
   suggestion_kept: { done: true, text: "Kept your version. The suggested changes were removed." },
   suggestion_gone: { done: false, text: "Those changes are no longer waiting. Refresh the page to see the latest." },
@@ -308,14 +286,12 @@ export default async function SkillsPage({
         suggestions={data.suggestions}
         useSuggestionAction={useSuggestionAction}
         keepSkillAction={keepSkillAction}
-        openWarthogSkill={typeof params.skill === "string" ? params.skill : undefined}
         saveProfileAction={saveProfileAction}
         createSkillAction={createSkillAction}
         editSkillAction={editSkillAction}
         duplicateSkillAction={duplicateSkillAction}
         toggleSkillAction={toggleSkillAction}
         deleteSkillAction={deleteSkillAction}
-        changeWarthogSkillAction={changeWarthogSkillAction}
       />
     </PageContainer>
   );

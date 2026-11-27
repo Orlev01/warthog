@@ -11,6 +11,20 @@ import { AgentScope, SKILL_CONTROL, type SkillAgent } from "./agent-scope";
 import { createPackageOperation } from "./package-operation";
 import { savePackageAction, deletePackageAction, downloadPackageAction, saveSkillAccessAction } from "@/app/(portal)/(protected)/skills/library-actions";
 
+// The editor's header (title + close) and footer (the primary action) stay pinned to the
+// dialog's edges, so on a phone (keyboard up, landscape) neither scrolls out of reach.
+export const EDITOR_HEADER = "sticky -top-4 z-10 -mx-4 -mt-4 sm:-top-6 flex items-start justify-between gap-4 border-b border-line bg-surface px-4 pt-4 pb-3 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6 sm:pb-4";
+export const EDITOR_FOOTER = "sticky -bottom-4 z-10 -mx-4 -mb-4 sm:-bottom-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6";
+
+// The editor's views (Preview, Edit, Agent access): pressed buttons, one at a time.
+export function EditorViews<Mode extends string>({ label, mode, views, onChange }: {
+  label: string; mode: Mode; views: ReadonlyArray<readonly [Mode, string]>; onChange: (mode: Mode) => void;
+}) {
+  return <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
+    {views.map(([view, text]) => <Button key={view} variant="secondary" aria-pressed={mode === view} onClick={() => onChange(view)}>{text}</Button>)}
+  </div>;
+}
+
 export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob), a = document.createElement("a");
   a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
@@ -108,7 +122,7 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
   // On a phone (keyboard up, landscape) the dialog scrolls; its header (title + close) and
   // footer (the primary action) stay pinned to its edges so neither scrolls out of reach.
   return <div id={uid} className="flex min-w-0 flex-col gap-5">
-    <header className="sticky -top-4 z-10 -mx-4 -mt-4 sm:-top-6 flex items-start justify-between gap-4 border-b border-line bg-surface px-4 pt-4 pb-3 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6 sm:pb-4">
+    <header className={EDITOR_HEADER}>
       <div className="min-w-0"><p className="mb-1 text-sm text-fg-muted">{stored ? "Your library" : "Review before adding"} · {draft.kind === "plugin" ? "Plugin" : "Skill"}</p>
         <h2 id="package-dialog-title" className="text-xl font-semibold [overflow-wrap:anywhere]">{preview?.name ?? draft.name}</h2>
         <p className="mt-2 text-sm text-fg-muted [overflow-wrap:anywhere]">{preview?.description ?? draft.description}</p>
@@ -129,9 +143,7 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
     {stored && savedBy && <Notice announce={false}>{savedBy} saved this skill, and no agent uses it yet. Read it here, then turn it on under Agent access if you&rsquo;re happy with it.</Notice>}
     {busy && <p role="status" className="text-sm text-fg-muted">Please wait while your package is updated. Editing will be available when this finishes.</p>}
     <fieldset disabled={busy} className="contents">
-      <div className="flex flex-wrap gap-2" aria-label="Package views">
-        {(["preview", "edit", ...(stored ? ["access"] : [])] as const).map((tab) => <Button key={tab} variant="secondary" aria-pressed={mode === tab} onClick={() => setMode(tab as typeof mode)}>{tab === "preview" ? "Preview" : tab === "edit" ? "Edit files" : "Agent access"}</Button>)}
-      </div>
+      <EditorViews label="Package views" mode={mode} onChange={setMode} views={[["preview", "Preview"], ["edit", "Edit files"], ...(stored ? [["access", "Agent access"] as const] : [])]} />
       {mode === "access" && stored ? <div className="grid gap-4 sm:grid-cols-2">
         {stored.members.map((m) => currentSkills.find((s) => s.id === m.skillId)).filter((s): s is SkillsViewSkill => Boolean(s)).map((s) => <SkillAccess key={s.id} skill={s} agents={agents} busy={busy} perform={perform} onSaved={(next) => { setCurrentSkills((all) => all.map((s) => s.id === next.id ? next : s)); setAccessChanged(true); }} />)}
         {!stored.members.length && <p className="text-sm text-fg-muted">This package has no skills Warthog can share.</p>}
@@ -156,7 +168,7 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
       </div>}
     </fieldset>
     {validation && <Notice tone="warning">{validation}</Notice>}
-    <footer className="sticky -bottom-4 z-10 -mx-4 -mb-4 sm:-bottom-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6">
+    <footer className={EDITOR_FOOTER}>
       <div className="flex flex-wrap gap-2">{stored && <>
         {onDuplicate && <Button variant="secondary" disabled={busy || dirty} onClick={() => { try { onDuplicate(duplicatePackage(draft)); } catch (e) { setError(e instanceof Error ? e.message : "Could not duplicate this package."); } }}><Copy aria-hidden className="h-4 w-4" />Duplicate</Button>}
         <Button variant="secondary" disabled={busy} onClick={() => void perform(async () => { const result = await downloadPackageAction(stored.id); if (!result.ok) return setError(result.error); const bytes = Uint8Array.from(atob(result.value.base64), (c) => c.charCodeAt(0)); downloadBlob(new Blob([bytes], { type: "application/zip" }), result.value.name); })}><Download aria-hidden className="h-4 w-4" />Download saved files</Button>
@@ -167,7 +179,12 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
   </div>;
 }
 
-export function PackageModal(props: React.ComponentProps<typeof PackageEditor>) {
+// The editor dialog shared by the person's packages and Warthog's skills: a native modal inside
+// the safe area on notched phones (as the passkey dialog is), never taller than the visible
+// viewport. `children` gets the dismiss function, which closes it while mounted.
+export function SkillDialog({ labelledBy, onClose, children }: {
+  labelledBy: string; onClose: () => void; children: (dismiss: () => void) => React.ReactNode;
+}) {
   const ref = React.useRef<HTMLDialogElement>(null);
   React.useEffect(() => {
     const dialog = ref.current;
@@ -180,12 +197,16 @@ export function PackageModal(props: React.ComponentProps<typeof PackageEditor>) 
     // after the dismissal render; activeElement here can already be body because
     // a card/import button was disabled during the asynchronous package load.
     if (ref.current?.open) ref.current.close();
-    props.onClose();
+    onClose();
   };
-  // Inside the safe area on notched phones (as the passkey dialog is), never taller than the
-  // visible viewport.
-  return <dialog ref={ref} aria-labelledby="package-dialog-title" className="top-[env(safe-area-inset-top)] right-[env(safe-area-inset-right)] bottom-[env(safe-area-inset-bottom)] left-[env(safe-area-inset-left)] m-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-5xl overflow-y-auto rounded-panel border border-line bg-surface p-4 text-fg shadow-xl sm:p-6">
-    {/* Saving keeps its existing reload/navigation path; only dismissal returns focus. */}
-    <PackageEditor {...props} onClose={dismiss} />
+  return <dialog ref={ref} aria-labelledby={labelledBy} className="top-[env(safe-area-inset-top)] right-[env(safe-area-inset-right)] bottom-[env(safe-area-inset-bottom)] left-[env(safe-area-inset-left)] m-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-5xl overflow-y-auto rounded-panel border border-line bg-surface p-4 text-fg shadow-xl sm:p-6">
+    {children(dismiss)}
   </dialog>;
+}
+
+export function PackageModal(props: React.ComponentProps<typeof PackageEditor>) {
+  // Saving keeps its existing reload/navigation path; only dismissal returns focus.
+  return <SkillDialog labelledBy="package-dialog-title" onClose={props.onClose}>
+    {(dismiss) => <PackageEditor {...props} onClose={dismiss} />}
+  </SkillDialog>;
 }

@@ -74,7 +74,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { SkillsView } from "./skills-view";
-import type { WarthogSkillItem } from "./warthog-skills";
+import { WarthogSkillEditor, type WarthogSkillItem } from "./warthog-skills";
 import { HOUSE_SKILL } from "@/domain/skills/index";
 
 // --- the prop shapes this task renders (declared locally so this client VIEW never
@@ -513,8 +513,8 @@ test("shows the house skill's title and use-this-when line", () => {
   );
 });
 
-test("shows the house skill's fixed rules as always applying", () => {
-  const markup = render(base({ warthogSkills: [HOUSE] }));
+test("shows the house skill's fixed rules as always applying, in its editor", () => {
+  const markup = renderToStaticMarkup(<WarthogSkillEditor skill={HOUSE} agents={[]} onClose={() => {}} onSaved={() => {}} />);
   assert.ok(
     nearInText(markup, "Always applies", /Warthog's rules for every agent/i),
     `the fixed rules must be marked as always applying; text="${visibleText(markup)}"`,
@@ -585,4 +585,27 @@ test("uses design tokens, never a raw hex colour", () => {
       `no raw hex colour may appear in the skills-view markup, got: ${markup}`,
     );
   }
+});
+
+// ================================================================================
+// One library for the person's skills and Warthog's (founder, 27 Nov 2026): the Show filter
+// narrows both, and the count covers both.
+// ================================================================================
+
+test("the Show filter offers all, switched on or off, yours or Warthog's", () => {
+  const markup = render(base({ warthogSkills: [HOUSE] }));
+  const select = markup.match(/<select\b[^>]*id="library-status"[^>]*>([\s\S]*?)<\/select>/);
+  assert.ok(select, "the filter is on the library");
+  assert.match(markup, /<label[^>]*for="library-status"[^>]*>Show<\/label>/);
+  const options = [...select[1]!.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((m) => [m[1], decode(m[2]!)]);
+  assert.deepEqual(options, [["all", "All"], ["on", "Switched on"], ["off", "Switched off"], ["yours", "Yours"], ["warthog", "Warthog's"]]);
+});
+
+test("the library counts the person's skills and Warthog's together, under their own headings", () => {
+  const markup = render(base({ warthogSkills: [HOUSE] }));
+  assert.ok(visibleText(markup).includes("Showing 3 of 3 skills."));
+  assert.ok(visibleText(markup).includes("3 skills · 2 switched on"), "the heading counts both too");
+  const yours = markup.indexOf(">Your skills</h2>");
+  const warthog = markup.indexOf(">Warthog&#x27;s skills</h2>");
+  assert.ok(yours > 0 && warthog > yours, "Your skills, then Warthog's");
 });

@@ -1039,6 +1039,42 @@ test("changeWarthogSkill: switch off, edit, choose agents and restore one of War
   }
 });
 
+// The editor's Agent access saves on or off and who gets it together, as the person's own skills do.
+test("changeWarthogSkill: access switches a skill and chooses its agents in one save", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId } = await makeUserWithDek(db, keyWrapper, "warthog-access");
+    const myAgent = await makeAgent(db, userId, "My Claude");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    const view = async (key: string) => (await actions.load(session)).warthogSkills.find((skill) => skill.key === key)!;
+
+    const pack = (await actions.load(session)).warthogSkills.find((skill) => skill.group === "pack")!;
+    assert.equal(pack.state, "off", "a pack starts off");
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: pack.key, action: "access", enabled: true, scope: "chosen", scopedAgentIds: [myAgent] })), true);
+    const on = await view(pack.key);
+    assert.equal(on.state, "on");
+    assert.equal(on.scope, "chosen");
+    assert.deepEqual(on.scopedAgentIds, [myAgent]);
+
+    assert.equal(okOf(await actions.changeWarthogSkill(session, { key: pack.key, action: "access", enabled: false, scope: "all" })), true);
+    const off = await view(pack.key);
+    assert.equal(off.state, "off");
+    assert.equal(off.scope, "all");
+
+    const foreign = await actions.changeWarthogSkill(session, { key: pack.key, action: "access", enabled: true, scope: "chosen", scopedAgentIds: [randomUUID()] });
+    assert.equal(okOf(foreign), false, "only the person's own agents");
+    assert.equal((await view(pack.key)).state, "off", "a refused save changes nothing");
+    await assert.rejects(
+      actions.changeWarthogSkill(session, { key: pack.key, action: "access", enabled: "yes", scope: "all" } as never),
+      "on or off must be a boolean",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 // Review, 25 Nov 2026: a skill the person made before "Tax time" was Warthog's keeps its title.
 test("editSkill lets an older skill keep a title Warthog now uses, but not take one", async () => {
   const db = await freshDb();

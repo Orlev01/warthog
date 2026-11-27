@@ -171,7 +171,9 @@ export interface WarthogSkillView {
 export type WarthogSkillChangeInput =
   | { readonly key: string; readonly action: "on" | "off" | "remove" | "restore" | "use_new" | "keep_mine" }
   | { readonly key: string; readonly action: "edit"; readonly useThisWhen: string; readonly guidance: string }
-  | { readonly key: string; readonly action: "scope"; readonly scope: "all" | "chosen"; readonly scopedAgentIds?: readonly string[] };
+  | { readonly key: string; readonly action: "scope"; readonly scope: "all" | "chosen"; readonly scopedAgentIds?: readonly string[] }
+  // On or off and who gets it, saved together (the editor's Agent access, as for the person's own skills).
+  | { readonly key: string; readonly action: "access"; readonly enabled: boolean; readonly scope: "all" | "chosen"; readonly scopedAgentIds?: readonly string[] };
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
 //
@@ -199,6 +201,13 @@ const warthogSkillChangeSchema = z.discriminatedUnion("action", [
     guidance: z.string().trim().min(1).max(FULL_TEXT_MAX),
   }),
   z.object({ key: warthogKeySchema, action: z.literal("scope"), scope: z.enum(["all", "chosen"]), scopedAgentIds: z.array(z.uuid()).max(SCOPED_AGENTS_MAX).optional() }),
+  z.object({
+    key: warthogKeySchema,
+    action: z.literal("access"),
+    enabled: z.boolean(),
+    scope: z.enum(["all", "chosen"]),
+    scopedAgentIds: z.array(z.uuid()).max(SCOPED_AGENTS_MAX).optional(),
+  }),
 ]);
 
 // Which agents a Warthog skill is for, in the person's words.
@@ -501,10 +510,12 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
         await change({ useThisWhen, guidance, basedOnVersion: def.version });
         break;
       }
-      case "scope": {
+      case "scope":
+      case "access": {
         const agentIds = valid.scopedAgentIds ?? [];
         if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, agentIds))) return { ok: false, reason: "unknown_agent" };
-        await change({ scope: valid.scope === "chosen" ? { type: "agents", agentIds } : { type: "all_agents" } });
+        const scope = valid.scope === "chosen" ? { type: "agents" as const, agentIds } : { type: "all_agents" as const };
+        await change(valid.action === "access" ? { state: valid.enabled ? "on" : "off", scope } : { scope });
         break;
       }
     }
