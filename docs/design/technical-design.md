@@ -304,7 +304,9 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   held call exactly once and the result is returned by `check_approval`. Denied / expired → refusal.
   No agent's app lets Warthog start a new reply, so `next` tells the agent to wait in the reply it
   is in: call `check_approval` straight away and again while it says `pending` (each wait ≤ 50 s,
-  under ChatGPT's 60 s tool-call limit) ([ADR](../adr/approval-continuation.md)).
+  under ChatGPT's 60 s tool-call limit) ([ADR](../adr/approval-continuation.md)). A client that
+  declares the MCP Tasks extension on the request gets a task instead (task id = approval id): it
+  polls `tasks/get` itself and gets the call's result once the person decides (`approval-tasks.ts`).
   "Ask for more detail" → `check_approval` returns the question; the agent re-calls the tool with
   `in_reply_to: approval_id` and its answer, creating a linked approval.
 

@@ -37,7 +37,7 @@
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
-import { decide, getApproval } from "../../db/approvals";
+import { decide, getApproval, type StoredApproval } from "../../db/approvals";
 import { getUserById } from "../../db/users";
 import { isDue } from "../../../domain/approvals/state-machine";
 import { isReleaseRequest } from "../../../domain/approvals/release-kind";
@@ -102,10 +102,18 @@ export type CheckApprovalResult =
   | { status: "failed" | "unknown"; reason: string }
   | { status: "more_detail"; approval_id: string; question: string };
 
+// One reading of an approval for a connection, without waiting: none of this agent's, still
+// pending, or decided with its outcome. An MCP task's `tasks/get` reads through it
+// (../approval-tasks.ts), so a task and check_approval always agree.
+export type ApprovalReading =
+  | { readonly found: false }
+  | { readonly found: true; readonly approval: StoredApproval; readonly outcome: Exclude<CheckApprovalResult, { status: "pending" }> | null };
+
 export interface CheckApprovalTool {
   readonly name: string;
   readonly inputSchema: z.ZodType;
   handle(input: unknown, connection: AgentConnection): Promise<CheckApprovalResult>;
+  read(approvalId: string, connection: AgentConnection): Promise<ApprovalReading>;
 }
 
 // The injected seams — no process.env (INV-103).
@@ -127,7 +135,7 @@ const NOT_FOUND = "There's no approval to check for you.";
 const EXPIRED = "This request expired before it was approved.";
 
 // The pure machine's view of a stored approval — just what `isDue` reads.
-function approvalWindow(approval: NonNullable<Awaited<ReturnType<typeof getApproval>>>) {
+function approvalWindow(approval: StoredApproval) {
   return {
     id: approval.id,
     agentId: approval.agentId,
@@ -153,48 +161,52 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
     return keyWrapper.unwrap(user.wrappedDek);
   }
 
-  // Map one reading of the approval to an outcome, or `null` when it is still
-  // pending (keep long-polling). The read is already member-scoped by the owning
-  // user id; here we also require the approval to belong to THIS connection's agent.
+  // Read the approval once and map it to its outcome (`outcome: null` while it is still
+  // pending: keep long-polling). The read is member-scoped by the owning user id; here we
+  // also require the approval to belong to THIS connection's agent.
+  async function readOnce(approvalId: string, connection: AgentConnection, dek: Uint8Array): Promise<ApprovalReading> {
+    const approval = await getApproval(db, connection.userId, approvalId, dek);
+    if (!approval || approval.agentId !== connection.agentId) return { found: false };
+    return resolve(approval, connection, dek);
+  }
+
   async function resolve(
-    approval: Awaited<ReturnType<typeof getApproval>>,
+    approval: StoredApproval,
     connection: AgentConnection,
     dek: Uint8Array,
-  ): Promise<CheckApprovalResult | null> {
-    if (!approval || approval.agentId !== connection.agentId) {
-      return { status: "refused", reason: NOT_FOUND };
-    }
+  ): Promise<ApprovalReading> {
+    const decided = (outcome: Exclude<CheckApprovalResult, { status: "pending" }> | null): ApprovalReading => ({ found: true, approval, outcome });
     switch (approval.status) {
       case "pending": {
         // An approval already past its window "is denied" now, not when the minute
         // sweep next runs: store the expiry (a decision that landed first stands) and
         // answer with whatever the approval actually came to.
-        if (!isDue(approvalWindow(approval), clock.now())) return null;
+        if (!isDue(approvalWindow(approval), clock.now())) return decided(null);
         const settled = await decide(
           db,
           { userId: connection.userId, id: approval.id, decision: { status: "expired" } },
           dek,
           clock,
         );
-        return settled.status === "pending" ? null : resolve(settled, connection, dek);
+        return settled.status === "pending" ? decided(null) : resolve(settled, connection, dek);
       }
       case "approved": {
         // A release is collected, never run: tell the agent where to get it.
         if (isReleaseRequest(approval.detail.request)) {
           const status = approval.releasedAt !== undefined ? "released" : "approved";
-          return { status, approval_id: approval.id, next: "collect_release" };
+          return decided({ status, approval_id: approval.id, next: "collect_release" });
         }
         // Run the held call exactly once (the pipeline's single-shot claim) and hand
         // back its stored outcome; keep waiting while another caller is running it.
         const outcome = await executeApprovedHold(connection.userId, approval.id);
-        return outcome.status === "in_progress" ? null : outcome;
+        return decided(outcome.status === "in_progress" ? null : outcome);
       }
       case "denied":
-        return { status: "refused", reason: "The person denied this request." };
+        return decided({ status: "refused", reason: "The person denied this request." });
       case "expired":
-        return { status: "refused", reason: EXPIRED };
+        return decided({ status: "refused", reason: EXPIRED });
       case "more_detail":
-        return { status: "more_detail", approval_id: approval.id, question: approval.question ?? "" };
+        return decided({ status: "more_detail", approval_id: approval.id, question: approval.question ?? "" });
     }
   }
 
@@ -224,18 +236,22 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
       // (no wait). While it is pending, sleep and re-read until the deadline passes
       // or the request is cancelled.
       while (true) {
-        const approval = await getApproval(db, connection.userId, parsed.approval_id, dek);
-        const outcome = await resolve(approval, connection, dek);
-        if (outcome) return outcome;
+        const reading = await readOnce(parsed.approval_id, connection, dek);
+        if (!reading.found) return { status: "refused", reason: NOT_FOUND };
+        if (reading.outcome) return reading.outcome;
 
         const now = clock.now().getTime();
         if (now >= deadline || cancelled()) {
-          // Only a pending approval of this connection's agent reaches here (resolve
-          // refuses any other), so its expiry is the agent's own to see.
-          return { status: "pending", approval_id: parsed.approval_id, expires_at: approval!.expiresAt.toISOString(), next: STILL_PENDING_NEXT };
+          return { status: "pending", approval_id: parsed.approval_id, expires_at: reading.approval.expiresAt.toISOString(), next: STILL_PENDING_NEXT };
         }
         await sleep(Math.min(POLL_INTERVAL_MS, deadline - now));
       }
+    },
+
+    // One reading, no wait: a mis-shaped id, like another connection's, finds nothing.
+    async read(approvalId: string, connection: AgentConnection): Promise<ApprovalReading> {
+      if (!approvalIdShape.safeParse(approvalId).success) return { found: false };
+      return readOnce(approvalId, connection, await dataKeyFor(connection.userId));
     },
   };
 }

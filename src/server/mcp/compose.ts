@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { requestObservation, clientObservation, createClientMemory, reportedRunId } from "./client-observation";
+import { createdTask, declaresTasks, taskOf, TASK_METHODS, TASK_NOT_FOUND, TASKS_EXTENSION, TASKS_REQUIRED } from "./approval-tasks";
 import { parseBody } from "../http/validate";
 import { z } from "zod";
 import { findToolsSchema } from "./tools/registry";
@@ -34,7 +35,8 @@ import { createProviderRuntime } from "../connectors/provider-runtime";
 // access, INV-102) and every store binds its values as parameters, so a SQL-shaped field
 // travels as inert data and cannot alter a query.
 
-import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer, MissingRequiredClientCapabilityError, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { PROFILE_PROMPT } from "../../domain/life-admin/profile-skill";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 
@@ -84,7 +86,7 @@ import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
 import { createSaveSkillTool } from "./tools/save-skill";
 import { createGetSkillTool, SERVER_INSTRUCTIONS } from "./tools/get-skill";
 import { createGetContextTool } from "./tools/get-context";
-import { createCheckApprovalTool } from "./tools/check-approval";
+import { createCheckApprovalTool, type ApprovalReading } from "./tools/check-approval";
 import { createCollectReleaseTool } from "./tools/collect-release";
 import { createLogActivityTool } from "./tools/log-activity";
 import {
@@ -214,11 +216,12 @@ function registerTool(
   tool: ToolDefinition,
   connection: AgentConnection | null,
   attachRun: AttachRun,
+  clock: Clock,
 ): void {
   server.registerTool(
     tool.name,
     { title: tool.title, description: tool.description, inputSchema: withRunField(tool.inputSchema), annotations: tool.annotations },
-    async (args: unknown, ctx?: { mcpReq?: { signal?: AbortSignal } }) => {
+    async (args: unknown, ctx?: { mcpReq?: { signal?: AbortSignal; envelope?: unknown } }) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).
       if (!connection) {
@@ -230,7 +233,13 @@ function registerTool(
       try {
         await attachRun(connection, (args as { run?: unknown } | undefined)?.run);
         const outcome = await tool.handle(args, connection);
-        return { ...toToolResult(outcome), _meta: { "app.warthog/requestId": requestObservation.getStore()?.requestId } };
+        const meta = { "app.warthog/requestId": requestObservation.getStore()?.requestId };
+        // A client that takes tasks on this request gets a held call as a task it polls
+        // itself (./approval-tasks.ts); any other gets `pending_approval` and check_approval.
+        if (outcome.status === "pending_approval" && declaresTasks(ctx?.mcpReq?.envelope)) {
+          return { ...createdTask(outcome.approval_id, clock.now()), _meta: meta } as unknown as CallToolResult;
+        }
+        return { ...toToolResult(outcome), _meta: meta };
       } catch (err) {
         // A boundary 4xx (malformed / oversized input, INV-102) carries its own fixed,
         // safe message. Any other failure is logged for operators (never its message) and
@@ -617,6 +626,63 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     };
   }
 
+  // An MCP task is a held call (./approval-tasks.ts): read exactly as check_approval reads it,
+  // for the verified connection's own person and agent, without waiting.
+  const approvals = createCheckApprovalTool({
+    db, keyWrapper: wrapper, clock, sleep: async () => {},
+    executeApprovedHold: (userId: string, approvalId: string) => pipeline.executeApprovedHold(userId, approvalId),
+  });
+
+  // What a decided task hands the agent: the tool result the held call would have returned
+  // had it run straight away, a refusal as an error result, or the person's question or a
+  // release to collect, as check_approval reports them.
+  function taskResult(outcome: NonNullable<Extract<ApprovalReading, { found: true }>["outcome"]>): Record<string, unknown> {
+    switch (outcome.status) {
+      case "executed": return toToolResult({ status: "executed", result: outcome.result });
+      case "refused":
+      case "failed":
+      case "unknown": return errorResult(outcome.reason);
+      default: return { content: [{ type: "text", text: JSON.stringify(outcome) }], structuredContent: outcome };
+    }
+  }
+
+  // The Tasks extension, advertised to every client, and its methods answered for the
+  // connection's own held calls. Each method needs the extension declared on its own request
+  // (`-32021` otherwise) and a task of this agent's (`-32602` otherwise). Only `tasks/get`
+  // reads the outcome: nothing is ever asked of the client, so `tasks/update` has nothing to
+  // take, and a cancel is acknowledged but changes nothing, since only the person decides.
+  function registerApprovalTasks(server: McpServer, connection: AgentConnection | null): void {
+    server.server.registerCapabilities({ extensions: { [TASKS_EXTENSION]: {} } });
+    for (const method of TASK_METHODS) {
+      server.server.setRequestHandler(method, { params: z.object({ taskId: z.string().max(200) }) }, async (params, ctx) => {
+        if (!declaresTasks(ctx.mcpReq.envelope)) throw new MissingRequiredClientCapabilityError({ requiredCapabilities: TASKS_REQUIRED });
+        if (!connection?.active) throw new ProtocolError(ProtocolErrorCode.InvalidParams, TASK_NOT_FOUND);
+        if (method !== "tasks/get") {
+          if (!(await ownsApproval(connection, params.taskId))) throw new ProtocolError(ProtocolErrorCode.InvalidParams, TASK_NOT_FOUND);
+          return {};
+        }
+        const reading = await approvals.read(params.taskId, connection);
+        if (!reading.found) throw new ProtocolError(ProtocolErrorCode.InvalidParams, TASK_NOT_FOUND);
+        return taskOf(reading.approval, reading.outcome === null ? null : taskResult(reading.outcome));
+      });
+    }
+  }
+
+  // Whether `approvalId` names one of this connection's agent's approvals (no outcome read).
+  async function ownsApproval(connection: AgentConnection, approvalId: string): Promise<boolean> {
+    if (!z.uuid().safeParse(approvalId).success) return false;
+    const approval = await getApproval(db, connection.userId, approvalId, await dataKeyFor(connection.userId));
+    return approval?.agentId === connection.agentId;
+  }
+
+  // A task method's per-request server: just the task methods, so a client's polling resolves
+  // no tool list and reads no service.
+  async function tasksServer(authInfo: AuthInfo | undefined): Promise<McpServer> {
+    const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
+    registerApprovalTasks(server, authInfo?.clientId ? await resolveConnection(authInfo.clientId) : null);
+    return server;
+  }
+
   // Link this request to the run a call names (docs/adr/agent-runs.md), when Warthog issued
   // it to this connection's agent. Anything else is ignored, and a failure here is logged
   // but never stops the call: a run is bookkeeping, not permission.
@@ -677,8 +743,9 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       }
     }
     for (const tool of tools) {
-      registerTool(server, tool, connection, attachRun);
+      registerTool(server, tool, connection, attachRun, clock);
     }
+    registerApprovalTasks(server, connection);
     // "Build my profile" as an MCP prompt the person can pick in their app
     // (docs/adr/profile-build.md): the same fixed text as Home's, for an agent that may save
     // records. A prompt isn't a tool: no tool budget, and nothing runs until the agent acts.
@@ -725,8 +792,10 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   }
 
   const handler = createMcpHandler((ctx) => {
-    const overLimit = requestObservation.getStore()?.overLimit;
-    return overLimit ? overLimitServer(overLimit) : buildServer(ctx.authInfo);
+    const observed = requestObservation.getStore();
+    if (observed?.overLimit) return overLimitServer(observed.overLimit);
+    const method = (observed?.body as { method?: unknown } | undefined)?.method;
+    return (TASK_METHODS as readonly unknown[]).includes(method) ? tasksServer(ctx.authInfo) : buildServer(ctx.authInfo);
   }, { legacy: "stateless" });
   // Which app each agent's requests come through, remembered without a write per request.
   const rememberClientOf = createClientMemory({ db, recorder, onError: (err) => logFailure("client_observation_failed", err) });

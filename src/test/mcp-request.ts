@@ -11,7 +11,7 @@
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 
 // The body field each method's `Mcp-Name` header mirrors (2026-07-28, SEP-2243).
-const NAME_FIELD: Record<string, string> = { "tools/call": "name", "prompts/get": "name", "resources/read": "uri" };
+const NAME_FIELD: Record<string, string> = { "tools/call": "name", "prompts/get": "name", "resources/read": "uri", "tasks/get": "taskId", "tasks/update": "taskId", "tasks/cancel": "taskId" };
 
 export interface McpRequestOptions {
   readonly url?: string;

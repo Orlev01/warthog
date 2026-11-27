@@ -63,15 +63,44 @@ Works in every app today and needs nothing from it:
 - **Each wait is still recorded in Activity.** The pipeline records every agent call, and a typical
   approval adds one or two entries.
 
-### 2. Claude: MCP Tasks for held calls (next change)
+### 2. Claude: MCP Tasks for held calls
 
-- **What changes.** When the client declares the Tasks extension, a held call returns a task instead
-  of `pending_approval`. The task id is the approval id, scoped like `check_approval`. `tasks/get`
-  reports `working` until the person decides, then the call's result.
-- **Who it reaches.** Claude then continues on its own, even after its reply ended.
-- **Everyone else.** Clients without the extension keep decision 1.
-- **What stays the same.** Approval still happens only in Warthog's signed-in app, and the held call
-  still runs once.
+A client that declares the Tasks extension (`io.modelcontextprotocol/tasks`, 2026-07-28) on a
+request gets a task for a held call instead of `pending_approval` (`src/server/mcp/approval-tasks.ts`).
+The client then polls `tasks/get` itself. When the person decides, it hands the result to its model,
+so Claude carries on even after its reply ended.
+
+- **Opt-in per request.** `server/discover` lists the extension for every client. A task is only
+  returned when the request's own `clientCapabilities` declare it, as the spec requires. 2025-era
+  clients and clients without the extension keep decision 1.
+- **The task id is the approval id.** It is an unguessable UUID, read only for the verified
+  connection's own person and agent, exactly as `check_approval` reads it. Nothing new is stored and
+  there is no migration.
+- **What `tasks/get` reports.**
+  - While the person hasn't decided: `working`, with "Waiting for the person to approve this in
+    Warthog."
+  - Once approved: `completed`, carrying the tool result the held call would have returned had it
+    run straight away. It is read through the same single-shot `executeApprovedHold`, so it is sent
+    once however often the task is polled.
+  - A denial, an expiry, a failure or an unknown result: `completed` with an error result. The spec
+    keeps `failed` for protocol errors.
+  - The person's question, or a release to collect: `completed`, with what `check_approval` would
+    say.
+- **Timing fields.** `ttlMs` is null: approvals are kept, and every one ends by its expiry.
+  `pollIntervalMs` is 5000.
+- **Errors.** A task method without the extension declared gets `-32021`. Another agent's task, an
+  unknown id or a disconnected agent gets `-32602` ("Task not found").
+- **`tasks/cancel` changes nothing.** It is acknowledged with an empty result, which the spec allows
+  ("a server is not obligated to actually stop the work"). Only the person decides.
+- **`tasks/update` takes nothing.** Nothing is ever asked of the client, so it is just acknowledged.
+- **Polling is cheap.** A task method gets a per-request server with only the task methods, so it
+  resolves no tool list, reads no service and records nothing in Activity. The send it may run is
+  recorded as always, in the original conversation's run.
+- **An agent that also calls `check_approval` with the task id** gets the same stored outcome. Nothing
+  runs twice.
+- **Client support is still to confirm.** Claude's docs say claude.ai and Claude Code support
+  2026-07-28 Tasks, but the MCP client matrix didn't render when checked. Try it on claude.ai after
+  release.
 
 ### 3. Not now
 
@@ -96,4 +125,8 @@ Tests cover:
 - the 50 s ceiling, the `pending` result's `expires_at` and `next`, and stopping when cancelled
   (`src/server/mcp/tools/check-approval.test.ts`);
 - the held failure reason (`src/server/mcp/pipeline.held-outcome.test.ts`);
+- waiting and cancelling through the real dispatch (`src/server/mcp/compose.approval-wait.test.ts`);
+- tasks end to end (`src/server/mcp/compose.approval-tasks.test.ts`): a task only when declared,
+  working then completed with the sent result, sent once, a denial as an error result, the `-32602`
+  and `-32021` errors, cancel acknowledged, and nothing in Activity;
 - the wording, through the existing house and tool-list tests.
