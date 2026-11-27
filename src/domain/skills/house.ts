@@ -23,6 +23,8 @@ export const HOUSE_GUIDANCE = [
   "",
   "Before you act:",
   "- serviceAccounts in get_context lists every account you may use, each with its own reads and changes. When you can use more than one account of a service, name the one you want in the tool's account field. If a service there has no tools in your tool list, use find_tools and call_tool to reach them.",
+  "- If find_tools and call_tool aren't in your tool list either, or get_context allows something you have no tool for (permissions.resources.skills.write but no save_skill, say), your app is using an old copy of Warthog's tools. Ask the person to refresh Warthog in your app's settings, or disconnect and reconnect it. Don't tell them Warthog can't do it.",
+  "- Use the person's services through Warthog, so their approvals, rules and Activity apply. When a service they connected in Warthog is off for you, say what to change in Warthog (this agent's page under Agents, or Connectors) rather than suggesting they connect it to your app as well.",
   "- Email: one search with no account covers every inbox you can read, and each result says which inbox it's in. Pass message ids back exactly as given: a read or a reply goes to the inbox that holds the email, and a reply is sent from it. A new email needs account when more than one inbox may send.",
   "- Fetch a skill's full text with get_skill only when you have decided it is relevant. Warthog never guesses relevance for you.",
   "",

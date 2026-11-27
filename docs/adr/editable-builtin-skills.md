@@ -36,6 +36,20 @@ everything agents do through Warthog, is summarised under Context.
    - the profile isn't proof of identity.
 
    `SERVER_INSTRUCTIONS` is unchanged.
+
+   **Amended 27 November 2026 (founder):** the house guidance (version 3) gains two lines. ChatGPT,
+   holding a copy of Warthog's tools from before 24 November, said Warthog couldn't create a
+   calendar event and sent the founder to its own Outlook integration.
+   - **Old tool list:** an agent that is allowed something but has no tool for it, and no
+     `find_tools`/`call_tool` either, asks the person to refresh Warthog in its app rather than
+     saying Warthog can't.
+   - **Through Warthog:** services connected in Warthog are used through Warthog. When one is off
+     for the agent, it says what to change in Warthog rather than suggesting the agent's own
+     integration.
+
+   Both are guidance, not rules, so the person can edit them. Warthog doesn't route its own tools
+   through `call_tool`: that would blur Activity, approvals and the apps' change warnings to work
+   around one client's cache.
 3. **Defaults and packs.** The registry (`src/domain/skills/builtins.ts`) lists Warthog's skills:
    - the three above;
    - **everyday skills, on to start:**
