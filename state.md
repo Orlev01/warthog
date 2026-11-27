@@ -1,4 +1,19 @@
-# Delivery status — 27 November 2026 (Skills cards)
+# Delivery status — 27 November 2026 (Using Warthog v3)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`acc95043cc443bb2b0b1a6d9fe4384b75d27999f` runs as `warthog--r45953930855a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #75:** the house skill, Using Warthog, is at version 3:
+  - an agent whose app has an old copy of Warthog's tools asks the person to refresh Warthog there,
+    instead of saying Warthog can't do it;
+  - agents use the person's services through Warthog, and point to Warthog's settings when one is off
+    for them, rather than to their app's own integrations.
+
+No migrations (99). See the [release record](docs/audit/stale-tool-list-release-2026-11-27.md).
+
+# Earlier delivery status — 27 November 2026 (Skills cards)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
