@@ -1,4 +1,18 @@
-# Delivery status — 26 November 2026 (agents save skills)
+# Delivery status — 27 November 2026 (Skills cards)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`6f5ddb7d3b854f9d82ccf1de283258a049df7f6b` runs as `warthog--r45914516521a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #74:**
+  - Warthog's skills are cards that open the same editor as the person's own skills (Preview, Edit,
+    Agent access; Restore and Remove in its footer);
+  - the library's filter is now Show: All, Switched on, Switched off, Yours, Warthog's.
+
+No migrations (99). See the [release record](docs/audit/skills-cards-release-2026-11-27.md).
+
+# Earlier delivery status — 26 November 2026 (agents save skills)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

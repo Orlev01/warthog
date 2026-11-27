@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Skills cards, 27 November:** main `6f5ddb7` runs as `warthog--r45914516521a1`. PR #74:
+- Warthog's skills are cards that open the same editor as the person's own skills;
+- the library's filter is now Show, with Yours and Warthog's added.
+
+No migrations (99). See the [release record](skills-cards-release-2026-11-27.md).
+
 **Agents save skills, 26 November:** main `ac31577` runs as `warthog--r45783723441a1`. PR #73 adds
 `save_skill`:
 - a skill an agent saves stays off until the person checks it;
