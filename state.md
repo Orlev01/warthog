@@ -1,4 +1,19 @@
-# Delivery status — 27 November 2026 (Using Warthog v3)
+# Delivery status — 27 November 2026 (Approval continuation)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`f7d3780efd1b7405eae7181abd773dfe8b0da02e` runs as `warthog--r45961446024a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- **PR #76:** when a change is held for approval, the agent waits for the decision in the same reply:
+  check_approval waits up to 50 seconds, and the agent calls it again while it says pending, then
+  carries on with the result. The house rule no longer says "stop and wait".
+- **PR #77:** a client that supports MCP Tasks, such as Claude, gets a task for a held change and can
+  carry on by itself once the person decides, even after its reply has ended.
+
+No migrations (99). See the [release record](docs/audit/approval-continuation-release-2026-11-27.md).
+
+# Earlier delivery status — 27 November 2026 (Using Warthog v3)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

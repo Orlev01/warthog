@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Approval continuation, 27 November:** main `f7d3780` runs as `warthog--r45961446024a1`.
+- PR #76: an agent waits for an approval in the same reply, calling check_approval again while it says
+  pending, and carries on with the result;
+- PR #77: a client with MCP Tasks, such as Claude, gets a task it can follow after its reply has ended.
+
+No migrations (99). See the [release record](approval-continuation-release-2026-11-27.md).
+
 **Using Warthog v3, 27 November:** main `acc9504` runs as `warthog--r45953930855a1`. PR #75 adds
 two lines to the house skill:
 - an agent whose app has an old copy of Warthog's tools asks the person to refresh it;
