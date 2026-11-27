@@ -274,9 +274,10 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "check_approval",
     description:
-      "Check on a request that is waiting for the person's approval, by the approval_id you were given, optionally waiting up to wait_seconds for a decision. Once approved, Warthog carries out the held request and returns its result.",
+      "Wait for the person's decision on a request that is pending approval, by the approval_id you were given. It waits up to wait_seconds (at most 50, the default) and returns as soon as they decide. Once approved, Warthog carries out the held request and returns its result. While it says pending, call it again until expires_at, so you can carry on in the same reply.",
     makesChange: false,
     schema: checkApprovalSchema,
+    extra: () => ({ reportsHeldOutcome: true }),
   },
   {
     name: "collect_release",

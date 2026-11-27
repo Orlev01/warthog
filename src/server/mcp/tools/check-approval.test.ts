@@ -1,5 +1,5 @@
 // E07-S14 — the `check_approval` core tool (`src/server/mcp/tools/check-approval.ts`,
-// design §6.2 MCP server "check_approval (wait_seconds ≤ 25, long-poll)";
+// design §6.2 MCP server "check_approval (wait_seconds ≤ 50, long-poll)";
 // brief "Agents wait safely"). An agent that got `{status:"pending_approval",
 // approval_id, …}` from a held call long-polls this tool to learn the outcome.
 //
@@ -39,7 +39,7 @@
 //
 //   // What check_approval returns to the waiting agent.
 //   type CheckApprovalResult =
-//     | { status: "pending";     approval_id: string }          // still pending after the wait
+//     | { status: "pending";     approval_id: string; expires_at: string; next: string } // still pending after the wait
 //     | { status: "executed";    result: unknown }              // approved → the held call's result
 //     | { status: "refused";     reason: string }               // denied / expired / already-run / not yours
 //     | { status: "more_detail"; approval_id: string; question: string }; // the person's question
@@ -53,7 +53,7 @@
 //     // BEFORE anything is read or run); then read the approval MEMBER-SCOPED by
 //     // connection.userId AND owned by connection.agentId (another connection's id
 //     // finds nothing → refused), and:
-//     //   pending     → long-poll: re-read up to min(wait_seconds, 25) seconds (reading
+//     //   pending     → long-poll: re-read up to min(wait_seconds, 50) seconds (reading
 //     //                 the clock, sleeping between reads via the injected `sleep`);
 //     //                 return the first non-pending outcome, else `pending`.
 //     //   approved    → run the held call via executeApprovedHold EXACTLY ONCE and
@@ -111,15 +111,16 @@ const AGENT = CONN; // the connection's agent id == its connection id (E07-S09 s
 
 // The frozen instant the pipeline (and the approval's createdAt / expiresAt) read time
 // through. Mid-month noon UTC. The default 15-minute approval window ends at NOW+15m,
-// well past the 25-second long-poll ceiling, so a pending approval never expires
+// well past the 50-second long-poll ceiling, so a pending approval never expires
 // underneath the wait in these tests.
 const NOW = new Date("2026-11-15T12:00:00.000Z");
 // Well past the default 15-minute window — used only to drive `decide`'s expiry
 // transition, never the tool itself.
 const AFTER_EXPIRY = new Date(NOW.getTime() + 20 * 60_000);
 
-// The long-poll ceiling (design §6.2 "wait_seconds ≤ 25").
-const MAX_WAIT_MS = 25_000;
+// The long-poll ceiling (design §6.2 "wait_seconds ≤ 50"), under ChatGPT's 60-second limit
+// on any tool call (docs/adr/approval-continuation.md).
+const MAX_WAIT_MS = 50_000;
 
 // The result shape the tool returns, kept LOOSE on purpose: the tests assert on
 // `status` + the field that status carries, so the builder is free to pick the exact
@@ -130,6 +131,8 @@ interface CheckResult {
   readonly reason?: string;
   readonly question?: string;
   readonly approval_id?: string;
+  readonly expires_at?: string;
+  readonly next?: string;
 }
 
 // The pipeline method shape check_approval is handed (its executeApprovedHold).
@@ -363,13 +366,68 @@ test("a still-pending approval waits up to wait_seconds, then returns pending", 
 });
 
 // ===========================================================================
-// AC "wait_seconds is clamped to a maximum of 25." A pending-forever approval with
-// wait_seconds=1000 waits exactly as long as wait_seconds=25 (both clamp to the 25s
+// A still-pending result says when the request expires and to call again, so an agent keeps
+// waiting in the same reply rather than ending it (docs/adr/approval-continuation.md).
+// ===========================================================================
+
+test("a still-pending result carries its expiry and tells the agent to call again", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const arranged = await arrangeHeldCall(db, keyWrapper, "pending-next");
+    const s = sleeper(NOW.getTime());
+    const result = (await buildTool(db, keyWrapper, arranged, s).handle(
+      { approval_id: arranged.approvalId, wait_seconds: 1 },
+      arranged.conn,
+    )) as CheckResult;
+
+    assert.equal(result.status, "pending");
+    const approval = await getApproval(db, arranged.userId, arranged.approvalId, arranged.dek);
+    assert.equal(result.expires_at, approval!.expiresAt.toISOString(), "the approval's own expiry");
+    assert.match(result.next ?? "", /call check_approval again/i);
+    assert.match(result.next ?? "", /don't send the request again/i);
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// A cancelled request (the agent's stream closed) stops the wait at once: nothing is left
+// polling for an agent that is no longer listening, and the approval is untouched.
+// ===========================================================================
+
+test("a cancelled request stops waiting and leaves the approval pending", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const arranged = await arrangeHeldCall(db, keyWrapper, "cancelled");
+    let cancelled = false;
+    const s = sleeper(NOW.getTime(), (count) => { if (count === 3) cancelled = true; });
+    const tool = createCheckApprovalTool({
+      db, keyWrapper, clock: s.clock, sleep: s.sleep,
+      executeApprovedHold: arranged.executeApprovedHold,
+      cancelled: () => cancelled,
+    });
+    const result = (await tool.handle({ approval_id: arranged.approvalId, wait_seconds: 50 }, arranged.conn)) as CheckResult;
+
+    assert.equal(result.status, "pending");
+    assert.equal(s.slept.length, 3, "no more sleeps once the request is cancelled");
+    assert.ok(s.elapsedMs() < MAX_WAIT_MS, `it stopped well before the ceiling (waited ${s.elapsedMs()}ms)`);
+    const approval = await getApproval(db, arranged.userId, arranged.approvalId, arranged.dek);
+    assert.equal(approval!.status, "pending", "the approval is left pending");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// AC "wait_seconds is clamped to a maximum of 50." A pending-forever approval with
+// wait_seconds=1000 waits exactly as long as wait_seconds=50 (both clamp to the 50s
 // ceiling) — and nowhere near the requested 1000s. The comparison is interval-
 // independent: identical setups under the fake clock take the identical path.
 // ===========================================================================
 
-test("wait_seconds is clamped to a maximum of 25 seconds", async () => {
+test("wait_seconds is clamped to a maximum of 50 seconds", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
@@ -387,27 +445,28 @@ test("wait_seconds is clamped to a maximum of 25 seconds", async () => {
     }
 
     const small = await waitWith(5);
-    const atCeiling = await waitWith(25);
+    const atCeiling = await waitWith(50);
     const overCeiling = await waitWith(1000);
 
-    for (const [label, r] of [["5s", small], ["25s", atCeiling], ["1000s", overCeiling]] as const) {
+    for (const [label, r] of [["5s", small], ["50s", atCeiling], ["1000s", overCeiling]] as const) {
       assert.equal(r.status, "pending", `the ${label} wait returns pending (never decided)`);
     }
 
-    // 1000s is clamped to the SAME ceiling as 25s …
+    // 1000s is clamped to the SAME ceiling as 50s …
     assert.equal(
       overCeiling.elapsed,
       atCeiling.elapsed,
-      "wait_seconds=1000 waits exactly as long as wait_seconds=25 — both clamp to the ceiling",
+      "wait_seconds=1000 waits exactly as long as wait_seconds=50 — both clamp to the ceiling",
     );
-    // … and that ceiling is at least 25s and nowhere near the requested 1000s.
-    assert.ok(atCeiling.elapsed >= MAX_WAIT_MS, `the 25s wait waits at least 25s (waited ${atCeiling.elapsed}ms)`);
+    // … and that ceiling is at least 50s, under ChatGPT's 60s limit, and nowhere near the requested 1000s.
+    assert.ok(atCeiling.elapsed >= MAX_WAIT_MS, `the 50s wait waits at least 50s (waited ${atCeiling.elapsed}ms)`);
+    assert.ok(atCeiling.elapsed < 60_000, `the ceiling stays under a 60s tool-call limit (waited ${atCeiling.elapsed}ms)`);
     assert.ok(
       overCeiling.elapsed < 1000 * 1000,
       `wait_seconds=1000 did NOT wait the full 1000s — it was clamped (waited ${overCeiling.elapsed}ms)`,
     );
     // A smaller request waits no longer than the ceiling.
-    assert.ok(small.elapsed <= atCeiling.elapsed, "a 5s wait is no longer than a 25s wait");
+    assert.ok(small.elapsed <= atCeiling.elapsed, "a 5s wait is no longer than a 50s wait");
     assert.ok(small.elapsed >= 5_000, "a 5s wait waits at least 5s");
   } finally {
     await db.close();

@@ -184,6 +184,22 @@ function grantedLive(connections: readonly Connection[], permissions: Pick<Conne
 // Links the current request to the run a call names, when it is one of this agent's.
 type AttachRun = (connection: AgentConnection, run: unknown) => Promise<void>;
 
+// Sleep `ms`, waking early when the call is cancelled.
+function sleepUnlessCancelled(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+// What a held call tells the agent to do next (docs/adr/approval-continuation.md). No app
+// lets Warthog start a new reply in a conversation, so the agent waits with check_approval
+// in the reply it is in, and carries on as soon as the person decides.
+export const PENDING_APPROVAL_NEXT =
+  "Nothing has happened yet: the person has been asked to approve this in Warthog. Tell them in one line that it's waiting for their approval in Warthog, then call check_approval with this approval_id straight away. It waits for their decision and returns as soon as they decide, with the result. While it says pending, call it again. If they haven't decided by expires_at, the request expires and is refused. If your reply has to end first, call check_approval at the start of your next reply. Don't send the request again.";
+
 // Register `tool` on `server`, routing the call through `tool.handle` under the already
 // resolved `connection` (from the verified bearer). The advertised input schema is the
 // tool body's REAL schema and the description says what the tool does, so tools/list
@@ -202,12 +218,15 @@ function registerTool(
   server.registerTool(
     tool.name,
     { title: tool.title, description: tool.description, inputSchema: withRunField(tool.inputSchema), annotations: tool.annotations },
-    async (args: unknown) => {
+    async (args: unknown, ctx?: { mcpReq?: { signal?: AbortSignal } }) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).
       if (!connection) {
         return errorResult("This agent is not connected.");
       }
+      // A tool that waits (check_approval) stops when the call is cancelled.
+      const observed = requestObservation.getStore();
+      if (observed && ctx?.mcpReq?.signal) observed.signal = ctx.mcpReq.signal;
       try {
         await attachRun(connection, (args as { run?: unknown } | undefined)?.run);
         const outcome = await tool.handle(args, connection);
@@ -249,7 +268,7 @@ function toToolResult(outcome: AgentCallResult): {
         status: "pending_approval",
         approval_id: outcome.approval_id,
         expires_at: outcome.expires_at.toISOString(),
-        next: "The person has been asked. Call check_approval with this approval_id to wait for their decision. If they have not decided by expires_at, the request expires and is refused.",
+        next: PENDING_APPROVAL_NEXT,
       };
       return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
     }
@@ -389,9 +408,10 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
     db,
     keyWrapper,
     clock,
-    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    sleep: (ms: number) => sleepUnlessCancelled(ms, requestObservation.getStore()?.signal),
     executeApprovedHold: (userId: string, approvalId: string) =>
       pipeline.executeApprovedHold(userId, approvalId),
+    cancelled: () => requestObservation.getStore()?.signal?.aborted === true,
   });
 
   // get_context hands the agent everything it has been granted for this connection — the
@@ -734,7 +754,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       body = lifted;
       const headers = new Headers(request.headers);
       headers.delete("content-length");
-      request = new Request(request.url, { method: request.method, headers, body: JSON.stringify(lifted) });
+      request = new Request(request.url, { method: request.method, headers, body: JSON.stringify(lifted), signal: request.signal });
     }
     const client = clientObservation(body, request.headers);
     if (connection && client && admitted !== false) await rememberClientOf(connection, client, clock.now(), () => dataKeyFor(connection.userId));

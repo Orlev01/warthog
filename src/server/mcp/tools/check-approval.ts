@@ -1,14 +1,18 @@
 // E07-S14 — the `check_approval` core tool (design §6.2 MCP server
-// "check_approval (wait_seconds ≤ 25, long-poll)"; brief "Agents wait safely").
+// "check_approval (wait_seconds ≤ 50, long-poll)"; brief "Agents wait safely";
+// docs/adr/approval-continuation.md).
 //
 // An agent that got `{status:"pending_approval", approval_id, …}` back from a held
-// call long-polls this tool to learn the outcome. It reads the approval MEMBER-
-// SCOPED by the session connection's owning person AND owned by that connection's
-// agent (another connection's id finds nothing → refused), and then:
-//   pending      → waits up to min(wait_seconds, 25) seconds, re-reading the
+// call long-polls this tool to learn the outcome, calling it again while it says
+// pending, so it can carry on in the same reply once the person decides. It reads the
+// approval MEMBER-SCOPED by the session connection's owning person AND owned by that
+// connection's agent (another connection's id finds nothing → refused), and then:
+//   pending      → waits up to min(wait_seconds, 50) seconds, re-reading the
 //                  approval between sleeps, and returns the first non-pending
-//                  outcome, else `pending`; a pending approval already past its
-//                  window is expired on the spot (stored) and refused at once;
+//                  outcome, else `pending` with its expiry and what to do next
+//                  (stopping early, still `pending`, when the agent's request is
+//                  cancelled); a pending approval already past its window is
+//                  expired on the spot (stored) and refused at once;
 //   approved     → a RELEASE (card / high-tier) is collected, never run: the agent
 //                  is told `released` (once the person's device has handed it over;
 //                  else `approved`) with `next: "collect_release"`. Any other
@@ -42,9 +46,15 @@ import type { KeyWrapper } from "../../crypto/key-wrapper";
 import type { Clock } from "../../seams/clock";
 import type { AgentConnection } from "../context";
 
-// The long-poll ceiling (design §6.2 "wait_seconds ≤ 25"): a larger request is
-// clamped down to this many seconds.
-const MAX_WAIT_SECONDS = 25;
+// The long-poll ceiling (design §6.2 "wait_seconds ≤ 50"): a larger request is
+// clamped down to this many seconds. It stays under the shortest tool-call limit an
+// agent's app is known to set (ChatGPT stops any tool call at 60 s), so a wait always
+// comes back as `pending` rather than being cut off (docs/adr/approval-continuation.md).
+const MAX_WAIT_SECONDS = 50;
+
+// What a still-pending result tells the agent to do next.
+const STILL_PENDING_NEXT =
+  "The person hasn't decided yet. Call check_approval again with this approval_id to keep waiting, until expires_at. Don't send the request again.";
 
 // How long to wait between re-reads of a still-pending approval. Kept well below
 // the ceiling so a decision that arrives mid-wait is picked up promptly.
@@ -85,7 +95,7 @@ export type ApprovedHoldResult =
 // is an approved RELEASE: the agent collects the value with collect_release (`released`
 // once the person's device has handed it over).
 export type CheckApprovalResult =
-  | { status: "pending"; approval_id: string }
+  | { status: "pending"; approval_id: string; expires_at: string; next: string }
   | { status: "executed"; result: unknown }
   | { status: "approved" | "released"; approval_id: string; next: "collect_release" }
   | { status: "refused"; reason: string }
@@ -105,6 +115,9 @@ export interface CheckApprovalDeps {
   readonly clock: Clock;
   readonly sleep: (ms: number) => Promise<void>;
   readonly executeApprovedHold: (userId: string, approvalId: string) => Promise<ApprovedHoldResult>;
+  // True once the agent's request has been cancelled (its stream closed): the wait stops
+  // there, as the transport treats a closed stream as cancellation. Absent, never.
+  readonly cancelled?: () => boolean;
 }
 
 // A plain-English refusal when the approval cannot be read for this connection
@@ -127,6 +140,7 @@ function approvalWindow(approval: NonNullable<Awaited<ReturnType<typeof getAppro
 
 export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalTool {
   const { db, keyWrapper, clock, sleep, executeApprovedHold } = deps;
+  const cancelled = deps.cancelled ?? (() => false);
 
   // Resolve the person's unwrapped DEK: read their wrapped DEK (bound by userId
   // through the users store) and unwrap it through the KeyWrapper seam. Throws when
@@ -201,21 +215,24 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
 
       const dek = await dataKeyFor(connection.userId);
 
-      // The long-poll deadline: min(wait_seconds, 25) seconds from now (a missing
+      // The long-poll deadline: min(wait_seconds, 50) seconds from now (a missing
       // wait waits the full ceiling; a negative one waits not at all).
       const waitSeconds = Math.max(0, Math.min(parsed.wait_seconds ?? MAX_WAIT_SECONDS, MAX_WAIT_SECONDS));
       const deadline = clock.now().getTime() + waitSeconds * 1000;
 
       // Read the approval; if it is already decided, return its outcome at once
-      // (no wait). While it is pending, sleep and re-read until the deadline passes.
+      // (no wait). While it is pending, sleep and re-read until the deadline passes
+      // or the request is cancelled.
       while (true) {
         const approval = await getApproval(db, connection.userId, parsed.approval_id, dek);
         const outcome = await resolve(approval, connection, dek);
         if (outcome) return outcome;
 
         const now = clock.now().getTime();
-        if (now >= deadline) {
-          return { status: "pending", approval_id: parsed.approval_id };
+        if (now >= deadline || cancelled()) {
+          // Only a pending approval of this connection's agent reaches here (resolve
+          // refuses any other), so its expiry is the agent's own to see.
+          return { status: "pending", approval_id: parsed.approval_id, expires_at: approval!.expiresAt.toISOString(), next: STILL_PENDING_NEXT };
         }
         await sleep(Math.min(POLL_INTERVAL_MS, deadline - now));
       }
