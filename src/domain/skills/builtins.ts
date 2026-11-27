@@ -49,7 +49,7 @@ export const PROFILE_KEY = "building_a_profile";
 
 export const BUILTIN_SKILLS: readonly BuiltinSkillDef[] = [
   // Version 2 (25 Nov 2026): agents update a conversation's working_on when the work changes (docs/adr/agent-runs.md).
-  { key: HOUSE_KEY, title: HOUSE_SKILL.title, useThisWhen: HOUSE_SKILL.useThisWhen, version: 2, group: "warthog", startsOn: true, requires: [], rules: HOUSE_RULES, guidance: HOUSE_GUIDANCE },
+  { key: HOUSE_KEY, title: HOUSE_SKILL.title, useThisWhen: HOUSE_SKILL.useThisWhen, version: 3, group: "warthog", startsOn: true, requires: [], rules: HOUSE_RULES, guidance: HOUSE_GUIDANCE },
   { key: LIFE_ADMIN_KEY, title: LIFE_ADMIN_SKILL.title, useThisWhen: LIFE_ADMIN_SKILL.useThisWhen, version: 3, group: "warthog", startsOn: true, requires: ["records_read"], rules: LIFE_ADMIN_RULES, guidance: LIFE_ADMIN_GUIDANCE, reference: "life_admin" },
   { key: PROFILE_KEY, title: PROFILE_SKILL.title, useThisWhen: PROFILE_SKILL.useThisWhen, version: 1, group: "warthog", startsOn: true, requires: ["records_read", "records_write"], rules: PROFILE_RULES, guidance: PROFILE_GUIDANCE, reference: "profile" },
   ...EVERYDAY_DEFAULTS.map((skill) => fromDefault(skill, "everyday")),
